@@ -1,9 +1,25 @@
+# Environment
 .env
-Game/.godot/
-Game/bin/
-Game/obj/
-.godot/
+
+# Python pipeline
+pipeline/.venv/
+__pycache__/
+*.pyc
+
+# Generated data tiles
+data/
+
+# .NET / C#
 bin/
 obj/
-data/
-pipeline/.venv
+*.user
+*.suo
+
+# Godot 4
+.godot/
+.mono/
+export_presets.cfg
+mono_crash.*.json
+
+# Godot import cache
+.import/
