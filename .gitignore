@@ -1,0 +1,7 @@
+.env
+Game/
+.godot/
+bin/
+obj/
+data/
+pipeline/.venv
