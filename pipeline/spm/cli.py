@@ -16,6 +16,9 @@ from .bodies import get_body
 LOLA_LON_WEST = 0.0
 LOLA_LAT_NORTH = 90.0
 
+# The USGS geologic raster is simple-cylindrical, longitude -180..180.
+UGM_LON_WEST = -180.0
+
 
 def _log(message: str) -> None:
     print(f"[pipeline] {message}", flush=True)
@@ -68,8 +71,13 @@ def run(args: argparse.Namespace) -> Path:
     dlat = 180.0 / height
     dlon = 360.0 / width
 
-    _log("reading geology (resampled to DEM grid)")
-    geology = raster.read_geology(paths["geology"], out_shape=elevation.shape)
+    _log("reading geology (resampled + aligned to DEM grid)")
+    geology = raster.read_geology(
+        paths["geology"],
+        out_shape=elevation.shape,
+        lon_west_in=UGM_LON_WEST,
+        lon_west_out=LOLA_LON_WEST,
+    )
 
     _log("building lat/lon grid")
     lat, lon = raster.global_latlon(

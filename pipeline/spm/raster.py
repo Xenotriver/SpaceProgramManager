@@ -79,11 +79,18 @@ def read_geology(
     tif_path: str | Path,
     *,
     out_shape: tuple[int, int] | None = None,
+    lon_west_in: float = -180.0,
+    lon_west_out: float | None = None,
 ) -> np.ndarray:
     """Read the UGM geologic-unit raster as ``int8`` DN codes.
 
     ``out_shape`` decimates on read (nearest neighbour) so a 64 ppd source
     can be consumed directly at 16 ppd without materialising the full grid.
+
+    The UGM GeoTIFF is simple-cylindrical ``-180..180`` while the LOLA DEM is
+    ``0..360``.  When ``lon_west_out`` differs from ``lon_west_in`` the raster
+    is rolled in longitude so the two grids line up (a naive index-by-index
+    resize would otherwise shift the geology by 180 degrees).
     """
     import rasterio
     from rasterio.enums import Resampling
@@ -93,6 +100,13 @@ def read_geology(
             data = ds.read(1, out_shape=out_shape, resampling=Resampling.nearest)
         else:
             data = ds.read(1)
+
+    if lon_west_out is not None and lon_west_out != lon_west_in:
+        width = data.shape[1]
+        shift = int(round(((lon_west_out - lon_west_in) % 360.0) / 360.0 * width)) % width
+        if shift:
+            data = np.roll(data, -shift, axis=1)
+
     return data.astype(np.int8, copy=False)
 
 
