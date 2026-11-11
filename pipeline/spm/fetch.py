@@ -43,7 +43,7 @@ SOURCES: dict[str, Source] = {
         "lola_64",
         "https://imbrium.mit.edu/DATA/LOLA_GDR/CYLINDRICAL/IMG/LDEM_64.IMG",
         "LDEM_64.IMG",
-        531697920,
+        530841600,
     ),
     "lola_64_lbl": Source(
         "lola_64_lbl",
