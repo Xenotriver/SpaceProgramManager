@@ -1,5 +1,7 @@
 .env
-Game/
+Game/.godot/
+Game/bin/
+Game/obj/
 .godot/
 bin/
 obj/
