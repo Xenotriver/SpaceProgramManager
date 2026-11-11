@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Game/Game.csproj">
+    <BuildType Project="Debug" />
+  </Project>
+  <Project Path="Sim.Tests/Sim.Tests.csproj" />
+  <Project Path="Sim/Sim.csproj" />
+</Solution>

@@ -1,0 +1,23 @@
+# H3 must match the C# pocketken.H3 version used by the Sim library.
+h3==4.5.0
+
+# Geospatial / raster processing
+numpy
+scipy
+pandas
+rasterio
+geopandas
+pyproj
+shapely
+
+# Data acquisition
+requests
+pooch
+
+# Image rasters (LROC / albedo)
+imageio
+pillow
+
+# Debug / tooling
+matplotlib
+tqdm
