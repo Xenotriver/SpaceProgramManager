@@ -344,6 +344,12 @@ public readonly record struct PlacementResult
 /// </summary>
 public sealed record BuildingInstance
 {
+    /// <summary>
+    /// Stable identity used by saves, selection and future cross-references
+    /// (jobs, power links). Allocated once when the building is created.
+    /// </summary>
+    public Guid Id { get; init; } = Guid.NewGuid();
+
     /// <summary>Reference to the building definition.</summary>
     public required string DefId { get; init; }
 

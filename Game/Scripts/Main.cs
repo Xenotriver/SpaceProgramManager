@@ -4,6 +4,7 @@ using Godot;
 using H3;
 using Sim.Biomes;
 using Sim.Buildings;
+using Sim.Campaign;
 using Sim.Movement;
 using Sim.World;
 
@@ -34,6 +35,7 @@ public partial class Main : Node2D
 
     private BodyWorld _world = null!;
     private BuildingRegistry _registry = null!;
+    private CampaignState _campaign = null!;
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
     private Font _font = null!;
@@ -87,6 +89,8 @@ public partial class Main : Node2D
         _regionView.BaseSpeedKmh = FloatArgument("--speed", 10f);
 
         _registry = new BuildingRegistry(MoonBuildings.All);
+        _campaign = new CampaignState(_world, _registry);
+        _regionView.SetCampaign(_campaign);
         _regionView.SetBuildingRegistry(_registry);
 
         GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");

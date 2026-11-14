@@ -8,6 +8,7 @@ using H3.Algorithms;
 using H3.Extensions;
 using Sim.Biomes;
 using Sim.Buildings;
+using Sim.Campaign;
 using Sim.Movement;
 using Sim.Site;
 using Sim.World;
@@ -106,11 +107,10 @@ public partial class RegionView : Node2D
     private double _radiusKm = 1737.4;
 
     private BuildingRegistry? _registry;
+    private CampaignState? _campaign;
     private List<BuildingDef> _buildingChoices = new();
     private BuildingDef? _activeBuilding;
-    private List<BuildingInstance> _buildings = new();
-    private Dictionary<ulong, BuildingInstance> _occupancy = new();
-    private readonly Dictionary<ulong, List<BuildingInstance>> _buildingsByRegion = new();
+    private IReadOnlyList<BuildingInstance> _buildings = Array.Empty<BuildingInstance>();
     private readonly Dictionary<string, Color> _buildingColorCache = new();
     private int[] _ghostOrdinals = Array.Empty<int>();
     private bool _ghostValid;
@@ -240,7 +240,7 @@ public partial class RegionView : Node2D
         _elevations = new short[count];
         _craters = new CraterKind[count];
         _radiusKm = world.Manifest.Body.RadiusKm;
-        SiteConfig = SiteConfig with { BodyRadiusKm = _radiusKm };
+        SiteConfig = (_campaign?.SiteConfig ?? SiteConfig) with { BodyRadiusKm = _radiusKm };
 
         var regionCenter = ToUnitVector(_tile.Region.ToLatLng());
         var (east, north) = TangentBasis(regionCenter);
@@ -304,12 +304,15 @@ public partial class RegionView : Node2D
         ClearRoute();
         _cellRadius = EstimateCellRadius();
 
-        // Restore in-memory buildings for this region (persistence is Phase B).
-        if (!_buildingsByRegion.TryGetValue(regionIndex, out var buildings))
-            _buildingsByRegion[regionIndex] = buildings = new List<BuildingInstance>();
-
-        _buildings = buildings;
-        _occupancy = new Dictionary<ulong, BuildingInstance>(BuildingRegistry.BuildOccupancy(_buildings));
+        if (_campaign is not null)
+        {
+            _campaign.MarkVisited(regionIndex);
+            _buildings = _campaign.Buildings(regionIndex);
+        }
+        else
+        {
+            _buildings = Array.Empty<BuildingInstance>();
+        }
 
         _hovered = -1;
         _selected = -1;
@@ -742,6 +745,25 @@ public partial class RegionView : Node2D
         QueueRedraw();
     }
 
+    /// <summary>Binds the campaign that owns building state for every region.</summary>
+    public void SetCampaign(CampaignState campaign)
+    {
+        ArgumentNullException.ThrowIfNull(campaign);
+
+        _campaign = campaign;
+        SiteConfig = campaign.SiteConfig;
+        RefreshBuildings();
+        UpdateGhost();
+        QueueRedraw();
+    }
+
+    private void RefreshBuildings()
+    {
+        _buildings = _campaign is not null && _tile is not null
+            ? _campaign.Buildings(_tile.Entry.Index)
+            : Array.Empty<BuildingInstance>();
+    }
+
     /// <summary>Switches the colour overlay. Site scores are computed on first use.</summary>
     public void SetViewMode(RegionViewMode mode)
     {
@@ -813,10 +835,10 @@ public partial class RegionView : Node2D
 
     private bool PlaceAt(int ordinal)
     {
-        if (_tile is null || _activeBuilding is null)
+        if (_tile is null || _activeBuilding is null || _campaign is null)
             return false;
 
-        var result = _activeBuilding.CanPlaceAt(_tile, ordinal, _world, SiteConfig, _occupancy);
+        var result = _campaign.TryPlace(_activeBuilding, _tile, ordinal);
         if (!result.Success)
         {
             _ghostValid = false;
@@ -826,14 +848,7 @@ public partial class RegionView : Node2D
             return false;
         }
 
-        _buildings.Add(new BuildingInstance
-        {
-            DefId = _activeBuilding.Id,
-            CenterHex = _tile.Cells[ordinal],
-            Footprint = result.Footprint,
-        });
-
-        _occupancy = new Dictionary<ulong, BuildingInstance>(BuildingRegistry.BuildOccupancy(_buildings));
+        RefreshBuildings();
         UpdateGhost();
 
         var message = $"Placed {_activeBuilding.DisplayName}";
@@ -849,17 +864,16 @@ public partial class RegionView : Node2D
     /// <summary>Removes the building occupying the hovered hex, if any.</summary>
     public bool RemoveHoveredBuilding()
     {
-        if (_tile is null || _hovered < 0)
+        if (_tile is null || _hovered < 0 || _campaign is null)
             return false;
 
-        if (!_occupancy.TryGetValue((ulong)_tile.Cells[_hovered], out var building))
+        if (!_campaign.TryRemove(_tile, _hovered, out var building) || building is null)
         {
             EmitSignal(SignalName.PlacementFeedback, false, "No building on this hex");
             return false;
         }
 
-        _buildings.Remove(building);
-        _occupancy = new Dictionary<ulong, BuildingInstance>(BuildingRegistry.BuildOccupancy(_buildings));
+        RefreshBuildings();
         UpdateGhost();
 
         EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
@@ -871,18 +885,20 @@ public partial class RegionView : Node2D
     /// <summary>Removes every building in the current region.</summary>
     public void ClearBuildings()
     {
-        if (_buildings.Count == 0)
+        if (_tile is null || _campaign is null)
+            return;
+
+        var removed = _campaign.Clear(_tile);
+        if (removed == 0)
         {
             EmitSignal(SignalName.PlacementFeedback, false, "No buildings to clear");
             return;
         }
 
-        var removed = _buildings.Count;
-        _buildings.Clear();
-        _occupancy.Clear();
+        RefreshBuildings();
         UpdateGhost();
 
-        EmitSignal(SignalName.BuildingsChanged, 0);
+        EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
         EmitSignal(SignalName.PlacementFeedback, true, $"Cleared {removed} building(s)");
         QueueRedraw();
     }
@@ -969,11 +985,14 @@ public partial class RegionView : Node2D
         if (ViewMode != RegionViewMode.Buildings || _activeBuilding is null || _tile is null || _hovered < 0)
             return;
 
-        var result = _activeBuilding.CanPlaceAt(_tile, _hovered, _world, SiteConfig, _occupancy);
+        var result = _campaign is not null
+            ? _campaign.Preview(_activeBuilding, _tile, _hovered)
+            : _activeBuilding.CanPlaceAt(_tile, _hovered, _world, SiteConfig);
+
         _ghostValid = result.Success;
         _ghostError = result.Success ? string.Empty : result.Error;
 
-        var footprint = result.Success
+        var footprint = result.Footprint.Count > 0
             ? result.Footprint
             : _activeBuilding.BuildFootprint(_tile, _hovered);
 
