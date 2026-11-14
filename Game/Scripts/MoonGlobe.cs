@@ -94,7 +94,7 @@ public partial class MoonGlobe : Node2D
 
     public override void _Process(double delta)
     {
-        if (!Spin)
+        if (!Spin || !Visible)
             return;
 
         _yaw += (float)delta * 0.5f;
@@ -126,6 +126,9 @@ public partial class MoonGlobe : Node2D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (!Visible)
+            return;
+
         switch (@event)
         {
             case InputEventMouseButton button:
