@@ -21,7 +21,9 @@ public partial class Main : Node2D
 
     private const string GlobeStatus = "Drag to rotate · wheel to zoom · right-drag to pan · click a region";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · M colony · Esc back";
+    private const string ManagementStatus =
+        "Wheel zoom · right-drag pan · 1-4 overlay · Tab cycle · [ ] relief · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -31,6 +33,7 @@ public partial class Main : Node2D
     {
         Globe,
         Region,
+        Management,
     }
 
     private BodyWorld _world = null!;
@@ -39,6 +42,7 @@ public partial class Main : Node2D
     private CampaignService _campaignService = null!;
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
+    private ManagementView _managementView = null!;
     private Font _font = null!;
 
     private Mode _mode = Mode.Globe;
@@ -100,6 +104,14 @@ public partial class Main : Node2D
         _regionView.SetCampaign(_campaign);
         _regionView.SetBuildingRegistry(_registry);
 
+        _managementView = new ManagementView { Visible = false };
+        worldLayer.AddChild(_managementView);
+        _managementView.HexHovered += OnHexHovered;
+        _managementView.HexSelected += OnHexSelected;
+        _managementView.ViewModeChanged += OnViewModeChanged;
+        _managementView.SetCampaign(_campaign);
+        _managementView.ReliefScale = FloatArgument("--relief", 1f);
+
         GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
         _campaignService.Load();
@@ -121,6 +133,14 @@ public partial class Main : Node2D
         if (region != 0)
             ShowRegion(region);
 
+        var view = ArgumentValue("--view");
+        if ((HasArgument("--iso")
+             || string.Equals(view, "management", StringComparison.OrdinalIgnoreCase))
+            && _mode == Mode.Region)
+        {
+            ShowManagement();
+        }
+
         var route = ArgumentValue("--route");
         if (route is not null)
         {
@@ -133,19 +153,16 @@ public partial class Main : Node2D
             }
         }
 
-        if (_mode == Mode.Region)
+        var overlay = ArgumentValue("--overlay");
+        if (_mode == Mode.Management)
         {
-            var overlay = ArgumentValue("--overlay");
             if (overlay is not null)
-            {
-                _regionView.SetViewMode(overlay.ToLowerInvariant() switch
-                {
-                    "terrain" => RegionViewMode.Terrain,
-                    "score" or "sitescore" => RegionViewMode.SiteScore,
-                    "buildings" or "building" => RegionViewMode.Buildings,
-                    _ => RegionViewMode.Biome,
-                });
-            }
+                _managementView.SetOverlay(ParseOverlay(overlay));
+        }
+        else if (_mode == Mode.Region)
+        {
+            if (overlay is not null)
+                _regionView.SetViewMode(ParseOverlay(overlay));
 
             var active = ArgumentValue("--active");
             if (active is not null && !_regionView.SetActiveBuilding(active))
@@ -171,6 +188,8 @@ public partial class Main : Node2D
     {
         if (_benchRedraw && _mode == Mode.Region)
             _regionView.QueueRedraw();
+        else if (_benchRedraw && _mode == Mode.Management)
+            _managementView.QueueRedraw();
 
         if (!_reportFps)
             return;
@@ -179,14 +198,19 @@ public partial class Main : Node2D
         if (++_frameCounter < 60)
             return;
 
-        var draw = _mode == Mode.Region
-            ? $" · draw avg {_regionView.AverageDrawMs:F2} ms · last {_regionView.LastDrawMs:F2} ms"
-            : string.Empty;
+        var draw = _mode switch
+        {
+            Mode.Region => $" · draw avg {_regionView.AverageDrawMs:F2} ms · last {_regionView.LastDrawMs:F2} ms",
+            Mode.Management =>
+                $" · draw avg {_managementView.AverageDrawMs:F2} ms · last {_managementView.LastDrawMs:F2} ms",
+            _ => string.Empty,
+        };
 
         GD.Print($"fps: {Engine.GetFramesPerSecond():F1} · frame {_frameSeconds / _frameCounter * 1000.0:F2} ms{draw}");
         _frameCounter = 0;
         _frameSeconds = 0;
         _regionView.ResetDrawStats();
+        _managementView.ResetDrawStats();
     }
 
     public override void _Draw()
@@ -206,24 +230,32 @@ public partial class Main : Node2D
                 SaveScreenshot(DefaultScreenshotPath());
                 break;
 
-            case Key.Key1 when _mode == Mode.Region:
-                _regionView.SetViewMode(RegionViewMode.Biome);
+            case Key.Key1 when _mode is Mode.Region or Mode.Management:
+                SetOverlay(RegionViewMode.Biome);
                 break;
 
-            case Key.Key2 when _mode == Mode.Region:
-                _regionView.SetViewMode(RegionViewMode.Terrain);
+            case Key.Key2 when _mode is Mode.Region or Mode.Management:
+                SetOverlay(RegionViewMode.Terrain);
                 break;
 
-            case Key.Key3 when _mode == Mode.Region:
-                _regionView.SetViewMode(RegionViewMode.SiteScore);
+            case Key.Key3 when _mode is Mode.Region or Mode.Management:
+                SetOverlay(RegionViewMode.SiteScore);
                 break;
 
-            case Key.Key4 when _mode == Mode.Region:
-                _regionView.SetViewMode(RegionViewMode.Buildings);
+            case Key.Key4 when _mode is Mode.Region or Mode.Management:
+                SetOverlay(RegionViewMode.Buildings);
                 break;
 
             case Key.Tab when _mode == Mode.Region:
                 _regionView.CycleViewMode();
+                break;
+
+            case Key.Tab when _mode == Mode.Management:
+                _managementView.CycleOverlay();
+                break;
+
+            case Key.M when _mode == Mode.Region:
+                ShowManagement();
                 break;
 
             case Key.Comma when _mode == Mode.Region:
@@ -236,6 +268,10 @@ public partial class Main : Node2D
 
             case Key.C when _mode == Mode.Region && !key.CtrlPressed:
                 _regionView.ClearBuildings();
+                break;
+
+            case Key.Escape when _mode == Mode.Management:
+                ShowRegion(_regionView.RegionIndex);
                 break;
 
             case Key.Escape when _mode == Mode.Region:
@@ -261,6 +297,7 @@ public partial class Main : Node2D
 
         _regionView.Load(_world, regionIndex);
         _regionView.Visible = true;
+        _managementView.Visible = false;
         _globe.Visible = false;
         _mode = Mode.Region;
         _status = RegionStatus;
@@ -270,9 +307,27 @@ public partial class Main : Node2D
         QueueRedraw();
     }
 
+    private void ShowManagement()
+    {
+        if (!_regionView.IsLoaded)
+            return;
+
+        _mode = Mode.Management;
+        _managementView.Load(_world, _regionView.RegionIndex);
+        _managementView.Visible = true;
+        _regionView.Visible = false;
+        _globe.Visible = false;
+        _status = ManagementStatus;
+        _selectedHex = -1;
+        _selectedBiome = string.Empty;
+        GD.Print($"colony view: region {_regionView.RegionIndex} · overlay {_managementView.Overlay}");
+        QueueRedraw();
+    }
+
     private void ShowGlobe()
     {
         _regionView.Visible = false;
+        _managementView.Visible = false;
         _globe.Visible = true;
         _mode = Mode.Globe;
         _status = GlobeStatus;
@@ -343,13 +398,23 @@ public partial class Main : Node2D
 
     private void OnViewModeChanged(int mode)
     {
-        _status = ((RegionViewMode)mode) switch
-        {
-            RegionViewMode.Terrain => "terrain overlay · Tab to cycle · 1-4 mode",
-            RegionViewMode.SiteScore => "site-score heatmap (7-hex footprint) · Tab to cycle",
-            RegionViewMode.Buildings => "buildings overlay · click place · Del remove · C clear",
-            _ => RegionStatus,
-        };
+        var overlay = (RegionViewMode)mode;
+
+        _status = _mode == Mode.Management
+            ? overlay switch
+            {
+                RegionViewMode.Terrain => "colony · terrain relief · [ ] exaggeration · Tab cycle",
+                RegionViewMode.SiteScore => "colony · site-score relief · Tab cycle",
+                RegionViewMode.Buildings => "colony · building overlay · Tab cycle",
+                _ => ManagementStatus,
+            }
+            : overlay switch
+            {
+                RegionViewMode.Terrain => "terrain overlay · Tab to cycle · 1-4 mode",
+                RegionViewMode.SiteScore => "site-score heatmap (7-hex footprint) · Tab to cycle",
+                RegionViewMode.Buildings => "buildings overlay · click place · Del remove · C clear",
+                _ => RegionStatus,
+            };
 
         QueueRedraw();
     }
@@ -365,6 +430,14 @@ public partial class Main : Node2D
 
     private void OnBuildingsChanged(int count) => QueueRedraw();
 
+    private void SetOverlay(RegionViewMode mode)
+    {
+        if (_mode == Mode.Management)
+            _managementView.SetOverlay(mode);
+        else
+            _regionView.SetViewMode(mode);
+    }
+
     private void OnPlacementFeedback(bool success, string message)
     {
         _status = message;
@@ -374,10 +447,20 @@ public partial class Main : Node2D
 
     private void DrawPanel()
     {
-        if (_mode == Mode.Globe)
-            DrawGlobePanel();
-        else
-            DrawRegionPanel();
+        switch (_mode)
+        {
+            case Mode.Globe:
+                DrawGlobePanel();
+                break;
+
+            case Mode.Management:
+                DrawManagementPanel();
+                break;
+
+            default:
+                DrawRegionPanel();
+                break;
+        }
     }
 
     private void DrawGlobePanel()
@@ -515,6 +598,110 @@ public partial class Main : Node2D
             "Esc back to globe · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
+    private void DrawManagementPanel()
+    {
+        var overlay = _managementView.Overlay;
+        var biomes = _managementView.BiomesPresent;
+        var legendRows = overlay switch
+        {
+            RegionViewMode.Biome => Math.Max(1, biomes.Count),
+            _ => 1,
+        };
+
+        var height = 202f + legendRows * LegendRowHeight + 18f;
+        var panel = new Rect2(PanelLeft, PanelTop, PanelWidth, height);
+
+        DrawRect(panel, PanelColor);
+        DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.9f, 0.72f, 0.45f, 0.9f));
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · COLONY",
+            HorizontalAlignment.Left, -1, 17, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
+            $"{DisplayName(_managementView.RegionBiomeId)} · {_managementView.HexCount} hexes · res {_world.FineResolution}",
+            HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 70),
+            $"H3 {new H3Index(_managementView.RegionIndex)}", HorizontalAlignment.Left, -1, 11, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 92),
+            $"overlay: {ModeName(overlay)} · Tab / 1-4", HorizontalAlignment.Left, -1, 12,
+            new Color(0.95f, 0.8f, 0.55f));
+
+        if (_selectedHex >= 0)
+        {
+            var buildable = _world.Biomes.TryGetById(_selectedBiome, out var selectedBiome) && selectedBiome.Buildable;
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 116),
+                $"hex {_selectedHex} · {DisplayName(_selectedBiome)} · {(buildable ? "buildable" : "no build")}",
+                HorizontalAlignment.Left, -1, 13, AccentText);
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 134),
+                $"{_selectedElevation:N0} m · {ShortCrater(_selectedCrater)}",
+                HorizontalAlignment.Left, -1, 12, MutedText);
+        }
+        else
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 116),
+                "click a hex to inspect it", HorizontalAlignment.Left, -1, 12, MutedText);
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 158),
+            $"relief ×{_managementView.ReliefScale:F2} · [ ] adjust · wheel zoom", HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 182), ManagementLegendTitle(),
+            HorizontalAlignment.Left, -1, 11, MutedText);
+
+        var y = PanelTop + 202f;
+        switch (overlay)
+        {
+            case RegionViewMode.Biome:
+                if (biomes.Count == 0)
+                {
+                    DrawString(_font, new Vector2(PanelLeft + 18, y + 11), "none",
+                        HorizontalAlignment.Left, -1, 12, MutedText);
+                    break;
+                }
+
+                foreach (var biomeId in biomes)
+                {
+                    var color = BiomePalette.For(biomeId);
+                    DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
+                    DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
+                    DrawString(_font, new Vector2(PanelLeft + 38, y + 11), DisplayName(biomeId),
+                        HorizontalAlignment.Left, -1, 13, AccentText);
+                    y += LegendRowHeight;
+                }
+
+                break;
+
+            case RegionViewMode.Terrain:
+                DrawRamp(TerrainPalette.For, y);
+                break;
+
+            case RegionViewMode.SiteScore:
+                DrawRamp(t => SiteScorePalette.For(t, true), y);
+                break;
+
+            default:
+                DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
+                    $"{_managementView.BuildingCount} building(s) in this region",
+                    HorizontalAlignment.Left, -1, 12, MutedText);
+                break;
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height - 10),
+            "Esc back to region · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
+    }
+
+    private string ManagementLegendTitle()
+    {
+        var overlay = _managementView.Overlay;
+        return overlay switch
+        {
+            RegionViewMode.Biome => "biomes in this region",
+            RegionViewMode.Terrain =>
+                $"elevation · {_managementView.TerrainMinM:N0} – {_managementView.TerrainMaxM:N0} m",
+            RegionViewMode.SiteScore =>
+                $"site score · {_managementView.SiteScoreMin:P0} – {_managementView.SiteScoreMax:P0} · {_managementView.SiteScoreMs:F1} ms",
+            _ => "buildings",
+        };
+    }
+
     private string LegendTitle(RegionViewMode mode) => mode switch
     {
         RegionViewMode.Biome => "biomes in this region",
@@ -582,6 +769,8 @@ public partial class Main : Node2D
         {
             Mode.Globe when _hoverRegion != 0 => $"{_hoverBiome} · {_hoverHexes} hexes",
             Mode.Globe => "SPACE PROGRAM MANAGER · PHASE 1",
+            Mode.Management =>
+                $"{ModeName(_managementView.Overlay)} · {_managementView.BuildingCount} buildings",
             _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.Buildings.Count} buildings",
         };
 
@@ -615,6 +804,14 @@ public partial class Main : Node2D
         RegionViewMode.SiteScore => "SITE SCORE",
         RegionViewMode.Buildings => "BUILDINGS",
         _ => "BIOME",
+    };
+
+    private static RegionViewMode ParseOverlay(string overlay) => overlay.ToLowerInvariant() switch
+    {
+        "terrain" => RegionViewMode.Terrain,
+        "score" or "sitescore" => RegionViewMode.SiteScore,
+        "buildings" or "building" => RegionViewMode.Buildings,
+        _ => RegionViewMode.Biome,
     };
 
     private static int FootprintHexes(BuildingDef def)
