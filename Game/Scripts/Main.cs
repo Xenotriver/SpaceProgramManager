@@ -36,6 +36,7 @@ public partial class Main : Node2D
     private BodyWorld _world = null!;
     private BuildingRegistry _registry = null!;
     private CampaignState _campaign = null!;
+    private CampaignService _campaignService = null!;
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
     private Font _font = null!;
@@ -90,10 +91,19 @@ public partial class Main : Node2D
 
         _registry = new BuildingRegistry(MoonBuildings.All);
         _campaign = new CampaignState(_world, _registry);
+        _campaignService = new CampaignService(
+            _world,
+            _campaign,
+            ResolveSaveRoot(),
+            enabled: !HasArgument("--nosave"),
+            fresh: HasArgument("--fresh"));
         _regionView.SetCampaign(_campaign);
         _regionView.SetBuildingRegistry(_registry);
 
         GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
+
+        _campaignService.Load();
+        _campaignService.StatusChanged += QueueRedraw;
 
         _globe.Spin = HasArgument("--spin");
         _reportFps = HasArgument("--fps");
@@ -105,6 +115,9 @@ public partial class Main : Node2D
         _globe.SetView(yaw, pitch, zoom);
 
         var region = UlongArgument("--region");
+        if (region == 0 && _campaign.Meta.ActiveRegionIndex is { } restored)
+            region = restored;
+
         if (region != 0)
             ShowRegion(region);
 
@@ -243,6 +256,9 @@ public partial class Main : Node2D
             return;
         }
 
+        // Stored buildings must be installed before the view reads the region.
+        _campaignService.EnsureRegionLoaded(regionIndex);
+
         _regionView.Load(_world, regionIndex);
         _regionView.Visible = true;
         _globe.Visible = false;
@@ -250,6 +266,7 @@ public partial class Main : Node2D
         _status = RegionStatus;
         _selectedHex = -1;
         _selectedBiome = string.Empty;
+        _campaignService.SetActiveRegion(regionIndex);
         QueueRedraw();
     }
 
@@ -259,7 +276,13 @@ public partial class Main : Node2D
         _globe.Visible = true;
         _mode = Mode.Globe;
         _status = GlobeStatus;
+        _campaignService.SetActiveRegion(null);
         QueueRedraw();
+    }
+
+    public override void _ExitTree()
+    {
+        _campaignService?.Flush();
     }
 
     private void OnRegionHovered(ulong regionIndex, string biomeId, int hexCount)
@@ -564,6 +587,9 @@ public partial class Main : Node2D
 
         DrawString(_font, new Vector2(size.X - 340, size.Y - 22), right,
             HorizontalAlignment.Left, -1, 12, MutedText);
+
+        DrawString(_font, new Vector2(size.X - 340, size.Y - 38), _campaignService.Status,
+            HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
     private string DisplayName(string biomeId)
@@ -610,6 +636,14 @@ public partial class Main : Node2D
 
     private static bool HasArgument(string name)
         => Array.Exists(OS.GetCmdlineUserArgs(), argument => argument == name);
+
+    private static string ResolveSaveRoot()
+    {
+        var value = ArgumentValue("--save");
+        return string.IsNullOrWhiteSpace(value)
+            ? ProjectSettings.GlobalizePath("user://saves/slot1")
+            : value;
+    }
 
     private static float FloatArgument(string name, float fallback)
     {

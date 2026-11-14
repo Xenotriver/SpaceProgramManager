@@ -32,7 +32,15 @@ public sealed class CampaignState
     }
 
     /// <summary>Campaign-wide state (clock, treasury, visited regions).</summary>
-    public CampaignMeta Meta { get; } = new();
+    public CampaignMeta Meta { get; private set; } = new();
+
+    /// <summary>Replaces campaign-wide state with a snapshot read from storage.</summary>
+    public void RestoreMeta(CampaignMeta meta)
+    {
+        ArgumentNullException.ThrowIfNull(meta);
+
+        Meta = meta;
+    }
 
     /// <summary>Scoring configuration used for placement validation.</summary>
     public SiteScorerConfig SiteConfig => _siteConfig;

@@ -249,6 +249,31 @@ public sealed class CampaignStore
         File.Delete(path + ".bak");
     }
 
+    /// <summary>
+    /// Deletes every region shard and backup, returning how many shards were
+    /// removed. Used when a slot is explicitly restarted so stale shards from the
+    /// previous campaign cannot leak into the new one.
+    /// </summary>
+    public int DeleteAllRegions()
+    {
+        var directory = Path.Combine(RootDirectory, "regions");
+        if (!Directory.Exists(directory))
+            return 0;
+
+        var removed = 0;
+        foreach (var path in Directory.EnumerateFiles(directory))
+        {
+            var name = Path.GetFileName(path);
+
+            if (name.EndsWith(".json", StringComparison.Ordinal))
+                removed++;
+
+            File.Delete(path);
+        }
+
+        return removed;
+    }
+
     private static BuildingDto ToDto(BuildingInstance building)
     {
         var state = new Dictionary<string, object>(StringComparer.Ordinal);

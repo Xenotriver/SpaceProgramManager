@@ -269,6 +269,22 @@ public class CampaignStoreTests : IDisposable
         Assert.False(File.Exists(store.RegionPath(123) + ".bak"));
     }
 
+    [Fact]
+    public void DeleteAllRegions_RemovesShardsAndBackups()
+    {
+        var store = new CampaignStore(_root);
+        store.SaveRegion(1, Array.Empty<BuildingInstance>());
+        store.SaveRegion(1, Array.Empty<BuildingInstance>());
+        store.SaveRegion(2, Array.Empty<BuildingInstance>());
+
+        var removed = store.DeleteAllRegions();
+
+        Assert.Equal(2, removed);
+        Assert.False(File.Exists(store.RegionPath(1)));
+        Assert.False(File.Exists(store.RegionPath(1) + ".bak"));
+        Assert.False(File.Exists(store.RegionPath(2)));
+    }
+
     public void Dispose()
     {
         try
