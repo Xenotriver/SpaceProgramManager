@@ -18,7 +18,8 @@ using Sim.World;
 /// The terrain is baked into a single <see cref="ArrayMesh"/> with painter-sorted
 /// vertices (far prisms first), so drawing the whole region costs one mesh draw.
 /// The camera is a plain 2D transform over isometric units, which keeps picking
-/// and placement exact and cheap.
+/// and placement exact and cheap. Orbiting rotates the plane in 60° steps about
+/// the centre of the view, so the diorama turns in place.
 /// </summary>
 public partial class ManagementView : Node2D
 {
@@ -61,7 +62,9 @@ public partial class ManagementView : Node2D
     private readonly List<BuildingDef> _buildingChoices = new();
 
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
+    private Vector2[][] _rotatedCorners = Array.Empty<Vector2[]>();
     private Vector2[][] _isoCorners = Array.Empty<Vector2[]>();
+    private Vector2[] _rotatedCenters = Array.Empty<Vector2>();
     private Vector2[] _isoCenters = Array.Empty<Vector2>();
     private float[] _elevations = Array.Empty<float>();
     private float[] _heights = Array.Empty<float>();
@@ -95,6 +98,18 @@ public partial class ManagementView : Node2D
     private Vector2 _pan;
     private float _pixelsPerRadian = 8000f;
     private float _zoom = 1f;
+
+    /// <summary>Plane point the diorama is rotated about; fixed until the next orbit.</summary>
+    private Vector2 _pivot;
+
+    /// <summary>Plane-space centre of the region, used by refits and the first orbit.</summary>
+    private Vector2 _homePivot;
+
+    /// <summary>True once the player pans or zooms; rotation then keeps their view.</summary>
+    private bool _viewAdjusted;
+
+    private int _yawSteps;
+    private float _yaw;
 
     private int _hovered = -1;
     private int _selected = -1;
@@ -131,6 +146,15 @@ public partial class ManagementView : Node2D
 
     /// <summary>Number of building definitions available for cycling.</summary>
     public int BuildingChoiceCount => _buildingChoices.Count;
+
+    /// <summary>Number of 60° steps in a full camera orbit.</summary>
+    public const int RotationStepCount = 6;
+
+    /// <summary>Current orbit step (0-5).</summary>
+    public int RotationSteps => _yawSteps;
+
+    /// <summary>Current orbit angle in degrees (0, 60, … 300).</summary>
+    public int CameraDegrees => _yawSteps * 60;
 
     public short TerrainMinM { get; private set; }
 
@@ -186,7 +210,9 @@ public partial class ManagementView : Node2D
         var count = cells.Count;
 
         _corners = new Vector2[count][];
+        _rotatedCorners = new Vector2[count][];
         _isoCorners = new Vector2[count][];
+        _rotatedCenters = new Vector2[count];
         _isoCenters = new Vector2[count];
         _elevations = new float[count];
         _heights = new float[count];
@@ -240,6 +266,7 @@ public partial class ManagementView : Node2D
         TerrainMinM = (short)minElevation;
         TerrainMaxM = (short)maxElevation;
         BiomesPresent = biomesPresent;
+        _homePivot = (min + max) * 0.5f;
 
         var elevationSpan = Math.Max(1, maxElevation - minElevation);
         var spanPlane = Mathf.Max(max.X - min.X, max.Y - min.Y);
@@ -259,10 +286,8 @@ public partial class ManagementView : Node2D
             _buildingFills[i] = new Color(biomeFill.R * 0.32f, biomeFill.G * 0.32f, biomeFill.B * 0.32f, 1f);
         }
 
-        // Far prisms first so nearer ones paint over them.
-        _order = Enumerable.Range(0, count)
-            .OrderByDescending(i => IsoProjection.Depth(CellCenter(i)))
-            .ToArray();
+        // The plane-space region centre is the orbit pivot until the player pans.
+        _pivot = _homePivot;
 
         _outlinePoints = new Vector2[count * 6 * 2];
         _hovered = -1;
@@ -273,7 +298,8 @@ public partial class ManagementView : Node2D
         FitView();
 
         GD.Print($"colony: {count} hexes · span {spanPlane:F4} · elev {TerrainMinM}..{TerrainMaxM} m · " +
-                 $"auto relief {_autoRelief:F2} · slab {_slab:F5} · fit {_pixelsPerRadian:F0} px/unit");
+                 $"auto relief {_autoRelief:F2} · slab {_slab:F5} · fit {_pixelsPerRadian:F0} px/unit · " +
+                 $"camera {CameraDegrees}°");
 
         Visible = true;
         EmitSignal(SignalName.ViewModeChanged, (int)Overlay);
@@ -380,6 +406,41 @@ public partial class ManagementView : Node2D
         return true;
     }
 
+    /// <summary>Orbits the camera by whole 60° steps (positive is clockwise).</summary>
+    public void Rotate(int steps) => SetRotation(_yawSteps + steps);
+
+    /// <summary>
+    /// Sets the orbit step, wrapping into 0-5. The plane turns about the point at
+    /// the centre of the screen, so the diorama rotates in place even after a pan.
+    /// </summary>
+    public void SetRotation(int steps)
+    {
+        var normalized = ((steps % RotationStepCount) + RotationStepCount) % RotationStepCount;
+        if (normalized == _yawSteps)
+            return;
+
+        _yawSteps = normalized;
+        _yaw = normalized * Mathf.Pi / 3f;
+
+        if (_tile is null)
+            return;
+
+        if (_viewAdjusted)
+        {
+            UpdatePivot();
+            RebuildGeometry();
+        }
+        else
+        {
+            _pivot = _homePivot;
+            RebuildGeometry();
+            FitView();
+        }
+
+        GD.Print($"camera: {CameraDegrees}° · step {_yawSteps + 1}/{RotationStepCount}");
+        QueueRedraw();
+    }
+
     /// <summary>Changes the relief multiplier and refits the diorama.</summary>
     public void SetRelief(float scale)
     {
@@ -388,6 +449,7 @@ public partial class ManagementView : Node2D
             return;
 
         ReliefScale = clamped;
+        _pivot = _homePivot;
         RebuildGeometry();
         FitView();
     }
@@ -483,6 +545,7 @@ public partial class ManagementView : Node2D
         {
             _pan += motion.Position - _lastMouse;
             _lastMouse = motion.Position;
+            _viewAdjusted = true;
             QueueRedraw();
             return;
         }
@@ -499,6 +562,7 @@ public partial class ManagementView : Node2D
 
         var origin = _center + _pan;
         _pan += (anchor - origin) * (1f - _zoom / before);
+        _viewAdjusted = true;
         QueueRedraw();
     }
 
@@ -634,31 +698,43 @@ public partial class ManagementView : Node2D
                  $"(range {_siteScoreMin:P0} – {_siteScoreMax:P0})");
     }
 
-    /// <summary>Recomputes elevations, isometric corners and the depth order.</summary>
+    /// <summary>Recomputes elevations, rotated corners, isometric corners and depth order.</summary>
     private void RebuildGeometry()
     {
         if (_tile is null)
             return;
 
         var radiusMetres = _radiusKm * 1000.0;
+        var cos = Mathf.Cos(_yaw);
+        var sin = Mathf.Sin(_yaw);
         _baseHeight = -_slab;
 
         for (var i = 0; i < _corners.Length; i++)
         {
             _heights[i] = (float)((_elevations[i] - TerrainMinM) / radiusMetres * _autoRelief * ReliefScale);
-            _isoCenters[i] = IsoProjection.Project(CellCenter(i), _heights[i]);
+
+            var center = IsoProjection.Rotate(CellCenter(i), _pivot, cos, sin);
+            _rotatedCenters[i] = center;
+            _isoCenters[i] = IsoProjection.Project(center, _heights[i]);
 
             var corners = _corners[i];
+            var rotated = new Vector2[corners.Length];
             var iso = new Vector2[corners.Length];
             for (var v = 0; v < corners.Length; v++)
-                iso[v] = IsoProjection.Project(corners[v], _heights[i]);
+            {
+                rotated[v] = IsoProjection.Rotate(corners[v], _pivot, cos, sin);
+                iso[v] = IsoProjection.Project(rotated[v], _heights[i]);
+            }
 
+            _rotatedCorners[i] = rotated;
             _isoCorners[i] = iso;
         }
 
         _cellRadius = EstimateCellRadius();
+
+        // Far prisms first so nearer ones paint over them.
         _order = Enumerable.Range(0, _corners.Length)
-            .OrderByDescending(i => IsoProjection.Depth(CellCenter(i)))
+            .OrderByDescending(i => IsoProjection.Depth(_rotatedCenters[i]))
             .ToArray();
 
         _meshDirty = true;
@@ -676,7 +752,7 @@ public partial class ManagementView : Node2D
         foreach (var i in _order)
         {
             var iso = _isoCorners[i];
-            var plane = _corners[i];
+            var plane = _rotatedCorners[i];
             var fill = _fills[i];
             var height = _heights[i];
             var n = iso.Length;
@@ -790,6 +866,18 @@ public partial class ManagementView : Node2D
         _zoom = 1f;
         _pixelsPerRadian = fit;
         _pan = -((min + max) * 0.5f) * fit;
+        _pivot = _homePivot;
+        _viewAdjusted = false;
+    }
+
+    /// <summary>
+    /// Uses the plane point currently under the centre of the screen as the orbit
+    /// pivot, so the view turns in place and a zoomed-in area stays in frame.
+    /// </summary>
+    private void UpdatePivot()
+    {
+        var scale = _pixelsPerRadian * _zoom;
+        _pivot = IsoProjection.Unproject(-_pan / scale, 0f);
     }
 
     private Vector2 ToScreen(Vector2 iso, float scale) => _center + _pan + iso * scale;
@@ -849,7 +937,15 @@ public partial class ManagementView : Node2D
 
     private void OnViewportResized()
     {
-        _center = GetViewportRect().Size * 0.5f;
+        if (!_viewAdjusted && _isoCorners.Length > 0)
+        {
+            FitView();
+        }
+        else
+        {
+            _center = GetViewportRect().Size * 0.5f;
+        }
+
         QueueRedraw();
     }
 

@@ -15,6 +15,7 @@ using Sim.World;
 public partial class Main : Node2D
 {
     private const int LegendRowHeight = 20;
+    private const int MaxColonyRows = 12;
     private const float PanelLeft = 18f;
     private const float PanelTop = 18f;
     private const float PanelWidth = 300f;
@@ -23,7 +24,7 @@ public partial class Main : Node2D
     private const string RegionStatus =
         "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · M colony · Esc back";
     private const string ManagementStatus =
-        "Wheel zoom · right-drag pan · 1-4 overlay · Tab cycle · [ ] relief · Esc back";
+        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -168,6 +169,14 @@ public partial class Main : Node2D
             }
         }
 
+        var rot = ArgumentValue("--rot");
+        if (rot is not null
+            && _mode == Mode.Management
+            && int.TryParse(rot, out var rotDegrees))
+        {
+            _managementView.SetRotation((int)Math.Round(rotDegrees / 60.0));
+        }
+
         var active = ArgumentValue("--active");
         if (active is not null)
         {
@@ -266,6 +275,14 @@ public partial class Main : Node2D
 
             case Key.Tab when _mode == Mode.Management:
                 _managementView.CycleOverlay();
+                break;
+
+            case Key.Q when _mode == Mode.Management:
+                RotateCamera(-1);
+                break;
+
+            case Key.E when _mode == Mode.Management:
+                RotateCamera(1);
                 break;
 
             case Key.M when _mode == Mode.Region:
@@ -450,9 +467,9 @@ public partial class Main : Node2D
         _status = _mode == Mode.Management
             ? overlay switch
             {
-                RegionViewMode.Terrain => "colony · terrain relief · [ ] exaggeration · Tab cycle",
-                RegionViewMode.SiteScore => "colony · site-score relief · Tab cycle",
-                RegionViewMode.Buildings => "colony · building overlay · Tab cycle",
+                RegionViewMode.Terrain => "colony · terrain relief · Q/E rotate · [ ] exaggeration · Tab cycle",
+                RegionViewMode.SiteScore => "colony · site-score relief · Q/E rotate · Tab cycle",
+                RegionViewMode.Buildings => "colony · building overlay · Q/E rotate · Tab cycle",
                 _ => ManagementStatus,
             }
             : overlay switch
@@ -493,6 +510,13 @@ public partial class Main : Node2D
             _managementView.SetOverlay(mode);
         else
             _regionView.SetViewMode(mode);
+    }
+
+    private void RotateCamera(int steps)
+    {
+        _managementView.Rotate(steps);
+        _status = $"camera {_managementView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc back";
+        QueueRedraw();
     }
 
     private void OnPlacementFeedback(bool success, string message)
@@ -659,9 +683,18 @@ public partial class Main : Node2D
     {
         var overlay = _managementView.Overlay;
         var biomes = _managementView.BiomesPresent;
+        var colony = overlay == RegionViewMode.Buildings
+                     && _campaign is not null
+                     && _managementView.Tile is not null
+            ? _campaign.Buildings(_managementView.Tile.Entry.Index)
+            : null;
+
         var legendRows = overlay switch
         {
             RegionViewMode.Biome => Math.Max(1, biomes.Count),
+            RegionViewMode.Buildings => colony is null || colony.Count == 0
+                ? 1
+                : Math.Min(colony.Count, MaxColonyRows) + 1,
             _ => 1,
         };
 
@@ -699,7 +732,8 @@ public partial class Main : Node2D
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 158),
-            $"relief ×{_managementView.ReliefScale:F2} · [ ] adjust · wheel zoom", HorizontalAlignment.Left, -1, 12, MutedText);
+            $"relief ×{_managementView.ReliefScale:F2} · camera {_managementView.CameraDegrees}° · Q/E / [ ]",
+            HorizontalAlignment.Left, -1, 12, MutedText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 182), ManagementLegendTitle(),
             HorizontalAlignment.Left, -1, 11, MutedText);
 
@@ -736,7 +770,7 @@ public partial class Main : Node2D
 
             default:
                 if (_campaign is not null && _managementView.Tile is not null)
-                    DrawColonyPanel(y, _managementView.Tile.Entry.Index);
+                    DrawColonyPanel(y, _managementView.Tile.Entry.Index, PanelTop + height - 26f);
                 else
                     DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
                         $"{_managementView.BuildingCount} building(s) in this region",
@@ -745,7 +779,7 @@ public partial class Main : Node2D
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height - 10),
-            "Esc back to region · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
+            "Esc back · Q/E rotate · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
     private string ManagementLegendTitle()
@@ -800,7 +834,7 @@ public partial class Main : Node2D
             HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
-    private void DrawColonyPanel(float y, ulong regionIndex)
+    private void DrawColonyPanel(float y, ulong regionIndex, float bottom)
     {
         var buildings = _campaign.Buildings(regionIndex);
         if (buildings.Count == 0)
@@ -810,11 +844,15 @@ public partial class Main : Node2D
             return;
         }
 
+        var hidden = Math.Max(0, buildings.Count - MaxColonyRows);
+        var header = hidden == 0
+            ? $"colony · {buildings.Count} building(s) · Del remove · , / . cycle"
+            : $"colony · {buildings.Count} building(s) (+{hidden} more)";
         DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
-            $"colony · {buildings.Count} building(s) · Del remove · , / . cycle",
-            HorizontalAlignment.Left, -1, 12, new Color(0.95f, 0.8f, 0.55f));
+            header, HorizontalAlignment.Left, -1, 12, new Color(0.95f, 0.8f, 0.55f));
         y += LegendRowHeight;
 
+        var shown = 0;
         foreach (var building in buildings)
         {
             var def = _registry.TryGet(building.DefId, out var d) ? d : null;
@@ -843,7 +881,7 @@ public partial class Main : Node2D
             }
 
             y += LegendRowHeight;
-            if (y > PanelTop + 600f) // panel boundary
+            if (++shown >= MaxColonyRows || y + LegendRowHeight > bottom)
                 break;
         }
     }
