@@ -163,6 +163,9 @@ public partial class RegionView : Node2D
 
     public bool IsLoaded => _tile is not null;
 
+    /// <summary>The region tile for placement.</summary>
+    public RegionTile Tile => _tile!;
+
     /// <summary>Current colour overlay.</summary>
     public RegionViewMode ViewMode { get; private set; } = RegionViewMode.Biome;
 

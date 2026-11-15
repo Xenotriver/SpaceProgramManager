@@ -109,7 +109,9 @@ public partial class Main : Node2D
         _managementView.HexHovered += OnHexHovered;
         _managementView.HexSelected += OnHexSelected;
         _managementView.ViewModeChanged += OnViewModeChanged;
+        _managementView.ActiveBuildingChanged += OnActiveBuildingChanged;
         _managementView.SetCampaign(_campaign);
+        _managementView.SetBuildingRegistry(_registry);
         _managementView.ReliefScale = FloatArgument("--relief", 1f);
 
         GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
@@ -154,27 +156,39 @@ public partial class Main : Node2D
         }
 
         var overlay = ArgumentValue("--overlay");
-        if (_mode == Mode.Management)
+        if (overlay is not null)
         {
-            if (overlay is not null)
-                _managementView.SetOverlay(ParseOverlay(overlay));
-        }
-        else if (_mode == Mode.Region)
-        {
-            if (overlay is not null)
-                _regionView.SetViewMode(ParseOverlay(overlay));
-
-            var active = ArgumentValue("--active");
-            if (active is not null && !_regionView.SetActiveBuilding(active))
-                GD.PushWarning($"Unknown building id: {active}");
-
-            var place = ArgumentValue("--place");
-            if (place is not null)
+            if (_mode == Mode.Management)
             {
-                foreach (var part in place.Split(','))
+                _managementView.SetOverlay(ParseOverlay(overlay));
+            }
+            else if (_mode == Mode.Region)
+            {
+                _regionView.SetViewMode(ParseOverlay(overlay));
+            }
+        }
+
+        var active = ArgumentValue("--active");
+        if (active is not null)
+        {
+            var success = _mode == Mode.Management
+                ? _managementView.SetActiveBuilding(active)
+                : _regionView.SetActiveBuilding(active);
+            if (!success)
+                GD.PushWarning($"Unknown building id: {active}");
+        }
+
+        var place = ArgumentValue("--place");
+        if (place is not null)
+        {
+            foreach (var part in place.Split(','))
+            {
+                if (int.TryParse(part, out var ordinal))
                 {
-                    if (int.TryParse(part, out var ordinal))
+                    if (_mode == Mode.Region)
                         _regionView.PlaceActiveBuildingAt(ordinal);
+                    else if (_mode == Mode.Management && _managementView.Tile is not null)
+                        _managementView.PlaceAt(_managementView.Tile, ordinal, _campaign, _registry);
                 }
             }
         }
@@ -266,8 +280,41 @@ public partial class Main : Node2D
                 _regionView.CycleActiveBuilding(1);
                 break;
 
+            case Key.Comma when _mode == Mode.Management:
+                _managementView.CycleActiveBuilding(-1);
+                break;
+
+            case Key.Period when _mode == Mode.Management:
+                _managementView.CycleActiveBuilding(1);
+                break;
+
             case Key.C when _mode == Mode.Region && !key.CtrlPressed:
                 _regionView.ClearBuildings();
+                break;
+
+            case Key.C when _mode == Mode.Management && !key.CtrlPressed:
+                if (_managementView.SelectedHex >= 0 && _campaign is not null)
+                {
+                    // Place active building at selected hex
+                    var tile = _regionView.Tile;
+                    if (tile is not null)
+                    {
+                        var ordinal = _managementView.SelectedHex;
+                        _managementView.PlaceAt(tile, ordinal, _campaign, _registry);
+                    }
+                }
+                break;
+
+            case Key.Delete when _mode == Mode.Management:
+            case Key.Backspace when _mode == Mode.Management:
+                if (_managementView.SelectedHex >= 0 && _campaign is not null)
+                {
+                    var tile = _regionView.Tile;
+                    if (tile is not null)
+                    {
+                        _managementView.RemoveAt(tile, _managementView.SelectedHex, _campaign);
+                    }
+                }
                 break;
 
             case Key.Escape when _mode == Mode.Management:
@@ -421,9 +468,19 @@ public partial class Main : Node2D
 
     private void OnActiveBuildingChanged(string defId)
     {
-        _status = _registry.TryGet(defId, out var def) && def is not null
-            ? $"active: {def.DisplayName} · click to place · , / . cycle"
-            : $"active: {defId}";
+        if (_mode == Mode.Management)
+        {
+            var def = _managementView.ActiveBuilding;
+            _status = def is not null
+                ? $"active: {def.DisplayName} · click hex · C place · Del remove · , / . cycle"
+                : $"active: {defId}";
+        }
+        else
+        {
+            _status = _registry.TryGet(defId, out var def) && def is not null
+                ? $"active: {def.DisplayName} · click to place · , / . cycle"
+                : $"active: {defId}";
+        }
 
         QueueRedraw();
     }
@@ -678,9 +735,12 @@ public partial class Main : Node2D
                 break;
 
             default:
-                DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
-                    $"{_managementView.BuildingCount} building(s) in this region",
-                    HorizontalAlignment.Left, -1, 12, MutedText);
+                if (_campaign is not null && _managementView.Tile is not null)
+                    DrawColonyPanel(y, _managementView.Tile.Entry.Index);
+                else
+                    DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
+                        $"{_managementView.BuildingCount} building(s) in this region",
+                        HorizontalAlignment.Left, -1, 12, MutedText);
                 break;
         }
 
@@ -739,6 +799,65 @@ public partial class Main : Node2D
             $", / . cycle ({_regionView.BuildingChoiceCount}) · C clear",
             HorizontalAlignment.Left, -1, 11, MutedText);
     }
+
+    private void DrawColonyPanel(float y, ulong regionIndex)
+    {
+        var buildings = _campaign.Buildings(regionIndex);
+        if (buildings.Count == 0)
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
+                "no buildings · C to place", HorizontalAlignment.Left, -1, 12, MutedText);
+            return;
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
+            $"colony · {buildings.Count} building(s) · Del remove · , / . cycle",
+            HorizontalAlignment.Left, -1, 12, new Color(0.95f, 0.8f, 0.55f));
+        y += LegendRowHeight;
+
+        foreach (var building in buildings)
+        {
+            var def = _registry.TryGet(building.DefId, out var d) ? d : null;
+            var name = def?.DisplayName ?? building.DefId;
+            var statusColor = BuildingStatusColor(building.Status);
+            var statusText = building.Status.ToString();
+
+            if (def is not null && def.FootprintRadius > 0)
+            {
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), statusColor);
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
+            }
+
+            DrawString(_font, new Vector2(PanelLeft + 38, y + 11),
+                $"{name} · {statusText}", HorizontalAlignment.Left, -1, 12, AccentText);
+
+            if (building.Progress < 1.0 && building.Status == BuildingStatus.UnderConstruction)
+            {
+                DrawString(_font, new Vector2(PanelLeft + 180, y + 11),
+                    $"{building.Progress:P0}", HorizontalAlignment.Left, -1, 11, MutedText);
+            }
+            else if (building.Health < 100.0)
+            {
+                DrawString(_font, new Vector2(PanelLeft + 180, y + 11),
+                    $"hp {building.Health:F0}%", HorizontalAlignment.Left, -1, 11, MutedText);
+            }
+
+            y += LegendRowHeight;
+            if (y > PanelTop + 600f) // panel boundary
+                break;
+        }
+    }
+
+    private static Color BuildingStatusColor(BuildingStatus status) => status switch
+    {
+        BuildingStatus.Planned => new Color(0.6f, 0.6f, 0.7f),
+        BuildingStatus.UnderConstruction => new Color(0.9f, 0.75f, 0.3f),
+        BuildingStatus.Operational => new Color(0.35f, 0.9f, 0.55f),
+        BuildingStatus.Idle => new Color(0.5f, 0.7f, 0.9f),
+        BuildingStatus.Damaged => new Color(0.9f, 0.5f, 0.3f),
+        BuildingStatus.Destroyed => new Color(0.3f, 0.3f, 0.35f),
+        _ => new Color(0.85f, 0.85f, 0.92f),
+    };
 
     private void DrawRamp(Func<double, Color> palette, float y)
     {

@@ -6,6 +6,7 @@ using Godot;
 using H3;
 using H3.Extensions;
 using Sim.Biomes;
+using Sim.Buildings;
 using Sim.Campaign;
 using Sim.Site;
 using Sim.World;
@@ -33,6 +34,10 @@ public partial class ManagementView : Node2D
     [Signal]
     public delegate void ViewModeChangedEventHandler(int mode);
 
+    /// <summary>Active building definition changed.</summary>
+    [Signal]
+    public delegate void ActiveBuildingChangedEventHandler(string defId);
+
     private const float MinZoom = 0.6f;
     private const float MaxZoom = 10f;
     private const float DragThresholdPixels = 4f;
@@ -51,6 +56,9 @@ public partial class ManagementView : Node2D
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
     private CampaignState? _campaign;
+    private BuildingRegistry? _registry;
+    private BuildingDef? _activeBuilding;
+    private readonly List<BuildingDef> _buildingChoices = new();
 
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private Vector2[][] _isoCorners = Array.Empty<Vector2[]>();
@@ -112,6 +120,17 @@ public partial class ManagementView : Node2D
 
     /// <summary>Buildings placed in this region.</summary>
     public int BuildingCount => _campaign is null || _tile is null ? 0 : _campaign.BuildingCount(_tile.Entry.Index);
+
+    public int SelectedHex => _selected;
+
+    /// <summary>The region tile (for placement).</summary>
+    public RegionTile Tile => _tile;
+
+    /// <summary>Building selected for placement, or null before a registry is set.</summary>
+    public BuildingDef? ActiveBuilding => _activeBuilding;
+
+    /// <summary>Number of building definitions available for cycling.</summary>
+    public int BuildingChoiceCount => _buildingChoices.Count;
 
     public short TerrainMinM { get; private set; }
 
@@ -280,6 +299,86 @@ public partial class ManagementView : Node2D
 
     /// <summary>Advances to the next overlay (wraps).</summary>
     public void CycleOverlay() => SetOverlay((RegionViewMode)(((int)Overlay + 1) % 4));
+
+    /// <summary>Sets the building catalogue used for placement and cycling.</summary>
+    public void SetBuildingRegistry(BuildingRegistry registry)
+    {
+        _registry = registry;
+        _buildingChoices.Clear();
+        _buildingChoices.AddRange(registry.All.Values
+            .OrderBy(def => def.Category)
+            .ThenBy(def => def.Id, StringComparer.Ordinal));
+
+        _activeBuilding = _buildingChoices.FirstOrDefault();
+    }
+
+    /// <summary>Selects the previous/next building definition.</summary>
+    public void CycleActiveBuilding(int direction)
+    {
+        if (_buildingChoices.Count == 0)
+            return;
+
+        var index = _activeBuilding is null
+            ? 0
+            : _buildingChoices.FindIndex(def => def.Id == _activeBuilding.Id);
+        if (index < 0)
+            index = 0;
+
+        index = ((index + direction) % _buildingChoices.Count + _buildingChoices.Count) % _buildingChoices.Count;
+        _activeBuilding = _buildingChoices[index];
+
+        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
+    }
+
+    /// <summary>Selects a building definition by id.</summary>
+    public bool SetActiveBuilding(string defId)
+    {
+        var def = _buildingChoices.FirstOrDefault(candidate => candidate.Id == defId);
+        if (def is null)
+            return false;
+
+        _activeBuilding = def;
+        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
+        return true;
+    }
+
+    /// <summary>Places the active building on the selected hex via the campaign.</summary>
+    public bool PlaceAt(RegionTile tile, int ordinal, CampaignState campaign, BuildingRegistry registry)
+    {
+        if (_activeBuilding is null || campaign is null)
+        {
+            GD.PushWarning("PlaceAt: no active building or campaign");
+            return false;
+        }
+
+        var result = campaign.TryPlace(_activeBuilding, tile, ordinal);
+        if (!result.Success)
+        {
+            GD.PushWarning($"placement: failed · {result.Error}");
+            return false;
+        }
+
+        _meshDirty = true;
+        QueueRedraw();
+        return true;
+    }
+
+    /// <summary>Removes the building on the selected hex via the campaign.</summary>
+    public bool RemoveAt(RegionTile tile, int ordinal, CampaignState campaign)
+    {
+        if (campaign is null)
+            return false;
+
+        if (!campaign.TryRemove(tile, ordinal, out var building) || building is null)
+        {
+            GD.PushWarning("No building on this hex");
+            return false;
+        }
+
+        _meshDirty = true;
+        QueueRedraw();
+        return true;
+    }
 
     /// <summary>Changes the relief multiplier and refits the diorama.</summary>
     public void SetRelief(float scale)
