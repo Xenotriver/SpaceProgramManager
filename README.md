@@ -7,15 +7,15 @@ place and remove buildings. Campaign state is engine-free and saved as JSON.
 
 ## Status at a glance
 
-Snapshot: **2026-11-15**, commit `b3b09a1` on `main`, **88 tests passing**.
+Snapshot: **2026-11-16**, M2 campaign shell, **103 tests passing**.
 
 | Area | State |
 |---|---|
 | Moon data pipeline | **Done** — 41,162 regions, 14,117,882 fine hexes, biome + crater + elevation |
-| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, campaign, save store |
-| Godot runtime | **Done** — globe, region view, isometric colony view, placement, save/load, CLI automation |
-| Simulation loop | **Not started** — no clock, construction progress, economy, power/life support or tech unlocks |
-| Campaign shell | **Next** — menu, save slots, notifications, region search, visited markers |
+| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, campaign, save store, slot catalogue |
+| Godot runtime | **Done** — main menu, slots, globe, region view, isometric colony view, placement, save/load, CLI automation |
+| Campaign shell | **Done (M2)** — new/continue/load, manual save, toasts, pause scaffold, region search, settings |
+| Simulation loop | **Next (M1)** — no clock, construction progress, economy, power/life support or tech unlocks |
 | Site view (per-hex grid) | **Planned** — see `docs/roadmap.md` |
 | Multi-body | **Planned** — Moon only today |
 
@@ -60,6 +60,21 @@ upward from the executable and honours the `SPM_DATA` environment variable
 
 ### Controls
 
+A launch without arguments opens the main menu. The menu and pause screens use
+`↑` `↓` (or `W` `S`) to select, `Enter` to choose, `Esc` to go back, and the
+mouse for the same actions.
+
+**Menus**
+
+| Input | Action |
+|---|---|
+| Continue | Open the last-played slot |
+| New campaign | Create an auto-named slot and start immediately |
+| Load campaign | Pick a slot; `×` deletes after confirmation |
+| Settings | Save root, keybind reference, open save folder |
+| Pause (`Esc` in game) | Resume, save now (`F5`), load, settings, main menu, quit |
+| `/` on the globe | Search a region or fine-hex H3 index |
+
 **Globe**
 
 | Input | Action |
@@ -68,8 +83,11 @@ upward from the executable and honours the `SPM_DATA` environment variable
 | Wheel | Zoom |
 | Right drag | Pan |
 | Left click | Open the region under the cursor |
+| `/` | Jump to an H3 index |
+| `Home` | Focus the active region |
+| `F5` | Save now |
 | F12 | Screenshot to `user://moon_overview.png` |
-| Esc | Quit |
+| Esc | Pause menu |
 
 **Region view**
 
@@ -123,25 +141,33 @@ godot --path Game -- --region=589971619905011711 --view=management \
 | `--route=<from>,<to>` | Plan a rover route between two hex ordinals |
 | `--speed=<km/h>` | Rover base speed (default `10`) |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera |
-| `--save=<dir>` | Save slot directory (default `user://saves/slot1`) |
-| `--fresh` | Clear the slot's region shards and start a new campaign |
+| `--slot=<id>` | Open a slot under the save root directly |
+| `--continue` | Open the last-played slot directly |
+| `--menu` | Force the main menu (pair with `--shot` to capture it) |
+| `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
+| `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |
 | `--shot=<png>` | Render a few frames, save a screenshot, quit |
 | `--fps` / `--redraw` / `--spin` | Print FPS + draw timings / force redraws / spin the globe |
 
+Any user argument except `--menu` skips the menu and starts the selected slot, so
+pre-M2 automation is unchanged.
+
 ## Saving
 
-Campaigns live in a slot directory:
+Campaigns live under `user://saves/<slotId>/`:
 
 ```
 <slot>/
 ├─ campaign.json              # clock, treasury, stockpile, visited/active regions, bake fingerprint
+├─ slot.json                  # derived list summary + last view (safe to delete)
 └─ regions/
    └─ <h3-index>.json         # buildings for one region
 ```
 
 Writes are atomic and keep a `.bak`; unreadable shards are quarantined as
-`.corrupt` instead of being overwritten. See [`docs/save-format.md`](docs/save-format.md).
+`.corrupt` instead of being overwritten. Saving happens on every placement or
+removal, on `F5`, and on exit. See [`docs/save-format.md`](docs/save-format.md).
 
 ## Data pipeline
 

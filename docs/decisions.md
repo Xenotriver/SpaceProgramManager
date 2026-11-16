@@ -249,8 +249,49 @@ preview tool (`preview_moon.py`) stays in the repo as the cheap check.
 
 ---
 
+## D15 — Slot summary is a sibling `slot.json`, never schema
+
+**Commit:** M2, 2026-11-16 · **Status:** active
+
+**Decision.** Each slot keeps a `slot.json` next to `campaign.json`. It holds the
+display name, timestamps, cached counts and the last view snapshot. It is a
+rebuildable cache plus UI state; `campaign.json` and the region shards stay the
+only authoritative data. The summary is trusted only while its `updatedUtc`
+matches the campaign's.
+
+**Why.** The slot list needs names, counts and a camera snapshot without parsing
+every shard. Putting that in `campaign.json` would change the v1 schema for
+non-game data. A sibling file can be deleted, ignored by older builds, and rebuilt
+by scanning `regions/*.json`.
+
+**Cost.** Two files can briefly disagree; the timestamp rule resolves that by
+rebuilding. A slot with a corrupt `campaign.json` cannot be repaired from its
+summary, by design.
+
+---
+
+## D16 — Slot switching reloads the scene
+
+**Commit:** M2, 2026-11-16 · **Status:** active
+
+**Decision.** Continue, Play slot, New campaign and Main menu set a static pending
+slot (or menu flag) and call `SceneTree.ReloadCurrentScene()`. The outgoing scene
+flushes its campaign and view snapshot in `_ExitTree`; the new scene reads the
+pending state.
+
+**Why.** Views cache per-region geometry, the campaign is installed per region,
+and `CampaignService` owns one slot. Rebuilding all of that in place invites
+half-swapped state. A scene reload is the engine's normal, cheap way to guarantee
+a clean slate for a 41k-region globe and one open tile.
+
+**Cost.** A visible reload (one frame) when switching slots, and static flags are
+needed to carry the target across the reload. This is acceptable while the world
+load is already part of startup.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
-multi-installation hexes, tech/cost enforcement, slot metadata layout, time scale,
-and bake-change save migration.
+multi-installation hexes, tech/cost enforcement, time scale, and bake-change save
+migration. The slot metadata layout is settled by D15.

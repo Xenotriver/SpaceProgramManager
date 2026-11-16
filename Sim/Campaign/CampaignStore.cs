@@ -24,6 +24,12 @@ public sealed class CampaignStore
     /// <summary>Current save schema version.</summary>
     public const int Version = 1;
 
+    /// <summary>Format id written into <c>slot.json</c>.</summary>
+    public const string SlotFormatId = "spm-slot";
+
+    /// <summary>Current <c>slot.json</c> schema version.</summary>
+    public const int SlotVersion = 1;
+
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -46,6 +52,12 @@ public sealed class CampaignStore
 
     /// <summary>Path of the campaign metadata file.</summary>
     public string MetaPath => Path.Combine(RootDirectory, "campaign.json");
+
+    /// <summary>
+    /// Path of the derived slot summary. Safe to delete; it is rebuilt from the
+    /// campaign and its region shards.
+    /// </summary>
+    public string SummaryPath => Path.Combine(RootDirectory, "slot.json");
 
     /// <summary>True when a campaign already exists at this location.</summary>
     public bool Exists => File.Exists(MetaPath);
@@ -139,6 +151,185 @@ public sealed class CampaignStore
         }
 
         return meta;
+    }
+
+    /// <summary>
+    /// Reads the campaign header without applying the save. Lets the slot list
+    /// show an incompatible or unreadable slot without ever opening it.
+    /// </summary>
+    public bool TryReadHeader(out CampaignHeader? header, out string? problem)
+    {
+        header = null;
+        problem = null;
+
+        if (!File.Exists(MetaPath))
+        {
+            problem = "campaign.json is missing";
+            return false;
+        }
+
+        CampaignDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<CampaignDto>(
+                File.ReadAllText(MetaPath, Encoding.UTF8), JsonOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            problem = ex.Message;
+            return false;
+        }
+
+        if (dto is null)
+        {
+            problem = "campaign.json is empty";
+            return false;
+        }
+
+        try
+        {
+            EnsureSupported(dto.Format, dto.Version, MetaPath);
+        }
+        catch (InvalidDataException ex)
+        {
+            problem = ex.Message;
+            return false;
+        }
+
+        header = new CampaignHeader(
+            new BakeFingerprint(
+                dto.BodyKey,
+                dto.FineResolution,
+                dto.RegionResolution,
+                dto.RegionCount,
+                dto.GeneratedUtc),
+            dto.CreatedUtc,
+            dto.UpdatedUtc,
+            dto.Credits,
+            dto.VisitedRegions.Count,
+            TryParseHex(dto.ActiveRegion, out var active) ? (ulong)active : null);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Writes the derived slot summary. This file is a cache plus UI state; the
+    /// campaign and its shards remain the source of truth.
+    /// </summary>
+    public void SaveSummary(SlotSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+
+        var dto = new SlotDto
+        {
+            Name = summary.Name,
+            CreatedUtc = summary.CreatedUtc,
+            UpdatedUtc = summary.UpdatedUtc,
+            LastPlayedUtc = summary.LastPlayedUtc,
+            BuildingCount = summary.BuildingCount,
+            VisitedRegionCount = summary.VisitedRegionCount,
+            BodyKey = summary.BodyKey,
+            Credits = summary.Credits,
+            View = new SlotViewDto
+            {
+                Mode = summary.View.Mode,
+                GlobeYawDegrees = summary.View.GlobeYawDegrees,
+                GlobePitchDegrees = summary.View.GlobePitchDegrees,
+                GlobeZoom = summary.View.GlobeZoom,
+                ColonyRotationSteps = summary.View.ColonyRotationSteps,
+                Overlay = summary.View.Overlay,
+            },
+        };
+
+        WriteAtomic(SummaryPath, JsonSerializer.Serialize(dto, JsonOptions));
+    }
+
+    /// <summary>Reads <c>slot.json</c>, returning false when it is missing or invalid.</summary>
+    public bool TryReadSummary(out SlotSummary? summary)
+    {
+        summary = null;
+
+        if (!File.Exists(SummaryPath))
+            return false;
+
+        SlotDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<SlotDto>(
+                File.ReadAllText(SummaryPath, Encoding.UTF8), JsonOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        if (dto is null
+            || !string.Equals(dto.Format, SlotFormatId, StringComparison.Ordinal)
+            || dto.Version != SlotVersion)
+            return false;
+
+        var id = Path.GetFileName(RootDirectory);
+        summary = new SlotSummary
+        {
+            Id = id,
+            Name = string.IsNullOrWhiteSpace(dto.Name) ? id : dto.Name,
+            Path = RootDirectory,
+            CreatedUtc = dto.CreatedUtc,
+            UpdatedUtc = dto.UpdatedUtc,
+            LastPlayedUtc = dto.LastPlayedUtc,
+            BuildingCount = dto.BuildingCount,
+            VisitedRegionCount = dto.VisitedRegionCount,
+            BodyKey = dto.BodyKey,
+            Credits = dto.Credits,
+            View = dto.View is null ? new SlotViewState() : new SlotViewState
+            {
+                Mode = dto.View.Mode,
+                GlobeYawDegrees = dto.View.GlobeYawDegrees,
+                GlobePitchDegrees = dto.View.GlobePitchDegrees,
+                GlobeZoom = dto.View.GlobeZoom,
+                ColonyRotationSteps = dto.View.ColonyRotationSteps,
+                Overlay = dto.View.Overlay,
+            },
+        };
+
+        return true;
+    }
+
+    /// <summary>
+    /// Counts region shards and stored buildings. Corrupt shards are counted but
+    /// do not throw; the caller reports them.
+    /// </summary>
+    public StoredCounts CountStoredBuildings()
+    {
+        var directory = Path.Combine(RootDirectory, "regions");
+        if (!Directory.Exists(directory))
+            return new StoredCounts(0, 0, 0);
+
+        var regions = 0;
+        var buildings = 0;
+        var unreadable = 0;
+
+        foreach (var path in Directory.EnumerateFiles(directory))
+        {
+            if (!path.EndsWith(".json", StringComparison.Ordinal))
+                continue;
+
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+                regions++;
+
+                if (document.RootElement.TryGetProperty("buildings", out var list)
+                    && list.ValueKind == JsonValueKind.Array)
+                    buildings += list.GetArrayLength();
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+                unreadable++;
+            }
+        }
+
+        return new StoredCounts(regions, buildings, unreadable);
     }
 
     /// <summary>
@@ -354,6 +545,31 @@ public sealed class CampaignStore
         return false;
     }
 
+    private sealed class SlotDto
+    {
+        public string Format { get; set; } = SlotFormatId;
+        public int Version { get; set; } = SlotVersion;
+        public string Name { get; set; } = string.Empty;
+        public DateTimeOffset CreatedUtc { get; set; }
+        public DateTimeOffset UpdatedUtc { get; set; }
+        public DateTimeOffset LastPlayedUtc { get; set; }
+        public int BuildingCount { get; set; }
+        public int VisitedRegionCount { get; set; }
+        public string BodyKey { get; set; } = string.Empty;
+        public double Credits { get; set; }
+        public SlotViewDto? View { get; set; }
+    }
+
+    private sealed class SlotViewDto
+    {
+        public string Mode { get; set; } = "globe";
+        public float GlobeYawDegrees { get; set; } = -90f;
+        public float GlobePitchDegrees { get; set; } = -14.3f;
+        public float GlobeZoom { get; set; } = 1f;
+        public int ColonyRotationSteps { get; set; }
+        public string Overlay { get; set; } = "terrain";
+    }
+
     private sealed class CampaignDto
     {
         public string Format { get; set; } = FormatId;
@@ -394,3 +610,15 @@ public sealed class CampaignStore
         public Dictionary<string, object>? State { get; set; }
     }
 }
+
+/// <summary>Header of <c>campaign.json</c>, read without applying the save.</summary>
+public sealed record CampaignHeader(
+    BakeFingerprint Fingerprint,
+    DateTimeOffset CreatedUtc,
+    DateTimeOffset UpdatedUtc,
+    double Credits,
+    int VisitedRegionCount,
+    ulong? ActiveRegionIndex);
+
+/// <summary>Region and building totals derived from a slot's shards.</summary>
+public readonly record struct StoredCounts(int Regions, int Buildings, int Unreadable);

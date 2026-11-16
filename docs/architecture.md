@@ -21,7 +21,8 @@ save contract, see [`save-format.md`](save-format.md).
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Game (Godot 4.7.2, net8.0)                                   │
-│  Main · MoonGlobe · RegionView · ManagementView · CampaignService │
+│  Main · MoonGlobe · RegionView · ManagementView · ShellOverlay │
+│  CampaignService · GameSettings                              │
 └───────────────────────────────┬──────────────────────────────┘
                                 │ ProjectReference
 ┌───────────────────────────────▼──────────────────────────────┐
@@ -50,7 +51,7 @@ Projects: `SpaceProgramManager.slnx` → `Sim`, `Sim.Tests`, `Game`.
 | `Sim/World` | `BodyManifest`, `BodyWorld`, `RegionTile`, `HexRecord`, `TileFormat`, `BiomeRegistry` |
 | `Sim/Site` | `SiteScore`, `SiteFactors`, `SiteScorerConfig`, `RegionTileScoring` (sunlight, comms, terrain, resources, crater clearance) |
 | `Sim/Buildings` | `BuildingDef` (17 definitions in `MoonBuildings`), `BuildingRegistry`, `BuildingInstance`, `BuildingStatus`, placement validation |
-| `Sim/Campaign` | `CampaignState`, `RegionState`, `CampaignMeta`, `CampaignStore`, `BakeFingerprint` |
+| `Sim/Campaign` | `CampaignState`, `RegionState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint` |
 
 ### World loading
 
@@ -75,8 +76,30 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 | `MoonGlobe` | Renders all 41,162 region polygons as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; four overlays, hover/select, rover route, building ghost/placement/removal |
 | `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief, overlays, pan/zoom/pick, 60° orbit, placement/removal |
-| `CampaignService` | Resolves the save slot, gates on the bake fingerprint, loads shards before a view, saves immediately on change, quarantines corrupt shards, reports status |
+| `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
+| `GameSettings` | `user://settings.json`: save root, last slot, relief default, FPS flag. Never inside a slot |
+| `ShellOverlay` | Immediate-mode front end: main menu, slot list, pause, settings, search and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
 | `IsoProjection` | Pure helpers for the isometric projection, inverse projection, painter depth and plane rotation |
+
+### Startup and slot flow
+
+```
+launch
+  → GameSettings.Load()                 # user://settings.json
+  → BodyWorld.Open("moon")
+  → no user args (or --menu)  → ShellOverlay main menu
+      Continue / Play slot    → store pending slot, ReloadCurrentScene
+  → any other user arg        → StartCampaign(slot) directly (automation)
+StartCampaign(slotId)
+  → CampaignService.Load()              # campaign.json through the fingerprint gate
+  → slot.json view snapshot            # restore mode, region, camera
+  → RegionView / ManagementView load the region on demand
+```
+
+Slot switching, returning to the main menu and starting a new campaign all use
+`SceneTree.ReloadCurrentScene()`. `_ExitTree` flushes the current slot and writes
+its view snapshot; static pending-slot flags are read by the new scene. One
+campaign service therefore lives per scene, and no half-swapped state exists.
 
 ## 5. Data flow
 
@@ -88,8 +111,8 @@ mouse/keyboard
    → RegionView / ManagementView hit-testing
    → CampaignState.Preview / TryPlace / TryRemove / Clear
    → CampaignState.RegionChanged
-   → CampaignService: CampaignStore.SaveRegion + SaveMeta
-   → <slot>/regions/<h3>.json + <slot>/campaign.json
+   → CampaignService: CampaignStore.SaveRegion + SaveMeta + SaveSummary
+   → <slot>/regions/<h3>.json + <slot>/campaign.json + <slot>/slot.json
 ```
 
 The views never mutate `RegionState` directly; they call campaign methods and then
@@ -98,6 +121,9 @@ rebuild their cached geometry.
 ### Disk → state → view
 
 ```
+CampaignSlotStore.List()
+   → CampaignStore.TryReadHeader()        # metadata only, never opens a slot
+   → CampaignStore.TryReadSummary()       # slot.json cache, rebuilt when stale
 CampaignService.Load()
    → CampaignStore.LoadMeta(fingerprint)
    → CampaignState.RestoreMeta(meta)
@@ -172,6 +198,7 @@ polygon containment.
   installations per hex (plan §2.5). The per-hex site view is where that is meant
   to be resolved.
 - `RequiredTech` is displayed but not enforced at placement; `Cost` is data only.
-- `Main.cs` (~1,050 lines) owns most UI and input; a shell/menu split is planned
-  in M2.
+- `Main.cs` (~1,150 lines) owns world HUD/input and startup; `ShellOverlay`
+  (~680 lines) owns the menu/pause/settings screens since M2. Further screen
+  splitting is deferred until the clock UI lands.
 - No CI, analyzers, or automated screenshot regression yet.

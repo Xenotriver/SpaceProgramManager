@@ -7,28 +7,29 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-15**, commit `b3b09a1`, `main` = `origin/main`, **88 tests passing**.
+Anchor: **2026-11-16**, M2 campaign shell, **103 tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
 | Moon data pipeline | **Done** | `data/moon`: 41,162 regions, 14,117,882 fine hexes, 343 hexes/region, 10 biomes, `fine.bin` 54.6 MB |
-| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, campaign, save store |
+| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, campaign, save store, slot catalogue |
 | Godot runtime | **Done** | Globe, region view, isometric colony view, placement/removal, save/load, CLI automation |
-| Simulation loop | **Not started** | No `Sim/Time`; `GameTimeHours` never advances; buildings stay `Planned` |
-| Campaign shell | **Next (M2)** | No menu, slots, notifications, search, settings |
+| Campaign shell | **Done (M2)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause scaffold, search, settings |
+| Simulation loop | **Next (M1)** | No `Sim/Time`; `GameTimeHours` never advances; buildings stay `Planned` |
 | Site view (per-hex grid) | **Planned (M3)** | Only the region-scale colony view exists |
 | Multi-body | **Planned (M4)** | `Main.OpenMoon()` is hardcoded |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
 
-The player can: rotate the Moon globe, open a region, inspect hexes across four
-overlays, plan a rover route, place/remove buildings from either the 2D region
-view or the isometric colony view, and have all of it persist across launches
-against a fingerprinted bake.
+The player can: start or continue a named campaign from the main menu, keep
+several isolated save slots, save manually, rotate the Moon globe, search an H3
+index, open a region, inspect hexes across four overlays, plan a rover route,
+place/remove buildings from either the 2D region view or the isometric colony
+view, and have all of it persist across launches against a fingerprinted bake.
 
 The player cannot: pass time, finish construction, spend credits, research
-anything, or start/load a named campaign from a menu.
+anything, rename a campaign, or play a second body yet.
 
 ### Naming (locked)
 
@@ -44,12 +45,29 @@ Order: **M2 → M1 → M3 → M4 → M5 → M6**. M2 was chosen ahead of M1 deli
 the shell is cheap and makes every later demo presentable, while the clock is the
 expensive part and needs the design attention M1 deserves.
 
-### M2 — Campaign shell (next)
+### M2 — Campaign shell (done)
 
 **Outcome:** the game has a front end and a save-slot model instead of booting
 straight into the last region.
 
-Scope:
+**Status:** shipped 2026-11-16 · **103 tests passing** · decisions D15–D16.
+
+Implemented:
+
+- `ShellOverlay` draws the main menu, slot list, settings, pause, delete
+  confirmation, region search and toast log with the existing immediate-mode HUD.
+- `CampaignSlotStore` (Sim) lists slots, heals `slot.json`, creates/deletes slot
+  directories and orders by last played. `CampaignStore` reads headers and
+  summaries without opening a campaign.
+- `GameSettings` (`user://settings.json`) stores the save root, last slot, relief
+  default and FPS flag outside any campaign.
+- `CampaignService` is slot-aware, saves with `F5`, reports failures as toasts and
+  tracks the building total in O(1).
+- `MoonGlobe` draws visited/active markers; `/` opens H3 search and `Home` focuses
+  the active region.
+- Continue restores mode, region, globe/colony camera and overlay.
+
+Scope (as planned):
 
 1. **Main menu overlay** — New campaign · Continue · Load slot · Settings · Quit.
    Drawn with the existing immediate-mode HUD style; no scene restructure required.
@@ -66,15 +84,16 @@ Scope:
 7. **Pause overlay + time controls, scaffolded** — visible but disabled with
    `time system: M1`. There is no clock to pause yet; M1 fills these in.
 
-**Acceptance criteria**
+**Acceptance criteria** — all verified on 2026-11-16:
 
-- New campaign → place a building → quit → **Continue** restores mode, region,
+- [x] New campaign → place a building → quit → **Continue** restores mode, region,
   camera and buildings.
-- Two slots stay fully isolated; deleting a slot removes its directory and is
+- [x] Two slots stay fully isolated; deleting a slot removes its directory and is
   reflected in the list.
-- A corrupt/incompatible slot is shown as such and is never overwritten.
-- `--save`, `--fresh`, `--nosave`, `--shot` automation still behave exactly as today.
-- No change to the v1 save schema that breaks an existing `campaign.json`.
+- [x] A corrupt/incompatible slot is shown as such and is never overwritten.
+- [x] `--save`, `--fresh`, `--nosave`, `--shot` automation still behave exactly as today.
+- [x] No change to the v1 save schema that breaks an existing `campaign.json`
+  (legacy `slot1` with 17 buildings loads and gains a `slot.json`).
 
 ### M1 — Simulation loop
 
@@ -117,6 +136,12 @@ Scope: per-hex grid; isometric presentation reusing `IsoProjection` and the colo
 renderer; entry/exit from the region view; multiple installations per hex; local
 placement rules; persistence in the region shard.
 
+> **Art direction (noted 2026-11-16, not locked).** Buildings are **3D models**
+> in a **fixed 2.5D isometric view**; the camera does not freely orbit. This does
+> not reopen "no free-camera 3D" (plan §2.6). It is a separate decision from the
+> site view and is tracked as open questions 11–12; procedural prisms remain the
+> placeholder until an engine 3D layer exists.
+
 **Acceptance criteria:** two installations on one hex's grid, saved and restored;
 the colony view still shows per-hex occupancy summaries.
 
@@ -152,7 +177,7 @@ Not tied to a milestone; pull in when they start hurting.
 
 | Item | Why |
 |---|---|
-| CI (build + tests + headless smoke shot) | 88 tests only run when someone remembers |
+| CI (build + tests + headless smoke shot) | 103 tests only run when someone remembers |
 | Screenshot regression harness | `--shot` already works; wire it to reference images |
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
 | Globe performance budget | 41,162 instances today; add a frame-time gate before Earth |
@@ -168,9 +193,11 @@ Not tied to a milestone; pull in when they start hurting.
 | 2 | Fine hexes per region: plan says ~2,400 (res 7), the bake uses **343** (res 6) | **Drift — plan text is stale; res 6 is the real choice** |
 | 3 | Multiple installations per hex (plan §2.5) vs no-overlap footprints (today) | Resolve in **M3** |
 | 4 | Are `RequiredTech` and `Cost` authoritative or advisory? | Resolve in **M1** (enforce both) |
-| 5 | Slot metadata file vs additive fields in `campaign.json` | Decide in **M2**; v1 must keep loading |
+| 5 | Slot metadata file vs additive fields in `campaign.json` | **Decided in M2:** sibling `slot.json` cache (D15); v1 stays unchanged |
 | 6 | Does the site view replace or complement the colony view? | Decide in **M3** |
 | 7 | Time scale: real hours vs accelerated game hours | Decide in **M1** |
 | 8 | Save migration strategy when the bake fingerprint changes | Open; likely remap by H3 index |
 | 9 | Landmark crater special cases (plan §2.3) | Deferred |
 | 10 | Site-view build-grid dimensions | Deferred to M3 |
+| 11 | 3D building layer: migrate the colony view to 3D vs. hybrid 2D terrain + 3D buildings (plan §2.7) | Decide in **M3**, before asset integration |
+| 12 | Art source/licence policy for committed models (plan §2.7) | CC0 preferred; decide before the first asset |

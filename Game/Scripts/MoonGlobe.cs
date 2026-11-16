@@ -55,8 +55,13 @@ public partial class MoonGlobe : Node2D
     private float _pitch = -0.25f;
     private float _zoom = 1f;
 
+    private readonly Dictionary<ulong, int> _indexLookup = new();
+
     private int _hovered = -1;
     private int _selected = -1;
+
+    private HashSet<ulong> _visitedMarkers = new();
+    private ulong? _activeMarker;
 
     private bool _dragging;
     private bool _panning;
@@ -65,6 +70,40 @@ public partial class MoonGlobe : Node2D
 
     /// <summary>Dev/demo: rotate the globe automatically (used by <c>--spin</c>).</summary>
     public bool Spin { get; set; }
+
+    /// <summary>Current yaw in degrees.</summary>
+    public float YawDegrees => Mathf.RadToDeg(_yaw);
+
+    /// <summary>Current pitch in degrees.</summary>
+    public float PitchDegrees => Mathf.RadToDeg(_pitch);
+
+    /// <summary>Current zoom factor.</summary>
+    public float Zoom => _zoom;
+
+    /// <summary>Draws visited and active markers on the globe.</summary>
+    public void SetMarkers(IReadOnlyCollection<ulong> visited, ulong? active)
+    {
+        _visitedMarkers = new HashSet<ulong>(visited);
+        _activeMarker = active;
+        QueueRedraw();
+    }
+
+    /// <summary>Centres the camera on a region and selects it.</summary>
+    public void FocusRegion(ulong regionIndex)
+    {
+        if (!_indexLookup.TryGetValue(regionIndex, out var index))
+            return;
+
+        var centroid = _regions[index].Centroid;
+        _yaw = Mathf.Atan2(-centroid.X, centroid.Z);
+        _pitch = Mathf.Clamp(
+            Mathf.Asin(Mathf.Clamp(centroid.Y, -1f, 1f)), -MaxPitch, MaxPitch);
+        _selected = index;
+        _hovered = -1;
+
+        UpdateInstances();
+        QueueRedraw();
+    }
 
     /// <summary>Dev/demo camera: set the view for repeatable screenshots.</summary>
     public void SetView(float yawDegrees, float pitchDegrees, float zoom)
@@ -119,6 +158,8 @@ public partial class MoonGlobe : Node2D
 
         if (_hovered >= 0 && _hovered != _selected && _hovered < _regions.Length)
             DrawOutline(_hovered, new Color(1f, 1f, 1f, 0.75f), 1.5f, scale, origin, cosYaw, sinYaw, cosPitch, sinPitch);
+
+        DrawMarkers(scale, origin, cosYaw, sinYaw, cosPitch, sinPitch);
 
         // Limb: a soft edge so the globe reads as a sphere.
         DrawArc(origin, scale, 0f, Mathf.Tau, 128, new Color(1f, 1f, 1f, 0.12f), 1.5f, true);
@@ -324,6 +365,59 @@ public partial class MoonGlobe : Node2D
         }
     }
 
+    private void DrawMarkers(
+        float scale,
+        Vector2 origin,
+        float cosYaw,
+        float sinYaw,
+        float cosPitch,
+        float sinPitch)
+    {
+        if (_visitedMarkers.Count == 0 && _activeMarker is null)
+            return;
+
+        foreach (var regionIndex in _visitedMarkers)
+        {
+            if (!_indexLookup.TryGetValue(regionIndex, out var index))
+                continue;
+
+            if (!TryProjectCentroid(index, scale, origin, cosYaw, sinYaw, cosPitch, sinPitch, out var point))
+                continue;
+
+            DrawCircle(point, 2.2f, new Color(0.55f, 0.85f, 1f, 0.9f));
+        }
+
+        if (_activeMarker is { } active
+            && _indexLookup.TryGetValue(active, out var activeIndex)
+            && TryProjectCentroid(activeIndex, scale, origin, cosYaw, sinYaw, cosPitch, sinPitch, out var activePoint))
+        {
+            DrawCircle(activePoint, 3.2f, new Color(1f, 0.86f, 0.35f, 1f));
+            DrawArc(activePoint, 7f, 0f, Mathf.Tau, 20, new Color(1f, 0.86f, 0.35f, 0.9f), 1.5f, true);
+        }
+    }
+
+    private bool TryProjectCentroid(
+        int index,
+        float scale,
+        Vector2 origin,
+        float cosYaw,
+        float sinYaw,
+        float cosPitch,
+        float sinPitch,
+        out Vector2 point)
+    {
+        Rotate(_regions[index].Centroid, cosYaw, sinYaw, cosPitch, sinPitch, out var x, out var y, out var z);
+
+        if (z <= 0.02f)
+        {
+            point = default;
+            return false;
+        }
+
+        point = new Vector2(origin.X + x * scale, origin.Y - y * scale);
+        return true;
+    }
+
     private void DrawOutline(
         int index,
         Color color,
@@ -380,6 +474,10 @@ public partial class MoonGlobe : Node2D
         }
 
         _regions = shapes;
+
+        _indexLookup.Clear();
+        for (var i = 0; i < shapes.Length; i++)
+            _indexLookup[shapes[i].Index] = i;
 
         // Res-3 cells are near-equal-area, so one hex size fits all: derive the
         // angular circumradius from the number of cells on the sphere.

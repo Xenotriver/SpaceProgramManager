@@ -5,6 +5,7 @@ using H3;
 using Sim.Biomes;
 using Sim.Buildings;
 using Sim.Campaign;
+using Sim.Hex;
 using Sim.Movement;
 using Sim.World;
 
@@ -20,7 +21,7 @@ public partial class Main : Node2D
     private const float PanelTop = 18f;
     private const float PanelWidth = 300f;
 
-    private const string GlobeStatus = "Drag to rotate · wheel to zoom · right-drag to pan · click a region";
+    private const string GlobeStatus = "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · Esc pause";
     private const string RegionStatus =
         "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · M colony · Esc back";
     private const string ManagementStatus =
@@ -44,7 +45,17 @@ public partial class Main : Node2D
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
     private ManagementView _managementView = null!;
+    private ShellOverlay _shell = null!;
+    private CanvasLayer _worldLayer = null!;
+    private GameSettings _settings = null!;
+    private CampaignSlotStore _catalogue = null!;
     private Font _font = null!;
+
+    private static string? _pendingSlot;
+    private static bool _forceMenu;
+    private static bool _skipCliView;
+
+    private bool _started;
 
     private Mode _mode = Mode.Globe;
     private string _status = GlobeStatus;
@@ -70,20 +81,22 @@ public partial class Main : Node2D
     public override void _Ready()
     {
         _font = ThemeDB.FallbackFont;
+        _settings = GameSettings.Load();
+        _catalogue = new CampaignSlotStore(_settings.SaveRoot);
         _world = OpenMoon();
 
         // World view sits below the HUD so the panel is never covered.
-        var worldLayer = new CanvasLayer { Layer = -1 };
-        AddChild(worldLayer);
+        _worldLayer = new CanvasLayer { Layer = -1 };
+        AddChild(_worldLayer);
 
         _globe = new MoonGlobe();
-        worldLayer.AddChild(_globe);
+        _worldLayer.AddChild(_globe);
         _globe.Initialize(_world);
         _globe.RegionHovered += OnRegionHovered;
         _globe.RegionSelected += OnRegionSelected;
 
         _regionView = new RegionView { Visible = false };
-        worldLayer.AddChild(_regionView);
+        _worldLayer.AddChild(_regionView);
         _regionView.HexHovered += OnHexHovered;
         _regionView.HexSelected += OnHexSelected;
         _regionView.RouteComputed += OnRouteComputed;
@@ -95,39 +108,121 @@ public partial class Main : Node2D
         _regionView.BaseSpeedKmh = FloatArgument("--speed", 10f);
 
         _registry = new BuildingRegistry(MoonBuildings.All);
-        _campaign = new CampaignState(_world, _registry);
-        _campaignService = new CampaignService(
-            _world,
-            _campaign,
-            ResolveSaveRoot(),
-            enabled: !HasArgument("--nosave"),
-            fresh: HasArgument("--fresh"));
-        _regionView.SetCampaign(_campaign);
-        _regionView.SetBuildingRegistry(_registry);
 
         _managementView = new ManagementView { Visible = false };
-        worldLayer.AddChild(_managementView);
+        _worldLayer.AddChild(_managementView);
         _managementView.HexHovered += OnHexHovered;
         _managementView.HexSelected += OnHexSelected;
         _managementView.ViewModeChanged += OnViewModeChanged;
         _managementView.ActiveBuildingChanged += OnActiveBuildingChanged;
-        _managementView.SetCampaign(_campaign);
-        _managementView.SetBuildingRegistry(_registry);
-        _managementView.ReliefScale = FloatArgument("--relief", 1f);
+        _managementView.ReliefScale = FloatArgument("--relief", _settings.ReliefScale);
+
+        _shell = new ShellOverlay { SaveRootLabel = _settings.SaveRoot };
+        AddChild(_shell);
+        _shell.Command += OnShellCommand;
 
         GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
-        _campaignService.Load();
-        _campaignService.StatusChanged += QueueRedraw;
-
         _globe.Spin = HasArgument("--spin");
-        _reportFps = HasArgument("--fps");
+        _reportFps = HasArgument("--fps") || _settings.ShowFps;
         _benchRedraw = HasArgument("--redraw");
 
-        var yaw = FloatArgument("--yaw", -90f);
-        var pitch = FloatArgument("--pitch", -14.3f);
-        var zoom = FloatArgument("--zoom", 1f);
-        _globe.SetView(yaw, pitch, zoom);
+        var reloadSlot = _pendingSlot;
+        var forceMenu = _forceMenu;
+        var skipCli = _skipCliView;
+        _pendingSlot = null;
+        _forceMenu = false;
+        _skipCliView = false;
+
+        var autoStart = !forceMenu
+                        && (reloadSlot is not null
+                            || HasArgument("--continue")
+                            || OS.GetCmdlineUserArgs().Length > 0)
+                        && !HasArgument("--menu");
+
+        if (!autoStart)
+        {
+            ShowMainMenu();
+
+            var menuShot = FindShotPath();
+            if (menuShot is not null)
+                CaptureAndQuit(menuShot);
+
+            return;
+        }
+
+        StartCampaign(
+            reloadSlot ?? ResolveStartupSlot(),
+            fresh: HasArgument("--fresh"));
+
+        if (!skipCli)
+            ApplyCommandLine();
+
+        var shotPath = FindShotPath();
+        if (shotPath is not null)
+            CaptureAndQuit(shotPath);
+    }
+
+    private string ResolveStartupSlot()
+    {
+        var explicitSlot = ArgumentValue("--slot");
+        if (!string.IsNullOrWhiteSpace(explicitSlot))
+            return explicitSlot;
+
+        return _settings.LastSlotId ?? CampaignSlotStore.DefaultSlotId;
+    }
+
+    private void StartCampaign(string slotId, bool fresh)
+    {
+        var fingerprint = BakeFingerprint.From(_world.Manifest);
+        string slotDirectory;
+        string slotName;
+
+        var saveOverride = ArgumentValue("--save");
+        if (!string.IsNullOrWhiteSpace(saveOverride))
+        {
+            slotDirectory = Path.GetFullPath(saveOverride);
+            slotId = new DirectoryInfo(slotDirectory).Name;
+            slotName = _catalogue.TryGet(slotId, fingerprint)?.Name
+                       ?? CampaignSlotStore.DefaultName(slotId);
+        }
+        else
+        {
+            slotDirectory = Path.Combine(_settings.SaveRoot, slotId);
+            slotName = _catalogue.TryGet(slotId, fingerprint)?.Name
+                       ?? CampaignSlotStore.DefaultName(slotId);
+        }
+
+        _campaign = new CampaignState(_world, _registry);
+        _campaignService = new CampaignService(
+            _world,
+            _campaign,
+            slotDirectory,
+            slotId,
+            slotName,
+            enabled: !HasArgument("--nosave"),
+            fresh: fresh);
+        _campaignService.Notified += (message, error) => _shell.PushToast(message, error);
+        _campaignService.StatusChanged += QueueRedraw;
+
+        _regionView.SetCampaign(_campaign);
+        _regionView.SetBuildingRegistry(_registry);
+        _managementView.SetCampaign(_campaign);
+        _managementView.SetBuildingRegistry(_registry);
+
+        _campaignService.Load();
+        _started = true;
+        _worldLayer.Visible = true;
+        _shell.Close();
+
+        if (string.IsNullOrWhiteSpace(saveOverride))
+        {
+            _settings.LastSlotId = _campaignService.SlotId;
+            _settings.Save();
+        }
+
+        var view = _campaignService.ViewState;
+        _globe.SetView(view.GlobeYawDegrees, view.GlobePitchDegrees, view.GlobeZoom);
 
         var region = UlongArgument("--region");
         if (region == 0 && _campaign.Meta.ActiveRegionIndex is { } restored)
@@ -135,6 +230,137 @@ public partial class Main : Node2D
 
         if (region != 0)
             ShowRegion(region);
+        else
+            ShowGlobe();
+
+        if (string.Equals(view.Mode, "management", StringComparison.OrdinalIgnoreCase)
+            && _mode == Mode.Region)
+        {
+            ShowManagement();
+        }
+        else if (string.Equals(view.Mode, "region", StringComparison.OrdinalIgnoreCase)
+                 && _mode == Mode.Globe
+                 && _campaign.Meta.ActiveRegionIndex is { } activeRegion)
+        {
+            ShowRegion(activeRegion);
+        }
+
+        _managementView.SetRotation(view.ColonyRotationSteps);
+        SetOverlay(ParseOverlay(view.Overlay));
+        RefreshMarkers();
+        QueueRedraw();
+    }
+
+    private void ShowMainMenu()
+    {
+        _started = false;
+        _mode = Mode.Globe;
+        _status = GlobeStatus;
+        _worldLayer.Visible = false;
+        _globe.Visible = true;
+        _regionView.Visible = false;
+        _managementView.Visible = false;
+
+        var fingerprint = BakeFingerprint.From(_world.Manifest);
+        _shell.OpenMenu(_catalogue.List(fingerprint), _settings.LastSlotId);
+        QueueRedraw();
+    }
+
+    private void OnShellCommand(ShellCommand command, string? payload)
+    {
+        switch (command)
+        {
+            case ShellCommand.Continue:
+            case ShellCommand.PlaySlot:
+                if (string.IsNullOrWhiteSpace(payload))
+                {
+                    _shell.PushToast("no campaign to open");
+                    return;
+                }
+
+                _settings.LastSlotId = payload;
+                _settings.Save();
+                ReloadInto(payload);
+                return;
+
+            case ShellCommand.NewCampaign:
+                var fingerprint = BakeFingerprint.From(_world.Manifest);
+                var id = _catalogue.Create(NextCampaignName(), new CampaignMeta(), fingerprint);
+                _settings.LastSlotId = id;
+                _settings.Save();
+                ReloadInto(id);
+                return;
+
+            case ShellCommand.DeleteSlot:
+                if (string.IsNullOrWhiteSpace(payload))
+                    return;
+
+                try
+                {
+                    _catalogue.Delete(payload);
+                    _shell.PushToast("campaign deleted");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    _shell.PushToast($"delete failed: {ex.Message}", error: true);
+                }
+
+                if (string.Equals(_settings.LastSlotId, payload, StringComparison.Ordinal))
+                {
+                    _settings.LastSlotId = null;
+                    _settings.Save();
+                }
+
+                _shell.SetSlots(_catalogue.List(BakeFingerprint.From(_world.Manifest)), _settings.LastSlotId);
+                _shell.ShowSlots();
+                return;
+
+            case ShellCommand.SaveNow:
+                SaveNowAndToast();
+                return;
+
+            case ShellCommand.Search:
+                GoToRegion(payload);
+                return;
+
+            case ShellCommand.OpenSaveFolder:
+                OS.ShellOpen(_settings.SaveRoot);
+                return;
+
+            case ShellCommand.MainMenu:
+                if (_campaignService is not null)
+                    _campaignService.SetViewState(CaptureView());
+
+                _forceMenu = true;
+                _skipCliView = true;
+                GetTree().ReloadCurrentScene();
+                return;
+
+            case ShellCommand.Quit:
+                GetTree().Quit();
+                return;
+        }
+    }
+
+    private void ReloadInto(string slotId)
+    {
+        _pendingSlot = slotId;
+        _skipCliView = true;
+        GetTree().ReloadCurrentScene();
+    }
+
+    private string NextCampaignName()
+        => $"Campaign {_catalogue.List(BakeFingerprint.From(_world.Manifest)).Count + 1}";
+
+    private void ApplyCommandLine()
+    {
+        if (HasArgument("--yaw") || HasArgument("--pitch") || HasArgument("--zoom"))
+        {
+            _globe.SetView(
+                FloatArgument("--yaw", _globe.YawDegrees),
+                FloatArgument("--pitch", _globe.PitchDegrees),
+                FloatArgument("--zoom", _globe.Zoom));
+        }
 
         var view = ArgumentValue("--view");
         if ((HasArgument("--iso")
@@ -158,16 +384,7 @@ public partial class Main : Node2D
 
         var overlay = ArgumentValue("--overlay");
         if (overlay is not null)
-        {
-            if (_mode == Mode.Management)
-            {
-                _managementView.SetOverlay(ParseOverlay(overlay));
-            }
-            else if (_mode == Mode.Region)
-            {
-                _regionView.SetViewMode(ParseOverlay(overlay));
-            }
-        }
+            SetOverlay(ParseOverlay(overlay));
 
         var rot = ArgumentValue("--rot");
         if (rot is not null
@@ -201,14 +418,90 @@ public partial class Main : Node2D
                 }
             }
         }
+    }
 
-        var shotPath = FindShotPath();
-        if (shotPath is not null)
-            CaptureAndQuit(shotPath);
+    private void SaveNowAndToast()
+    {
+        if (_campaignService is null)
+            return;
+
+        _campaignService.SetViewState(CaptureView());
+        var saved = _campaignService.SaveNow();
+        _shell.PushToast(saved ? "campaign saved" : "save failed", error: !saved);
+    }
+
+    private SlotViewState CaptureView() => new()
+    {
+        Mode = _mode switch
+        {
+            Mode.Management => "management",
+            Mode.Region => "region",
+            _ => "globe",
+        },
+        GlobeYawDegrees = _globe.YawDegrees,
+        GlobePitchDegrees = _globe.PitchDegrees,
+        GlobeZoom = _globe.Zoom,
+        ColonyRotationSteps = _managementView.RotationSteps,
+        Overlay = _mode == Mode.Management
+            ? OverlayName(_managementView.Overlay)
+            : OverlayName(_regionView.ViewMode),
+    };
+
+    private void RefreshMarkers()
+    {
+        if (_campaign is null)
+            return;
+
+        _globe.SetMarkers(_campaign.Meta.VisitedRegions, _campaign.Meta.ActiveRegionIndex);
+    }
+
+    private static string OverlayName(RegionViewMode mode) => mode switch
+    {
+        RegionViewMode.Terrain => "terrain",
+        RegionViewMode.SiteScore => "siteScore",
+        RegionViewMode.Buildings => "buildings",
+        _ => "biome",
+    };
+
+    private void GoToRegion(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        if (!ulong.TryParse(text, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            _shell.PushToast("not a decimal H3 index", error: true);
+            return;
+        }
+
+        var cell = new H3Index(value);
+        if (!cell.IsValidCell)
+        {
+            _shell.PushToast("not a valid H3 cell", error: true);
+            return;
+        }
+
+        if (cell.Resolution == _world.FineResolution)
+            cell = HexGrid.Region(cell, _world.RegionResolution);
+
+        if (cell.Resolution != _world.RegionResolution
+            || !_world.TryGetRegionEntry((ulong)cell, out _))
+        {
+            _shell.PushToast("index is not a region in this bake", error: true);
+            return;
+        }
+
+        ShowGlobe();
+        _globe.FocusRegion((ulong)cell);
+        _shell.PushToast($"region {(ulong)cell}");
     }
 
     public override void _Process(double delta)
     {
+        if (!_started)
+            return;
+
         if (_benchRedraw && _mode == Mode.Region)
             _regionView.QueueRedraw();
         else if (_benchRedraw && _mode == Mode.Management)
@@ -238,12 +531,18 @@ public partial class Main : Node2D
 
     public override void _Draw()
     {
+        if (!_started)
+            return;
+
         DrawPanel();
         DrawStatus();
     }
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (!_started)
+            return;
+
         if (@event is not InputEventKey { Pressed: true, Echo: false } key)
             return;
 
@@ -251,6 +550,19 @@ public partial class Main : Node2D
         {
             case Key.F12:
                 SaveScreenshot(DefaultScreenshotPath());
+                break;
+
+            case Key.F5:
+                SaveNowAndToast();
+                break;
+
+            case Key.Slash when _mode == Mode.Globe:
+                _shell.OpenSearch();
+                break;
+
+            case Key.Home when _mode == Mode.Globe && _campaign?.Meta.ActiveRegionIndex is { } home:
+                _globe.FocusRegion(home);
+                RefreshMarkers();
                 break;
 
             case Key.Key1 when _mode is Mode.Region or Mode.Management:
@@ -343,7 +655,7 @@ public partial class Main : Node2D
                 break;
 
             case Key.Escape:
-                GetTree().Quit();
+                _shell.OpenPause();
                 break;
         }
     }
@@ -368,6 +680,7 @@ public partial class Main : Node2D
         _selectedHex = -1;
         _selectedBiome = string.Empty;
         _campaignService.SetActiveRegion(regionIndex);
+        RefreshMarkers();
         QueueRedraw();
     }
 
@@ -384,6 +697,7 @@ public partial class Main : Node2D
         _status = ManagementStatus;
         _selectedHex = -1;
         _selectedBiome = string.Empty;
+        RefreshMarkers();
         GD.Print($"colony view: region {_regionView.RegionIndex} · overlay {_managementView.Overlay}");
         QueueRedraw();
     }
@@ -396,12 +710,19 @@ public partial class Main : Node2D
         _mode = Mode.Globe;
         _status = GlobeStatus;
         _campaignService.SetActiveRegion(null);
+        RefreshMarkers();
         QueueRedraw();
     }
 
     public override void _ExitTree()
     {
-        _campaignService?.Flush();
+        if (_campaignService is not null)
+        {
+            _campaignService.SetViewState(CaptureView());
+            _campaignService.Flush();
+        }
+
+        _settings?.Save();
     }
 
     private void OnRegionHovered(ulong regionIndex, string biomeId, int hexCount)
@@ -502,7 +823,11 @@ public partial class Main : Node2D
         QueueRedraw();
     }
 
-    private void OnBuildingsChanged(int count) => QueueRedraw();
+    private void OnBuildingsChanged(int count)
+    {
+        RefreshMarkers();
+        QueueRedraw();
+    }
 
     private void SetOverlay(RegionViewMode mode)
     {
@@ -572,7 +897,7 @@ public partial class Main : Node2D
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height + 18),
-            "F12 screenshot · Esc quit", HorizontalAlignment.Left, -1, 11, MutedText);
+            "F12 screenshot · F5 save · / search · Esc pause", HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
     private void DrawRegionPanel()
@@ -925,7 +1250,7 @@ public partial class Main : Node2D
         var right = _mode switch
         {
             Mode.Globe when _hoverRegion != 0 => $"{_hoverBiome} · {_hoverHexes} hexes",
-            Mode.Globe => "SPACE PROGRAM MANAGER · PHASE 1",
+            Mode.Globe => "SPACE PROGRAM MANAGER · M2",
             Mode.Management =>
                 $"{ModeName(_managementView.Overlay)} · {_managementView.BuildingCount} buildings",
             _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.Buildings.Count} buildings",
@@ -990,14 +1315,6 @@ public partial class Main : Node2D
 
     private static bool HasArgument(string name)
         => Array.Exists(OS.GetCmdlineUserArgs(), argument => argument == name);
-
-    private static string ResolveSaveRoot()
-    {
-        var value = ArgumentValue("--save");
-        return string.IsNullOrWhiteSpace(value)
-            ? ProjectSettings.GlobalizePath("user://saves/slot1")
-            : value;
-    }
 
     private static float FloatArgument(string name, float fallback)
     {

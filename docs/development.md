@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 88` — 88 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 103` — 103 passed, 0 failed, 0 skipped on a machine with
 `data/moon` present. Tests that need the real bake **skip** when it is absent — do
 not make them fail. Set `SPM_REQUIRE_DATA=1` to turn that skip into a failure
 (intended for CI).
@@ -41,6 +41,7 @@ installs.
 |---|---:|---|
 | `BuildingTests.cs` | 16 | Registry consistency, all placement rejection paths, footprint shape, boundary clipping, tech filtering, real-bake biome ids |
 | `CampaignStoreTests.cs` | 14 | Meta/shard round-trip, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering |
+| `CampaignSlotTests.cs` | 15 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/unreadable states, delete safety, view-state round-trip |
 | `CampaignTests.cs` | 11 | Place/remove/clear, preview footprint, install-from-save (unknown, overlap, clipped), visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
 | `DominantBiomeResolverTests.cs` | 7 | Area share, neighbour majority, distance fallback, priority order |
@@ -72,9 +73,12 @@ resolution order (`BodyWorld.FindDataRoot`):
 2. `SPM_DATA` environment variable (must contain `moon/manifest.json`),
 3. walk up from `AppContext.BaseDirectory` and the current directory.
 
-Saves default to `user://saves/slot1`, which on this machine resolves to
-`C:\Users\xenot\AppData\Roaming\Godot\app_userdata\Space Program Manager\saves\slot1`.
-The startup log prints the resolved directory (`campaign: loaded …`).
+Saves default to the slot root `user://saves/`, which on this machine resolves to
+`C:\Users\xenot\AppData\Roaming\Godot\app_userdata\Space Program Manager\saves`.
+Each campaign is a child directory (`slot1`, or `slot-<timestamp>` for campaigns
+started from the menu). A launch without arguments opens the main menu; arguments
+select a slot and start directly. The startup log prints the resolved directory
+(`campaign: loaded …`).
 
 Controls are listed in the [README](../README.md#controls).
 
@@ -101,8 +105,11 @@ $shot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\colony.png'
 | `--route=<from>,<to>` | Plan a rover route between two hex ordinals. |
 | `--speed=<km/h>` | Rover base speed (default `10`). |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera. |
-| `--save=<dir>` | Save slot directory (default `user://saves/slot1`). |
-| `--fresh` | Clear the slot's region shards and start a new campaign. |
+| `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
+| `--continue` | Open the last-played slot directly. |
+| `--menu` | Force the main menu even with other arguments (useful with `--shot`). |
+| `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
+| `--fresh` | Clear the selected slot's region shards and start a new campaign. |
 | `--nosave` | Disable persistence for this run. |
 | `--shot=<png>` | Wait a few frames, save a screenshot, quit. |
 | `--fps` | Print FPS plus per-view draw timings. |
@@ -112,6 +119,8 @@ $shot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\colony.png'
 Notes:
 
 - `--shot` already waits ~4 frames before capturing; no external sleep is needed.
+- Any user argument other than `--menu` skips the main menu, so all pre-M2
+  automation keeps working unchanged. `--menu --shot=<png>` captures the front end.
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
 - Screenshot and save scratch space for this repo:

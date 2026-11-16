@@ -13,7 +13,7 @@ Godot 4.7 .NET project (`Game`) renders it. Moon is the only body so far.
 
 ```powershell
 dotnet build SpaceProgramManager.slnx
-dotnet test Sim.Tests/Sim.Tests.csproj     # expect 88 passing
+dotnet test Sim.Tests/Sim.Tests.csproj     # expect 103 passing
 ```
 
 Godot (machine-specific path):
@@ -38,6 +38,7 @@ See `docs/development.md` for the full automation workflow.
    gracefully when it is absent; keep that behaviour.
 3. **Do not change the save schema without a migration plan.** `docs/save-format.md`
    is the contract. Unknown or incompatible saves must never be overwritten.
+   `slot.json` is a rebuildable cache plus UI state, never authoritative.
 4. **Placement/removal goes through `CampaignState`.** Views are renderers; they
    must not own building state. Persistence goes through `CampaignService`.
 5. **Keep the bake fingerprint gate intact.** A save is only valid for the bake
