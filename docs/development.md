@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 113` — 113 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 132` — 132 passed, 0 failed, 0 skipped on a machine with
 `data/moon` present. Tests that need the real bake **skip** when it is absent — do
 not make them fail. Set `SPM_REQUIRE_DATA=1` to turn that skip into a failure
 (intended for CI).
@@ -39,13 +39,14 @@ installs.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `BuildingTests.cs` | 16 | Registry consistency, all placement rejection paths, footprint shape, boundary clipping, tech filtering, real-bake biome ids |
-| `CampaignStoreTests.cs` | 16 | Meta/shard round-trip, v1 → v2 migration, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering |
+| `BuildingTests.cs` | 15 | Registry consistency, placement rejection paths, footprint shape, tech filtering, real-bake biome ids |
+| `CampaignStoreTests.cs` | 21 | Meta/shard round-trip, v1 meta + v1/v2 → v3 shard migration, v3 two-installation sites, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering, site view state |
 | `CampaignSlotTests.cs` | 15 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/unreadable states, delete safety, view-state round-trip |
-| `CampaignTests.cs` | 11 | Place/remove/clear, preview footprint, install-from-save (unknown, overlap, clipped), visited tracking, change events |
+| `CampaignTests.cs` | 16 | Site-scoped place/remove/clear, local preview footprint, two installations in one hex, independent sites, local overlap/clipping, install-from-save validation, visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
 | `DominantBiomeResolverTests.cs` | 7 | Area share, neighbour majority, distance fallback, priority order |
 | `HexGridTests.cs` | 5 | H3 index ↔ lat/long round-trip, 6 neighbours on a normal cell, region parent/children, canonical H3 example |
+| `LocalGridTests.cs` | 7 | 37-cell disk, centre-first order, boundary rejection, axial distance, local footprint sizes and ring-3 clipping |
 | `MovementModelTests.cs` | 6 | Uphill/downhill multipliers, crater penalties, non-stacking rule |
 | `RoutePlannerTests.cs` | 6 | Cheapest-time path, crater on destination, unreachable goal, empty route, leg totals |
 | `SimulationTests.cs` | 8 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, deterministic replay, 5-neighbour pentagon |
@@ -89,18 +90,24 @@ the command line, renders a few frames, writes a PNG, and quits.
 $shot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\colony.png'
 & $godot --path Game -- --region=589971619905011711 --view=management `
     --overlay=terrain --rot=120 --relief=1.4 --shot=$shot
+
+# Fine hex 0 as a site: two installations, finish construction, capture.
+$siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
+& $godot --path Game -- --region=589971619905011711 --view=site --hex=0 `
+    --active=air_reclaimer --place=0,0 --place=1,0 --advance=24 --shot=$siteShot
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--region=<h3>` | Open a region by H3 index. Without it the last active region is restored. |
-| `--view=management` / `--iso` | Enter the colony view after loading the region. |
-| `--overlay=biome\|terrain\|score\|buildings` | Overlay for the active mode. |
+| `--view=region\|management\|site` | Select the active view; `--iso` aliases `management`. |
+| `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
+| `--overlay=biome\|terrain\|score\|buildings\|sites` | Overlay for region/colony views. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
-| `--active=<defId>` | Building definition to place. |
-| `--place=<ord>[,<ord>…]` | Place the active building at region hex ordinals. |
-| `--route=<from>,<to>` | Plan a rover route between two hex ordinals. |
+| `--active=<defId>` | Building definition to place. Requires `--view=site`. |
+| `--place=<q>,<r>` | Place at a local grid cell. Repeat the flag for more installations; requires `--view=site`. |
+| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals. |
 | `--speed=<km/h>` | Rover base speed (default `10`). |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera. |
 | `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
@@ -121,6 +128,12 @@ Notes:
 - `--shot` already waits ~4 frames before capturing; no external sleep is needed.
 - Any user argument other than `--menu` skips the main menu, so all pre-M2
   automation keeps working unchanged. `--menu --shot=<png>` captures the front end.
+- `--view` overrides the mode restored from `slot.json`, so automation can switch
+  away from a saved site view with `--view=region` or `--view=management`.
+- `--place`, `--active` and `--hex` only apply with `--view=site`. Region and
+  colony views are inspectors; placement there is refused with a warning.
+- `--place` takes a local axial cell (`q,r`), not a fine-hex ordinal. Repeating
+  `--place` places several installations in the same site in command order.
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
 - Screenshot and save scratch space for this repo:
@@ -212,5 +225,6 @@ not the library version. Bump both together.
 | `InvalidDataException` on load | Manifest/tile header validation failed | Check `TileFormat.Version` matches `pipeline/spm/config.py` |
 | Godot says C# is unavailable | Standard (non-.NET) Godot build | Use the mono/.NET build |
 | `--rot` seems ignored | It only applies in the colony view | Use `--view=management` or press `M` first |
-| Buildings vanish after reload | Footprint could not be rebuilt (def id changed, out of region, overlap) | Check the `campaign:` warnings printed on load |
+| `--place` warns "requires --view=site" | Region/colony views no longer place buildings | Add `--view=site --hex=<ordinal>` and pass `--place=<q>,<r>` |
+| Installation vanishes after reload | Local footprint could not be rebuilt (unknown def, invalid parent hex, outside the 37-cell disk, or local overlap) | Check the `campaign:` warnings printed on load |
 | Tests fail only on another machine | Real-bake tests assume `data/moon` | They skip when it is absent; if they fail, the bake is present but inconsistent |

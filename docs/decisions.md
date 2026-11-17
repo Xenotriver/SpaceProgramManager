@@ -81,18 +81,20 @@ simplification. Landmark-crater special cases remain open.
 
 ## D5 — Campaign state is owned by `CampaignState`, not by views
 
-**Commit:** `afccc24` · **Status:** active
+**Commit:** `afccc24`, updated M3 2026-11-17 · **Status:** active
 
-**Decision.** `CampaignState` owns buildings, occupancy and campaign metadata.
-`RegionView` and `ManagementView` read it and call `Preview` / `TryPlace` /
-`TryRemove` / `Clear`. They never keep authoritative building state.
+**Decision.** `CampaignState` owns installations, site occupancy and campaign
+metadata. `SiteView` is the only view that calls `Preview` / `TryPlace` /
+`TryRemove`; it clears one site by repeated `TryRemove`. `RegionView` and
+`ManagementView` are read-only inspectors. No view keeps authoritative
+installation state.
 
-**Why.** The same region is shown by two different views plus a save file. Any
+**Why.** The same region is shown by three different views plus a save file. Any
 duplicated ownership would drift immediately. One owner also makes the placement
 rules unit-testable without a viewport.
 
-**Cost.** Views rebuild cached geometry after every mutation event instead of
-patching it in place.
+**Cost.** Views rebuild cached geometry or marker lists after every mutation
+event instead of patching them in place.
 
 ---
 
@@ -119,16 +121,17 @@ a migration exists. See [`save-format.md`](save-format.md).
 
 **Commit:** `d5df2dc` · **Status:** active
 
-**Decision.** Only the centre hex of a building is stored. On load,
-`CampaignState.InstallRegion` rebuilds each footprint from its definition, drops
-records that are unknown, out of region, overlapping, or boundary-clipped, and
-warns about each drop.
+**Decision.** Only a building's parent hex and `localCenter` are stored. On load,
+`CampaignState.InstallRegion` rebuilds each local footprint from its definition,
+drops records that are unknown, outside the region or local grid, or overlapping
+inside the same site, and warns about each drop.
 
 **Why.** Footprint rules are code, not data. Storing derived geometry invites
-saves that contradict the current rules.
+saves that contradict the current rules. Local occupancy also lets one fine hex
+hold several installations without H3-scale overlap.
 
-**Cost.** A definition change can silently invalidate saved buildings. The
-warnings are the only signal, which is why M2 adds on-screen notifications.
+**Cost.** A definition change can silently invalidate saved installations. The
+warnings are the only signal, so load reports stay visible in the automation log.
 
 ---
 
@@ -201,18 +204,22 @@ silhouette, so picking and depth stay correct.
 
 ## D12 — "Colony view" and "site view" are different things
 
-**Commit:** documentation, 2026-11-15 (on top of `b3b09a1`) · **Status:** active
+**Commit:** documentation, 2026-11-15 (on top of `b3b09a1`), updated M3 2026-11-17 · **Status:** active
 
-**Decision.** **Colony view** = the region-scale isometric management view that
-exists today (`ManagementView`). **Site view** = the per-hex local build grid from
-plan §2.6, scheduled as M3.
+**Decision.** **Colony view** = the region-scale isometric management view
+(`ManagementView`). **Site view** = the per-hex local build grid from plan §2.6,
+shipped in M3 (`SiteView`).
+
+As of M3 the region and colony views are inspectors with aggregate site markers;
+only the site view places or removes installations.
 
 **Why.** The original plan called the local per-hex view a "site view"; the
 implemented isometric view was variously called "management" and "colony". Two
 names for one thing and one name for two things caused real confusion.
 
-**Cost.** Plan §2.6 and §6.1 must be read with this mapping. The M3 milestone is
-where "multiple installations per hex" (plan §2.5) is actually implemented.
+**Cost.** Plan §2.6 and §6.1 must be read with this mapping. M3 implemented
+"multiple installations per hex" (plan §2.5) in the site view and retired
+fine-hex placement from the other two views.
 
 ---
 
@@ -333,10 +340,12 @@ starting stockpile or mark the building as later-game content.
 
 **Commit:** M1, 2026-11-17 · **Status:** active
 
-**Decision.** `campaign.json` and region shards move to version 2. Loading a v1 save
+**Decision.** `campaign.json` and region shards moved to version 2. Loading a v1 save
 is read-only: the runtime derives an RNG seed from the stored `createdUtc`, fills
 missing starting credits/stockpile, and defaults new building flags. The file is
-upgraded only on the next save. Versions outside 1–2 are refused and left untouched.
+upgraded only on the next save. M3 later moved the schema to v3 while keeping this
+v1 migration chain; versions outside the supported range are refused and left
+untouched.
 
 **Why.** The M2 shell shipped with v1 saves in the wild, so a silent rewrite on load
 would risk losing player data. Deriving the seed from the save rather than the load
@@ -347,9 +356,70 @@ is dropped. Every new schema field needs a migration rule and a fixture test.
 
 ---
 
+## D20 — Site view replaces fine-hex placement
+
+**Commit:** M3, 2026-11-17 · **Status:** active
+
+**Decision.** `SiteView` is the only renderer that places or removes installations.
+A click on a fine hex in the region or colony view selects it; `Enter` opens that
+hex as a site. `Esc` returns to the previous view. `RegionView` and
+`ManagementView` show one aggregate marker per occupied fine hex (count + most
+urgent status) and route all mutations through `CampaignState` via `SiteView`.
+
+**Why.** A fine hex is a container, not a one-building slot. Keeping placement in
+the two region-scale views would duplicate occupancy rules and could not express
+local cells. The inspector/marker split also keeps route planning and terrain
+inspection unchanged.
+
+**Cost.** One extra mode and navigation rule to learn. CLI `--place` now requires
+`--view=site` and takes local `q,r` cells instead of hex ordinals.
+
+---
+
+## D21 — Radius-3 axial site grid
+
+**Commit:** M3, 2026-11-17 · **Status:** active
+
+**Decision.** Each site is the axial disk `max(|q|, |r|, |q+r|) <= 3`: 37 cells,
+centre first. Radius 0 occupies one cell; radius 1 occupies the centre plus its
+six neighbours. A radius-1 footprint centred in ring 3 fails disk validation
+naturally; no special-case clipping rule was added.
+
+**Why.** The disk is large enough for several installations per fine hex, small
+enough to render as one isometric diorama, and deterministic without a stored
+tile-size table. Reusing `IsoProjection` avoids a second projection engine.
+
+**Cost.** Local `(q,r)` coordinates are separate from H3 indices, so saves,
+ghosts, CLI flags and docs all have to carry both coordinate systems.
+
+---
+
+## D22 — Full v1/v2 → v3 shard migration
+
+**Commit:** M3, 2026-11-17 · **Status:** active
+
+**Decision.** Region shards now store `sites` → `installations` with `localCenter`.
+Legacy v1/v2 flat `buildings` records are converted on load into one site per
+distinct `centerHex`, with local `(0,0)` and all economy/status fields preserved.
+The v1 meta migration stays intact; supported versions are `1`–`3`, unknown
+versions are refused, and no file is overwritten until an explicit save.
+Footprints remain derived, never stored.
+
+**Why.** Existing saves must survive the move from region-scale footprints to
+site-scoped occupancy. The old no-overlap rule makes each legacy centre unique, so
+conversion needs no conflict resolution, and read-only loading preserves the
+no-overwrite guarantee.
+
+**Cost.** `CampaignStore` keeps three migration paths and separate legacy/current
+DTOs. Definition changes can still invalidate derived footprints, so load warnings
+remain important.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
-multi-installation hexes, site-view layout, and bake-change save migration.
-Tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
+bake-change save migration, and 3D building assets/presentation. Multi-installation
+hexes, the site/colony split and the local grid size are settled by D20–D22;
+tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15.

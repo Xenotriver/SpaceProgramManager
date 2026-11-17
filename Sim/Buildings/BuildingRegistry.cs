@@ -71,34 +71,6 @@ public sealed class BuildingRegistry
         }
     }
 
-    /// <summary>
-    /// Builds the hex → building occupancy map used by placement validation.
-    /// </summary>
-    /// <exception cref="ArgumentException">
-    /// Two buildings claim the same hex, which means the region state is corrupt.
-    /// </exception>
-    public static IReadOnlyDictionary<ulong, BuildingInstance> BuildOccupancy(
-        IEnumerable<BuildingInstance> buildings)
-    {
-        ArgumentNullException.ThrowIfNull(buildings);
-
-        var occupancy = new Dictionary<ulong, BuildingInstance>();
-
-        foreach (var building in buildings)
-        {
-            foreach (var hex in building.Footprint)
-            {
-                if (!occupancy.TryAdd((ulong)hex, building))
-                {
-                    throw new ArgumentException(
-                        $"Hex {hex} is claimed by both '{occupancy[(ulong)hex].DefId}' and '{building.DefId}'.",
-                        nameof(buildings));
-                }
-            }
-        }
-
-        return occupancy;
-    }
 }
 
 /// <summary>

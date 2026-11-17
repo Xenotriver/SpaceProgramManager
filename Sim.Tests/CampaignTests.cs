@@ -15,8 +15,8 @@ using Xunit;
 namespace Sim.Tests;
 
 /// <summary>
-/// Tests for the campaign domain layer: placement ownership, occupancy, region
-/// installation/validation, and campaign metadata.
+/// Tests for the campaign domain layer: site-scoped placement, local-cell
+/// occupancy, region installation/validation, and campaign metadata.
 /// </summary>
 public class CampaignTests
 {
@@ -29,39 +29,64 @@ public class CampaignTests
         HexGrid.FromLatLon(0.41590091884368713, 0.23004777276206262, 3);
 
     [Fact]
-    public void TryPlace_AddsBuildingAndClaimsFootprint()
+    public void TryPlace_AddsInstallationAndClaimsLocalCell()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
 
-        var result = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal);
+        var result = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, LocalGrid.Center);
 
         Assert.True(result.Success, result.Error);
+        Assert.Equal(new[] { LocalGrid.Center }, result.LocalFootprint);
         Assert.Equal(1, campaign.BuildingCount((ulong)fixture.Region));
 
         var building = Assert.Single(campaign.Buildings((ulong)fixture.Region));
         Assert.Equal("single", building.DefId);
-        Assert.Equal((ulong)tile.Cells[fixture.CenterOrdinal], (ulong)building.CenterHex);
+        Assert.Equal((ulong)tile.Cells[fixture.CenterOrdinal], (ulong)building.ParentHex);
+        Assert.Equal(LocalGrid.Center, building.LocalCenter);
+        Assert.Equal(new[] { LocalGrid.Center }, building.LocalFootprint);
         Assert.NotEqual(Guid.Empty, building.Id);
 
         var state = campaign.GetRegion((ulong)fixture.Region);
-        Assert.True(state.TryGetAt((ulong)tile.Cells[fixture.CenterOrdinal], out var occupant));
+        Assert.True(state.TryGetAt(tile.Cells[fixture.CenterOrdinal], LocalGrid.Center, out var occupant));
         Assert.Same(building, occupant);
     }
 
     [Fact]
-    public void TryPlace_RejectsOverlap()
+    public void TryPlace_AllowsTwoInstallationsInOneHex()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
 
-        Assert.True(campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal).Success);
+        var first = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(0, 0));
+        var second = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(1, 0));
 
-        var second = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal);
+        Assert.True(first.Success, first.Error);
+        Assert.True(second.Success, second.Error);
+        Assert.Equal(2, campaign.BuildingCount((ulong)fixture.Region));
+
+        var site = Assert.Single(campaign.Sites((ulong)fixture.Region).Values);
+        Assert.Equal((ulong)tile.Cells[fixture.CenterOrdinal], (ulong)site.ParentHex);
+        Assert.Equal(2, site.Installations.Count);
+        Assert.Equal(2, site.Occupancy.Count);
+        Assert.True(site.TryGetAt(new LocalCell(1, 0), out var occupant));
+        Assert.Equal("single", occupant!.DefId);
+    }
+
+    [Fact]
+    public void TryPlace_RejectsOverlapInsideTheSameSite()
+    {
+        using var fixture = new CampaignFixture();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = fixture.CreateCampaign(world);
+
+        Assert.True(campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
+        var second = campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, LocalGrid.Center);
 
         Assert.False(second.Success);
         Assert.Contains("already occupied", second.Error);
@@ -69,7 +94,39 @@ public class CampaignTests
     }
 
     [Fact]
-    public void Preview_KeepsFootprintWhenPlacementIsRejected()
+    public void TryPlace_DifferentSitesAreIndependent()
+    {
+        using var fixture = new CampaignFixture();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = fixture.CreateCampaign(world);
+
+        var first = campaign.TryPlace(fixture.ClusterDef, tile, fixture.CenterOrdinal, LocalGrid.Center);
+        var second = campaign.TryPlace(fixture.ClusterDef, tile, fixture.NeighborOrdinals[0], LocalGrid.Center);
+
+        Assert.True(first.Success, first.Error);
+        Assert.True(second.Success, second.Error);
+        Assert.Equal(2, campaign.Sites((ulong)fixture.Region).Count);
+    }
+
+    [Fact]
+    public void Preview_RejectsRadiusOneFootprintCentredInRingThree()
+    {
+        using var fixture = new CampaignFixture();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = fixture.CreateCampaign(world);
+
+        var preview = campaign.Preview(fixture.ClusterDef, tile, fixture.CenterOrdinal, new LocalCell(3, 0));
+
+        Assert.False(preview.Success);
+        Assert.Contains("outside the site grid", preview.Error);
+        Assert.Equal(7, preview.LocalFootprint.Count);
+        Assert.Empty(campaign.Buildings((ulong)fixture.Region));
+    }
+
+    [Fact]
+    public void Preview_KeepsLocalFootprintWhenPlacementIsRejected()
     {
         using var fixture = new CampaignFixture();
         fixture.Biomes[fixture.CenterOrdinal] = 1; // non-buildable
@@ -78,50 +135,58 @@ public class CampaignTests
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
 
-        var preview = campaign.Preview(fixture.SingleDef, tile, fixture.CenterOrdinal);
+        var preview = campaign.Preview(fixture.SingleDef, tile, fixture.CenterOrdinal, LocalGrid.Center);
 
         Assert.False(preview.Success);
         Assert.Contains("not buildable", preview.Error);
-        Assert.Single(preview.Footprint);
+        Assert.Equal(new[] { LocalGrid.Center }, preview.LocalFootprint);
         Assert.Empty(campaign.Buildings((ulong)fixture.Region));
     }
 
     [Fact]
-    public void TryRemove_RemovesBuildingByHex()
+    public void TryRemove_RemovesInstallationByLocalCell()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
-        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal);
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(0, 0));
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(1, 0));
 
-        var removed = campaign.TryRemove(tile, fixture.CenterOrdinal, out var building);
+        var removed = campaign.TryRemove(tile, fixture.CenterOrdinal, new LocalCell(1, 0), out var building);
 
         Assert.True(removed);
         Assert.NotNull(building);
         Assert.Equal("single", building!.DefId);
+        var site = Assert.Single(campaign.Sites((ulong)fixture.Region).Values);
+        Assert.Single(site.Installations);
+        Assert.False(site.TryGetAt(new LocalCell(1, 0), out _));
+
+        Assert.True(campaign.TryRemove(tile, fixture.CenterOrdinal, LocalGrid.Center, out _));
+        Assert.Empty(campaign.Sites((ulong)fixture.Region));
         Assert.Empty(campaign.Buildings((ulong)fixture.Region));
-        Assert.Empty(campaign.GetRegion((ulong)fixture.Region).Occupancy);
     }
 
     [Fact]
-    public void Clear_RemovesEveryBuilding()
+    public void Clear_RemovesEveryInstallation()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
-        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal);
-        campaign.TryPlace(fixture.SingleDef, tile, fixture.NeighborOrdinals[0]);
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(0, 0));
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, new LocalCell(1, 0));
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.NeighborOrdinals[0], LocalGrid.Center);
 
         var removed = campaign.Clear(tile);
 
-        Assert.Equal(2, removed);
+        Assert.Equal(3, removed);
         Assert.Empty(campaign.Buildings((ulong)fixture.Region));
+        Assert.Empty(campaign.Sites((ulong)fixture.Region));
     }
 
     [Fact]
-    public void InstallRegion_RebuildsFootprintFromDefinition()
+    public void InstallRegion_RebuildsLocalFootprintFromDefinition()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
@@ -130,15 +195,7 @@ public class CampaignTests
 
         var stored = new RegionLoadResult(
             (ulong)fixture.Region,
-            new[]
-            {
-                new BuildingInstance
-                {
-                    DefId = "cluster",
-                    CenterHex = tile.Cells[fixture.CenterOrdinal],
-                    Footprint = Array.Empty<H3Index>(),
-                },
-            },
+            new[] { Stored("cluster", tile.Cells[fixture.CenterOrdinal], LocalGrid.Center) },
             Array.Empty<string>());
 
         var report = campaign.InstallRegion(stored, tile);
@@ -148,8 +205,35 @@ public class CampaignTests
         Assert.Empty(report.Warnings);
 
         var building = Assert.Single(campaign.Buildings((ulong)fixture.Region));
-        Assert.Equal(7, building.Footprint.Count);
+        Assert.Equal(7, building.LocalFootprint.Count);
+        Assert.All(building.LocalFootprint, cell => Assert.True(LocalGrid.IsInside(cell)));
         Assert.True(campaign.IsLoaded((ulong)fixture.Region));
+    }
+
+    [Fact]
+    public void InstallRegion_KeepsTwoInstallationsInOneSite()
+    {
+        using var fixture = new CampaignFixture();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = fixture.CreateCampaign(world);
+        var parentHex = tile.Cells[fixture.CenterOrdinal];
+
+        var stored = new RegionLoadResult(
+            (ulong)fixture.Region,
+            new[]
+            {
+                Stored("cluster", parentHex, new LocalCell(0, 0)),
+                Stored("single", parentHex, new LocalCell(2, 0)),
+            },
+            Array.Empty<string>());
+
+        var report = campaign.InstallRegion(stored, tile);
+
+        Assert.Equal(2, report.Loaded);
+        Assert.Equal(0, report.Dropped);
+        var site = Assert.Single(campaign.Sites((ulong)fixture.Region).Values);
+        Assert.Equal(2, site.Installations.Count);
     }
 
     [Fact]
@@ -162,15 +246,7 @@ public class CampaignTests
 
         var stored = new RegionLoadResult(
             (ulong)fixture.Region,
-            new[]
-            {
-                new BuildingInstance
-                {
-                    DefId = "does_not_exist",
-                    CenterHex = tile.Cells[fixture.CenterOrdinal],
-                    Footprint = Array.Empty<H3Index>(),
-                },
-            },
+            new[] { Stored("does_not_exist", tile.Cells[fixture.CenterOrdinal], LocalGrid.Center) },
             Array.Empty<string>());
 
         var report = campaign.InstallRegion(stored, tile);
@@ -181,29 +257,20 @@ public class CampaignTests
     }
 
     [Fact]
-    public void InstallRegion_DropsOverlappingRecords()
+    public void InstallRegion_DropsOverlappingRecordsInOneSite()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
+        var parentHex = tile.Cells[fixture.CenterOrdinal];
 
         var stored = new RegionLoadResult(
             (ulong)fixture.Region,
             new[]
             {
-                new BuildingInstance
-                {
-                    DefId = "cluster",
-                    CenterHex = tile.Cells[fixture.CenterOrdinal],
-                    Footprint = Array.Empty<H3Index>(),
-                },
-                new BuildingInstance
-                {
-                    DefId = "single",
-                    CenterHex = tile.Cells[fixture.NeighborOrdinals[0]],
-                    Footprint = Array.Empty<H3Index>(),
-                },
+                Stored("cluster", parentHex, LocalGrid.Center),
+                Stored("single", parentHex, LocalGrid.Center),
             },
             Array.Empty<string>());
 
@@ -215,31 +282,42 @@ public class CampaignTests
     }
 
     [Fact]
-    public void InstallRegion_DropsFootprintClippedByBoundary()
+    public void InstallRegion_DropsFootprintOutsideTheLocalGrid()
     {
         using var fixture = new CampaignFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
         var campaign = fixture.CreateCampaign(world);
-        var boundary = FindBoundaryOrdinal(tile);
 
         var stored = new RegionLoadResult(
             (ulong)fixture.Region,
-            new[]
-            {
-                new BuildingInstance
-                {
-                    DefId = "cluster",
-                    CenterHex = tile.Cells[boundary],
-                    Footprint = Array.Empty<H3Index>(),
-                },
-            },
+            new[] { Stored("cluster", tile.Cells[fixture.CenterOrdinal], new LocalCell(3, 0)) },
             Array.Empty<string>());
 
         var report = campaign.InstallRegion(stored, tile);
 
         Assert.Equal(0, report.Loaded);
-        Assert.Contains(report.Warnings, warning => warning.Contains("clipped"));
+        Assert.Contains(report.Warnings, warning => warning.Contains("outside the site grid"));
+    }
+
+    [Fact]
+    public void InstallRegion_DropsParentHexOutsideTheRegion()
+    {
+        using var fixture = new CampaignFixture();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = fixture.CreateCampaign(world);
+        var outside = new H3Index(1);
+
+        var stored = new RegionLoadResult(
+            (ulong)fixture.Region,
+            new[] { Stored("single", outside, LocalGrid.Center) },
+            Array.Empty<string>());
+
+        var report = campaign.InstallRegion(stored, tile);
+
+        Assert.Equal(0, report.Loaded);
+        Assert.Contains(report.Warnings, warning => warning.Contains("not in region"));
     }
 
     [Fact]
@@ -270,29 +348,20 @@ public class CampaignTests
         var changes = 0;
         campaign.RegionChanged += _ => changes++;
 
-        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal);
-        campaign.TryRemove(tile, fixture.CenterOrdinal, out _);
+        campaign.TryPlace(fixture.SingleDef, tile, fixture.CenterOrdinal, LocalGrid.Center);
+        campaign.TryRemove(tile, fixture.CenterOrdinal, LocalGrid.Center, out _);
         campaign.Clear(tile);
 
         Assert.Equal(2, changes);
     }
 
-    private static int FindBoundaryOrdinal(RegionTile tile)
+    private static BuildingInstance Stored(string defId, H3Index parentHex, LocalCell localCenter) => new()
     {
-        var cells = new HashSet<ulong>(tile.Cells.Select(cell => (ulong)cell));
-
-        for (var i = 0; i < tile.HexCount; i++)
-        {
-            var ring = tile.Cells[i]
-                .GridDiskDistances(1)
-                .Where(cell => cell.Distance == 1);
-
-            if (ring.Any(cell => !cells.Contains((ulong)cell.Index)))
-                return i;
-        }
-
-        throw new InvalidOperationException("Test region has no boundary cell.");
-    }
+        DefId = defId,
+        ParentHex = parentHex,
+        LocalCenter = localCenter,
+        LocalFootprint = Array.Empty<LocalCell>(),
+    };
 
     private static BuildingDef MakeDef(string id, int footprintRadius = 0)
         => new()

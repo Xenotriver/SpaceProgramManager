@@ -8,6 +8,7 @@ using Sim.Buildings;
 using Sim.Campaign;
 using Sim.Hex;
 using Sim.Movement;
+using Sim.Site;
 using Sim.Time;
 using Sim.World;
 using Xunit;
@@ -69,8 +70,8 @@ public class SimulationTests
         var habitat = MakeDef("habitat", buildHours: 4.0, powerKw: 5.0);
         var campaign = fixture.CreateCampaign(world, generator, habitat);
 
-        Assert.True(campaign.TryPlace(generator, tile, fixture.CenterOrdinal).Success);
-        Assert.True(campaign.TryPlace(habitat, tile, fixture.NeighborOrdinals[0]).Success);
+        Assert.True(campaign.TryPlace(generator, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
+        Assert.True(campaign.TryPlace(habitat, tile, fixture.NeighborOrdinals[0], LocalGrid.Center).Success);
 
         Assert.All(campaign.Buildings((ulong)fixture.Region),
             building => Assert.Equal(BuildingStatus.Planned, building.Status));
@@ -109,7 +110,7 @@ public class SimulationTests
             throughput: new Dictionary<string, double> { ["power"] = 10.0 });
         var campaign = fixture.CreateCampaign(world, habitat, generator);
 
-        Assert.True(campaign.TryPlace(habitat, tile, fixture.CenterOrdinal).Success);
+        Assert.True(campaign.TryPlace(habitat, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
 
         campaign.Tick(0.25);
         var consumer = Assert.Single(campaign.Buildings(region));
@@ -117,7 +118,7 @@ public class SimulationTests
         Assert.Contains("power deficit", consumer.StatusReason);
         Assert.True(campaign.GetEconomy(region).HasDeficit);
 
-        Assert.True(campaign.TryPlace(generator, tile, fixture.NeighborOrdinals[0]).Success);
+        Assert.True(campaign.TryPlace(generator, tile, fixture.NeighborOrdinals[0], LocalGrid.Center).Success);
 
         campaign.Tick(0.25);
         Assert.Equal(BuildingStatus.Operational, consumer.Status);
@@ -135,14 +136,14 @@ public class SimulationTests
         var def = MakeDef("costly", cost: 10.0);
 
         campaign.Meta.Credits = 5.0;
-        var refused = campaign.TryPlace(def, tile, fixture.CenterOrdinal);
+        var refused = campaign.TryPlace(def, tile, fixture.CenterOrdinal, LocalGrid.Center);
         Assert.False(refused.Success);
         Assert.Contains("not enough credits", refused.Error);
         Assert.Equal(5.0, campaign.Meta.Credits);
         Assert.Empty(campaign.Buildings((ulong)fixture.Region));
 
         campaign.Meta.Credits = 10.0;
-        Assert.True(campaign.TryPlace(def, tile, fixture.CenterOrdinal).Success);
+        Assert.True(campaign.TryPlace(def, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
         Assert.Equal(0.0, campaign.Meta.Credits);
         Assert.Single(campaign.Buildings((ulong)fixture.Region));
     }
@@ -156,14 +157,14 @@ public class SimulationTests
         var campaign = fixture.CreateCampaign(world);
         var def = MakeDef("restricted", requiredTech: "nuclear_power");
 
-        var locked = campaign.Preview(def, tile, fixture.CenterOrdinal);
+        var locked = campaign.Preview(def, tile, fixture.CenterOrdinal, LocalGrid.Center);
         Assert.False(locked.Success);
         Assert.Contains("requires tech", locked.Error);
 
         Assert.True(campaign.UnlockTech("nuclear_power"));
-        Assert.True(campaign.Preview(def, tile, fixture.CenterOrdinal).Success);
+        Assert.True(campaign.Preview(def, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
         Assert.True(
-            campaign.TryPlace(def, tile, fixture.CenterOrdinal).Success);
+            campaign.TryPlace(def, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
     }
 
     [Fact]
@@ -182,8 +183,8 @@ public class SimulationTests
         first.RestoreMeta(first.Meta);
         second.RestoreMeta(second.Meta);
 
-        Assert.True(first.TryPlace(def, tile, fixture.CenterOrdinal).Success);
-        Assert.True(second.TryPlace(def, tile, fixture.CenterOrdinal).Success);
+        Assert.True(first.TryPlace(def, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
+        Assert.True(second.TryPlace(def, tile, fixture.CenterOrdinal, LocalGrid.Center).Success);
         first.NextRandom();
         second.NextRandom();
 

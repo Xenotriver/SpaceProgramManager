@@ -13,7 +13,7 @@ Godot 4.7 .NET project (`Game`) renders it. Moon is the only body so far.
 
 ```powershell
 dotnet build SpaceProgramManager.slnx
-dotnet test Sim.Tests/Sim.Tests.csproj     # expect 113 passing
+dotnet test Sim.Tests/Sim.Tests.csproj     # expect 132 passing
 ```
 
 Godot (machine-specific path):

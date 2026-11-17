@@ -7,16 +7,16 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-17**, M1 simulation loop, **113 tests passing**.
+Anchor: **2026-11-17**, M3 site view, **132 tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
 | Moon data pipeline | **Done** | `data/moon`: 41,162 regions, 14,117,882 fine hexes, 343 hexes/region, 10 biomes, `fine.bin` 54.6 MB |
-| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, campaign, save store, slot catalogue |
-| Godot runtime | **Done** | Globe, region view, isometric colony view, placement/removal, save/load, CLI automation |
+| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, local grid, sites, campaign, save store, slot catalogue |
+| Godot runtime | **Done** | Globe, region/colony inspectors, per-hex site view with local placement, save/load, CLI automation |
 | Campaign shell | **Done (M2)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause scaffold, search, settings |
-| Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, save v2, live controls |
-| Site view (per-hex grid) | **Planned (M3)** | Only the region-scale colony view exists |
+| Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
+| Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v3 with v1/v2 migration |
 | Multi-body | **Planned (M4)** | `Main.OpenMoon()` is hardcoded |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
@@ -25,12 +25,14 @@ Anchor: **2026-11-17**, M1 simulation loop, **113 tests passing**.
 The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the Moon globe, search an H3
 index, open a region, inspect hexes across four overlays, plan a rover route,
-place/remove buildings from either the 2D region view or the isometric colony
-view, and have all of it persist across launches against a fingerprinted bake.
+press `Enter` to open a fine hex as a site, place several installations on its
+37-cell local grid, and have all of it persist across launches against a
+fingerprinted bake.
 
-The player can also pass time with pause/1×/2×/4×, watch buildings finish
+The player can also pass time with pause/1×/2×/4×, watch installations finish
 construction, earn/spend credits and stockpile resources, see power or life-support
-shortfalls called out in the HUD, and find occupied hexes in every overlay.
+shortfalls called out in the HUD, and find occupied hexes as aggregate markers in
+every region and colony overlay.
 
 The player cannot: pick a tech in the UI, rename a campaign, or play a second
 body yet.
@@ -40,8 +42,9 @@ body yet.
 - **Colony view** — the region-scale isometric management view that exists today
   (`ManagementView`, `--view=management`, `M` from the region view). It shows all
   343 hexes of one region as prisms.
-- **Site view** — the per-hex local build grid from plan §2.6. It does not exist
-  yet and is scheduled as **M3**. It is a different scale, not a rename.
+- **Site view** — the per-hex local build grid from plan §2.6, shipped in **M3**
+  (`SiteView`, `--view=site`, `Enter` from region/colony). It is a different scale,
+  not a rename, and is the only place where installations are placed.
 
 ## Milestones
 
@@ -104,8 +107,8 @@ Scope (as planned):
 
 **Outcome:** time passes and buildings actually get built and run.
 
-**Status:** shipped 2026-11-17 · **113 tests passing** · resolves open questions 4
-and 7.
+**Status:** shipped 2026-11-17 (updated after M3) · **132 tests passing** ·
+resolves open questions 4 and 7.
 
 Implemented:
 
@@ -128,14 +131,15 @@ Implemented:
 7. **Save v2 + migration** — `GameTimeHours`, `SciencePoints`, `RngSeed`,
    `RngState`, `UnlockedTechs`, per-building `Paused` and `StatusReason`; a tested
    v1 → v2 migration grants starting credits, stockpile and a stable RNG seed.
-   Unknown/incompatible saves are still refused, never overwritten.
+   M3 superseded the shard layout with v3 while keeping this chain;
+   unknown/incompatible saves are still refused, never overwritten.
 8. **Live time controls** — pause/1×/2×/4× in the pause overlay, `Space` to toggle
    pause, HUD day/hour and economy line, 5-second autosave, `--time` and
    `--advance` automation hooks.
 9. **Pentagon neighbour test** — 5 distinct neighbours on a pentagon cell.
 10. **Occupied-region markers** — green rings on the globe and status-coloured
-    pins/outlines in biome, terrain, score and buildings overlays of both the
-    region and colony views.
+    pins with counts in biome, terrain, score and sites overlays of both the
+    region and colony views (aggregate markers after M3).
 
 **Acceptance criteria** — verified on 2026-11-17:
 
@@ -147,26 +151,50 @@ Implemented:
 - [x] A v1 fixture loads and migrates under v2.
 - [x] Occupied regions stay findable in every globe/region/colony overlay.
 
-### M3 — Site view (plan §2.6)
+### M3 — Site view (done, plan §2.6)
 
 **Outcome:** selecting a fine hex opens a local build grid inside that hex, and a
 hex can hold several installations.
 
-Scope: per-hex grid; isometric presentation reusing `IsoProjection` and the colony
-renderer; entry/exit from the region view; multiple installations per hex; local
-placement rules; persistence in the region shard.
+**Status:** shipped 2026-11-17 · **132 tests passing** · decisions D20–D22 ·
+resolves open questions 3, 6 and 10.
 
-> **Art direction (noted 2026-11-16, not locked).** Buildings are **3D models**
-> in a **fixed 2.5D isometric view**; the camera does not freely orbit. This does
-> not reopen "no free-camera 3D" (plan §2.6). It is a separate decision from the
-> site view and is tracked as open questions 11–12; procedural prisms remain the
-> placeholder until an engine 3D layer exists.
+Implemented:
 
-**Acceptance criteria:** two installations on one hex's grid, saved and restored;
-the colony view still shows per-hex occupancy summaries.
+1. **`LocalGrid` and `SiteState` (Sim)** — a radius-3 axial disk of 37 cells,
+   local footprints from `FootprintRadius`, and per-site occupancy independent of
+   other fine hexes.
+2. **Site-scoped campaign API** — `Preview` / `TryPlace` / `TryRemove` /
+   `TryGetAt` take a parent hex plus a local cell; `SiteView` clears one site by
+   repeated `TryRemove`. Cost, tech and status semantics from M1 are unchanged.
+3. **Save v3** — region shards store `sites` → `installations` with `localCenter`.
+   v1/v2 shards convert to one site per legacy centre hex at local `(0,0)`;
+   footprints stay derived and v1/v2 files are not overwritten on load.
+4. **`SiteView`** — a 37-cell isometric grid reusing `IsoProjection`, hover
+   ghost, click-to-place, local-cell removal, `C` site clear, `,`/`.` building
+   cycling, and `Enter`/`Esc` navigation from region or colony view.
+5. **Inspector views** — `RegionView` and `ManagementView` no longer place or
+   remove; they draw one aggregate marker per occupied fine hex with count and
+   status. All mutations go through `SiteView` → `CampaignState`.
+6. **CLI** — `--view=site --hex=N --active=<defId> --place=q,r`, with repeatable
+   `--place`; `--place` outside site view is refused with a warning.
 
-> This milestone is where §2.5 ("multiple installations per hex") is
-> reconciled with today's rule that building footprints may not overlap.
+> **Art direction (noted 2026-11-16, still open).** Buildings are **3D models**
+> in a **fixed 2.5D isometric view**; the camera does not freely orbit. M3 kept
+> procedural prisms and did not integrate assets. Questions 11–12 remain open.
+
+**Acceptance criteria** — verified 2026-11-17:
+
+- [x] Two `air_reclaimer` installations on one hex's grid are saved and restored
+  at local `(0,0)` and `(1,0)` with progress/status preserved.
+- [x] A v2 shard converts to v3 without losing credits, time, statuses or idle
+  reasons; v1 → v2 → v3 stays covered by tests.
+- [x] Region and colony views show one aggregate marker per occupied fine hex.
+- [x] `--view=site` smoke places installations, advances 24 h, reloads and keeps
+  both installations; build + tests are clean.
+
+> §2.5 ("multiple installations per hex") is now reconciled with the no-overlap
+> rule: footprints only have to be disjoint **inside one site grid**.
 
 ### M4 — Multi-body
 
@@ -197,7 +225,7 @@ Not tied to a milestone; pull in when they start hurting.
 
 | Item | Why |
 |---|---|
-| CI (build + tests + headless smoke shot) | 113 tests only run when someone remembers |
+| CI (build + tests + headless smoke shot) | 132 tests only run when someone remembers |
 | Screenshot regression harness | `--shot` already works; wire it to reference images |
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
 | Globe performance budget | 41,162 instances today; add a frame-time gate before Earth |
@@ -211,13 +239,13 @@ Not tied to a milestone; pull in when they start hurting.
 |---|---|---|
 | 1 | Rover default speed: code uses **10 km/h**, plan §2.3 says testing default **8 km/h** | **Drift — decide in M5** (speed is a rover property) |
 | 2 | Fine hexes per region: plan says ~2,400 (res 7), the bake uses **343** (res 6) | **Drift — plan text is stale; res 6 is the real choice** |
-| 3 | Multiple installations per hex (plan §2.5) vs no-overlap footprints (today) | Resolve in **M3** |
+| 3 | Multiple installations per hex (plan §2.5) vs no-overlap footprints | **Decided in M3:** one site per fine hex; overlap is checked only among local cells |
 | 4 | Are `RequiredTech` and `Cost` authoritative or advisory? | **Decided in M1:** authoritative; both enforced in `CampaignState.Preview`/`TryPlace` |
 | 5 | Slot metadata file vs additive fields in `campaign.json` | **Decided in M2:** sibling `slot.json` cache (D15); v1 stays unchanged |
-| 6 | Does the site view replace or complement the colony view? | Decide in **M3** |
+| 6 | Does the site view replace or complement the colony view? | **Decided in M3:** site view replaces fine-hex placement; colony view stays a region-scale inspector |
 | 7 | Time scale: real hours vs accelerated game hours | **Decided in M1:** 1 real s = 1 game h at 1×; 1×/2×/4×, 0.25 h fixed steps |
 | 8 | Save migration strategy when the bake fingerprint changes | Open; likely remap by H3 index |
 | 9 | Landmark crater special cases (plan §2.3) | Deferred |
-| 10 | Site-view build-grid dimensions | Deferred to M3 |
-| 11 | 3D building layer: migrate the colony view to 3D vs. hybrid 2D terrain + 3D buildings (plan §2.7) | Decide in **M3**, before asset integration |
+| 10 | Site-view build-grid dimensions | **Decided in M3:** radius-3 axial disk, 37 local cells |
+| 11 | 3D building layer: migrate the colony view to 3D vs. hybrid 2D terrain + 3D buildings (plan §2.7) | **Open** — deferred until 3D assets are integrated; M3 kept procedural prisms |
 | 12 | Art source/licence policy for committed models (plan §2.7) | CC0 preferred; decide before the first asset |

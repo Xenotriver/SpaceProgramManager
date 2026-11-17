@@ -19,8 +19,11 @@ public enum SlotState
 /// </summary>
 public sealed record SlotViewState
 {
-    /// <summary>One of <c>globe</c>, <c>region</c>, <c>management</c>.</summary>
+    /// <summary>One of <c>globe</c>, <c>region</c>, <c>management</c>, <c>site</c>.</summary>
     public string Mode { get; init; } = "globe";
+
+    /// <summary>Ordinal of the fine hex whose site is open; null outside site view.</summary>
+    public int? SelectedHexOrdinal { get; init; }
 
     /// <summary>Globe yaw in degrees.</summary>
     public float GlobeYawDegrees { get; init; } = -90f;

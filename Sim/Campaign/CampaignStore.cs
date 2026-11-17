@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using H3;
 using Sim.Buildings;
+using Sim.Site;
 
 namespace Sim.Campaign;
 
@@ -21,8 +22,8 @@ public sealed class CampaignStore
     /// <summary>Format id written into every save file.</summary>
     public const string FormatId = "spm-campaign";
 
-    /// <summary>Current save schema version.</summary>
-    public const int Version = 2;
+    /// <summary>Current save schema version (v3 stores sites with local cells).</summary>
+    public const int Version = 3;
 
     /// <summary>Oldest schema that can be read and migrated in place.</summary>
     public const int OldestSupportedVersion = 1;
@@ -295,6 +296,7 @@ public sealed class CampaignStore
                 GlobeZoom = summary.View.GlobeZoom,
                 ColonyRotationSteps = summary.View.ColonyRotationSteps,
                 Overlay = summary.View.Overlay,
+                SelectedHexOrdinal = summary.View.SelectedHexOrdinal,
             },
         };
 
@@ -346,6 +348,7 @@ public sealed class CampaignStore
                 GlobeZoom = dto.View.GlobeZoom,
                 ColonyRotationSteps = dto.View.ColonyRotationSteps,
                 Overlay = dto.View.Overlay,
+                SelectedHexOrdinal = dto.View.SelectedHexOrdinal,
             },
         };
 
@@ -376,9 +379,21 @@ public sealed class CampaignStore
                 using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
                 regions++;
 
-                if (document.RootElement.TryGetProperty("buildings", out var list)
+                if (document.RootElement.TryGetProperty("sites", out var sites)
+                    && sites.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var site in sites.EnumerateArray())
+                    {
+                        if (site.TryGetProperty("installations", out var installations)
+                            && installations.ValueKind == JsonValueKind.Array)
+                            buildings += installations.GetArrayLength();
+                    }
+                }
+                else if (document.RootElement.TryGetProperty("buildings", out var list)
                     && list.ValueKind == JsonValueKind.Array)
+                {
                     buildings += list.GetArrayLength();
+                }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
@@ -418,61 +433,123 @@ public sealed class CampaignStore
             throw new InvalidDataException($"{path}: region index does not match the file name.");
 
         var warnings = new List<string>();
-        var buildings = new List<BuildingInstance>(dto.Buildings.Count);
+        var buildings = new List<BuildingInstance>();
 
-        foreach (var stored in dto.Buildings)
+        if (dto.Version is 1 or 2)
         {
-            if (string.IsNullOrWhiteSpace(stored.DefId))
+            // Legacy shards hold one flat building per centre hex. The old
+            // no-overlap rule makes those centres distinct, so each becomes its
+            // own site with the installation at the local centre.
+            foreach (var stored in dto.Buildings ?? new List<LegacyBuildingDto>())
             {
-                warnings.Add("building without a definition id");
-                continue;
-            }
-
-            if (!TryParseHex(stored.CenterHex, out var centerHex))
-            {
-                warnings.Add($"{stored.DefId}: invalid center hex '{stored.CenterHex}'");
-                continue;
-            }
-
-            var state = new Dictionary<string, object>(StringComparer.Ordinal);
-            if (stored.State is not null)
-            {
-                foreach (var (key, value) in stored.State)
+                if (!TryParseHex(stored.CenterHex, out var parentHex))
                 {
-                    var primitive = ToPrimitive(value);
-                    if (primitive is null)
+                    warnings.Add($"{stored.DefId}: invalid center hex '{stored.CenterHex}'");
+                    continue;
+                }
+
+                if (ToInstance(stored, parentHex, LocalGrid.Center, warnings) is { } instance)
+                    buildings.Add(instance);
+            }
+        }
+        else
+        {
+            // A v3 shard must declare its sites explicitly. A missing `sites`
+            // field or a legacy `buildings` field means this file was not written
+            // by the current schema. Loading it as an empty region would drop its
+            // installations on the next save, so refuse it and let the caller
+            // quarantine the shard instead of silently overwriting it.
+            if (dto.Sites is null)
+                throw new InvalidDataException($"{path}: v3 shard is missing 'sites'.");
+
+            if (dto.Buildings is { Count: > 0 })
+                throw new InvalidDataException($"{path}: v3 shard contains legacy 'buildings'.");
+
+            foreach (var site in dto.Sites)
+            {
+                if (!TryParseHex(site.ParentHex, out var parentHex))
+                {
+                    warnings.Add($"site: invalid parent hex '{site.ParentHex}'");
+                    continue;
+                }
+
+                if (site.Installations is null)
+                {
+                    warnings.Add($"site {site.ParentHex}: missing installations treated as empty");
+                    continue;
+                }
+
+                foreach (var stored in site.Installations)
+                {
+                    var localCenter = stored.LocalCenter is null
+                        ? LocalGrid.Center
+                        : new LocalCell(stored.LocalCenter.Q, stored.LocalCenter.R);
+
+                    if (!LocalGrid.IsInside(localCenter))
                     {
-                        warnings.Add($"{stored.DefId}: dropped state '{key}' (unsupported value)");
+                        warnings.Add($"{stored.DefId}: local centre {localCenter} is outside the site grid");
                         continue;
                     }
 
-                    state[key] = primitive;
+                    if (ToInstance(stored, parentHex, localCenter, warnings) is { } instance)
+                        buildings.Add(instance);
                 }
             }
-
-            buildings.Add(new BuildingInstance
-            {
-                Id = Guid.TryParse(stored.Id, out var id) && id != Guid.Empty ? id : Guid.NewGuid(),
-                DefId = stored.DefId,
-                CenterHex = centerHex,
-                Footprint = Array.Empty<H3Index>(),
-                Progress = stored.Progress,
-                Health = stored.Health,
-                Status = Enum.TryParse<BuildingStatus>(stored.Status, ignoreCase: true, out var status)
-                    ? status
-                    : BuildingStatus.Planned,
-                Paused = stored.Paused,
-                StatusReason = stored.StatusReason ?? string.Empty,
-                StoredResources = new Dictionary<string, double>(
-                    stored.StoredResources ?? new Dictionary<string, double>(),
-                    StringComparer.Ordinal),
-                ConstructionStartTime = stored.ConstructionStartTime,
-                ConstructionCompleteTime = stored.ConstructionCompleteTime,
-                State = state,
-            });
         }
 
         return new RegionLoadResult(regionIndex, buildings, warnings);
+    }
+
+    /// <summary>Maps a stored record onto a live instance; derived footprints stay empty.</summary>
+    private static BuildingInstance? ToInstance(
+        BuildingFieldsDto stored,
+        H3Index parentHex,
+        LocalCell localCenter,
+        List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(stored.DefId))
+        {
+            warnings.Add("building without a definition id");
+            return null;
+        }
+
+        var state = new Dictionary<string, object>(StringComparer.Ordinal);
+        if (stored.State is not null)
+        {
+            foreach (var (key, value) in stored.State)
+            {
+                var primitive = ToPrimitive(value);
+                if (primitive is null)
+                {
+                    warnings.Add($"{stored.DefId}: dropped state '{key}' (unsupported value)");
+                    continue;
+                }
+
+                state[key] = primitive;
+            }
+        }
+
+        return new BuildingInstance
+        {
+            Id = Guid.TryParse(stored.Id, out var id) && id != Guid.Empty ? id : Guid.NewGuid(),
+            DefId = stored.DefId,
+            ParentHex = parentHex,
+            LocalCenter = localCenter,
+            LocalFootprint = Array.Empty<LocalCell>(),
+            Progress = stored.Progress,
+            Health = stored.Health,
+            Status = Enum.TryParse<BuildingStatus>(stored.Status, ignoreCase: true, out var status)
+                ? status
+                : BuildingStatus.Planned,
+            Paused = stored.Paused,
+            StatusReason = stored.StatusReason ?? string.Empty,
+            StoredResources = new Dictionary<string, double>(
+                stored.StoredResources ?? new Dictionary<string, double>(),
+                StringComparer.Ordinal),
+            ConstructionStartTime = stored.ConstructionStartTime,
+            ConstructionCompleteTime = stored.ConstructionCompleteTime,
+            State = state,
+        };
     }
 
     /// <summary>Writes one region shard atomically.</summary>
@@ -480,12 +557,33 @@ public sealed class CampaignStore
     {
         ArgumentNullException.ThrowIfNull(buildings);
 
+        // Group by parent hex in first-appearance order. Installation order inside
+        // each site is preserved, so a site round-trip keeps placement order.
+        var sites = new List<SiteDto>();
+        var byParent = new Dictionary<ulong, SiteDto>();
+        foreach (var building in buildings)
+        {
+            var key = (ulong)building.ParentHex;
+            if (!byParent.TryGetValue(key, out var site))
+            {
+                site = new SiteDto
+                {
+                    ParentHex = HexString(building.ParentHex),
+                    Installations = new List<BuildingDto>(),
+                };
+                byParent[key] = site;
+                sites.Add(site);
+            }
+
+            site.Installations.Add(ToDto(building));
+        }
+
         var dto = new RegionDto
         {
             Format = FormatId,
             Version = Version,
             Region = HexString(regionIndex),
-            Buildings = buildings.Select(ToDto).ToList(),
+            Sites = sites,
         };
 
         WriteAtomic(RegionPath(regionIndex), JsonSerializer.Serialize(dto, JsonOptions));
@@ -538,7 +636,7 @@ public sealed class CampaignStore
         {
             Id = building.Id == Guid.Empty ? null : building.Id.ToString("D"),
             DefId = building.DefId,
-            CenterHex = HexString(building.CenterHex),
+            LocalCenter = new LocalCellDto { Q = building.LocalCenter.Q, R = building.LocalCenter.R },
             Progress = building.Progress,
             Health = building.Health,
             Status = building.Status.ToString(),
@@ -630,6 +728,7 @@ public sealed class CampaignStore
         public float GlobeZoom { get; set; } = 1f;
         public int ColonyRotationSteps { get; set; }
         public string Overlay { get; set; } = "terrain";
+        public int? SelectedHexOrdinal { get; set; }
     }
 
     private sealed class CampaignDto
@@ -659,14 +758,24 @@ public sealed class CampaignStore
         public string Format { get; set; } = FormatId;
         public int Version { get; set; } = CampaignStore.Version;
         public string Region { get; set; } = string.Empty;
-        public List<BuildingDto> Buildings { get; set; } = new();
+
+        /// <summary>v1/v2 shards: one flat record per centre hex.</summary>
+        public List<LegacyBuildingDto>? Buildings { get; set; }
+
+        /// <summary>v3 shards: sites keyed by parent fine hex.</summary>
+        public List<SiteDto>? Sites { get; set; }
     }
 
-    private sealed class BuildingDto
+    private sealed class SiteDto
+    {
+        public string ParentHex { get; set; } = string.Empty;
+        public List<BuildingDto> Installations { get; set; } = new();
+    }
+
+    private abstract class BuildingFieldsDto
     {
         public string? Id { get; set; }
         public string DefId { get; set; } = string.Empty;
-        public string CenterHex { get; set; } = string.Empty;
         public double Progress { get; set; }
         public double Health { get; set; } = 100.0;
         public string Status { get; set; } = nameof(BuildingStatus.Planned);
@@ -676,6 +785,22 @@ public sealed class CampaignStore
         public double ConstructionStartTime { get; set; }
         public double? ConstructionCompleteTime { get; set; }
         public Dictionary<string, object>? State { get; set; }
+    }
+
+    private sealed class LegacyBuildingDto : BuildingFieldsDto
+    {
+        public string CenterHex { get; set; } = string.Empty;
+    }
+
+    private sealed class BuildingDto : BuildingFieldsDto
+    {
+        public LocalCellDto LocalCenter { get; set; } = new();
+    }
+
+    private sealed class LocalCellDto
+    {
+        public int Q { get; set; }
+        public int R { get; set; }
     }
 }
 

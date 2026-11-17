@@ -25,7 +25,7 @@ public enum RegionViewMode
     /// <summary>Composite site-score heatmap over a 7-hex footprint.</summary>
     SiteScore = 2,
 
-    /// <summary>Dimmed base map with placed-building footprints and placement preview.</summary>
+    /// <summary>Dimmed base map with one aggregate marker per site (inspector overlay).</summary>
     Buildings = 3,
 }
 
@@ -59,18 +59,6 @@ public partial class RegionView : Node2D
     /// <summary>Overlay mode changed.</summary>
     [Signal]
     public delegate void ViewModeChangedEventHandler(int mode);
-
-    /// <summary>Active building definition changed.</summary>
-    [Signal]
-    public delegate void ActiveBuildingChangedEventHandler(string defId);
-
-    /// <summary>Building count in this region changed.</summary>
-    [Signal]
-    public delegate void BuildingsChangedEventHandler(int count);
-
-    /// <summary>Result of a placement/removal attempt.</summary>
-    [Signal]
-    public delegate void PlacementFeedbackEventHandler(bool success, string message);
 
     private const float MinZoom = 0.6f;
     private const float MaxZoom = 12f;
@@ -106,15 +94,11 @@ public partial class RegionView : Node2D
     private float _cellRadius;
     private double _radiusKm = 1737.4;
 
-    private BuildingRegistry? _registry;
     private CampaignState? _campaign;
-    private List<BuildingDef> _buildingChoices = new();
-    private BuildingDef? _activeBuilding;
+
+    /// <summary>Read-only snapshot of installations, used only for site markers.</summary>
     private IReadOnlyList<BuildingInstance> _buildings = Array.Empty<BuildingInstance>();
-    private readonly Dictionary<string, Color> _buildingColorCache = new();
-    private int[] _ghostOrdinals = Array.Empty<int>();
-    private bool _ghostValid;
-    private string _ghostError = string.Empty;
+
     private Font _font = null!;
 
     private RoutePlan? _route;
@@ -163,7 +147,7 @@ public partial class RegionView : Node2D
 
     public bool IsLoaded => _tile is not null;
 
-    /// <summary>The region tile for placement.</summary>
+    /// <summary>The region tile displayed by this view.</summary>
     public RegionTile Tile => _tile!;
 
     /// <summary>Current colour overlay.</summary>
@@ -172,20 +156,11 @@ public partial class RegionView : Node2D
     /// <summary>Site-scoring configuration used by the heatmap and placement validation.</summary>
     public SiteScorerConfig SiteConfig { get; set; } = new() { BodyRadiusKm = 1737.4 };
 
-    /// <summary>Building selected for placement, or null before a registry is set.</summary>
-    public BuildingDef? ActiveBuilding => _activeBuilding;
-
-    /// <summary>Number of building definitions available for cycling.</summary>
-    public int BuildingChoiceCount => _buildingChoices.Count;
-
-    /// <summary>Buildings placed in the current region (in-memory until Phase B persistence).</summary>
+    /// <summary>Installations in the current region (read-only inspector snapshot).</summary>
     public IReadOnlyList<BuildingInstance> Buildings => _buildings;
 
-    /// <summary>Validation error for the hovered placement preview, or empty.</summary>
-    public string GhostError => _ghostError;
-
-    /// <summary>Whether the hovered placement preview is valid.</summary>
-    public bool GhostValid => _ghostValid;
+    /// <summary>Number of fine hexes that contain at least one installation.</summary>
+    public int SiteCount => _buildings.Select(building => (ulong)building.ParentHex).Distinct().Count();
 
     /// <summary>Lowest elevation in the current region (metres).</summary>
     public short TerrainMinM => _terrainMin;
@@ -324,7 +299,6 @@ public partial class RegionView : Node2D
             EnsureSiteScores();
 
         UpdateActiveFills();
-        UpdateGhost();
 
         var size = GetViewportRect().Size;
         var span = new Vector2(Mathf.Max(max.X - min.X, 1e-6f), Mathf.Max(max.Y - min.Y, 1e-6f));
@@ -336,7 +310,6 @@ public partial class RegionView : Node2D
         _pan = -((min + max) * 0.5f) * fit;
 
         Visible = true;
-        EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
         QueueRedraw();
     }
 
@@ -403,17 +376,12 @@ public partial class RegionView : Node2D
             }
         }
 
-        if (ViewMode == RegionViewMode.Buildings)
-            DrawBuildings(scale);
-        else
-            DrawBuildingMarkers(scale);
+        DrawSiteMarkers(scale);
 
-        DrawGhost(scale);
-
-        if (ViewMode != RegionViewMode.Buildings && _routeFrom >= 0 && _route is null)
+        if (_routeFrom >= 0 && _route is null)
             DrawMarker(_routeFrom, scale, new Color(0.55f, 0.85f, 1f, 0.95f));
 
-        if (ViewMode != RegionViewMode.Buildings && _route is not null && _route.LegCount > 0)
+        if (_route is not null && _route.LegCount > 0)
             DrawRoute(_route, scale);
 
         if (_hovered >= 0)
@@ -433,9 +401,6 @@ public partial class RegionView : Node2D
 
             DrawPolyline(Close(screen), new Color(0.55f, 0.85f, 1f, 0.95f), 2f, true);
         }
-
-        if (ViewMode == RegionViewMode.Buildings && _hovered >= 0 && _activeBuilding is not null)
-            DrawPlacementLabel(scale);
 
         LastDrawMs = (Stopwatch.GetTimestamp() - drawStart) * 1000.0 / Stopwatch.Frequency;
         _drawTotalMs += LastDrawMs;
@@ -481,62 +446,46 @@ public partial class RegionView : Node2D
         _fillMeshDirty = false;
     }
 
-    private void DrawBuildings(float scale)
+    /// <summary>
+    /// One marker per parent fine hex. Region and colony views are inspectors:
+    /// the site holds many installations, so only the aggregate count and the
+    /// most urgent status are shown here. Open the site to place or remove.
+    /// </summary>
+    private void DrawSiteMarkers(float scale)
     {
-        foreach (var building in _buildings)
+        foreach (var group in _buildings.GroupBy(building => (ulong)building.ParentHex))
         {
-            var color = BuildingColor(building.DefId);
-            var fill = new Color(color.R, color.G, color.B, 0.55f);
+            if (!_ordinalByIndex.TryGetValue(group.Key, out var ordinal))
+                continue;
 
-            foreach (var hex in building.Footprint)
+            var installations = group.ToArray();
+            var color = BuildingStatusColor(AggregateStatus(installations));
+            var center = ToScreen(_centers[ordinal], scale);
+            var radius = Mathf.Max(3.5f, _cellRadius * scale * 0.28f);
+
+            DrawCircle(center, radius + 1.5f, new Color(0f, 0f, 0f, 0.7f));
+            DrawCircle(center, radius, color);
+
+            if (installations.Length > 1)
             {
-                if (!_ordinalByIndex.TryGetValue((ulong)hex, out var ordinal))
-                    continue;
-
-                var corners = _corners[ordinal];
-                var screen = ScreenBuffer(corners.Length);
-                for (var v = 0; v < corners.Length; v++)
-                    screen[v] = ToScreen(corners[v], scale);
-
-                DrawColoredPolygon(screen, fill);
-                DrawPolyline(Close(screen), color, 1.5f, true);
+                DrawString(_font, center + new Vector2(radius + 4f, -radius - 6f),
+                    installations.Length.ToString(), HorizontalAlignment.Left, -1, 11,
+                    new Color(0.95f, 0.97f, 1f));
             }
         }
     }
 
-    /// <summary>
-    /// Occupied-hex markers for the terrain, biome and site-score overlays. The
-    /// buildings overlay draws full footprints instead; the other overlays only
-    /// get a status-coloured pin and a faint outline so locations stay findable.
-    /// </summary>
-    private void DrawBuildingMarkers(float scale)
+    private static BuildingStatus AggregateStatus(IReadOnlyList<BuildingInstance> installations)
     {
-        foreach (var building in _buildings)
-        {
-            var color = BuildingStatusColor(building.Status);
-            var outline = new Color(color.R, color.G, color.B, 0.45f);
-
-            foreach (var hex in building.Footprint)
-            {
-                if (!_ordinalByIndex.TryGetValue((ulong)hex, out var ordinal))
-                    continue;
-
-                var corners = _corners[ordinal];
-                var screen = ScreenBuffer(corners.Length);
-                for (var v = 0; v < corners.Length; v++)
-                    screen[v] = ToScreen(corners[v], scale);
-
-                DrawPolyline(Close(screen), outline, 1.5f, true);
-            }
-
-            if (!_ordinalByIndex.TryGetValue((ulong)building.CenterHex, out var centerOrdinal))
-                continue;
-
-            var center = ToScreen(_centers[centerOrdinal], scale);
-            var radius = Mathf.Max(3.5f, _cellRadius * scale * 0.28f);
-            DrawCircle(center, radius + 1.5f, new Color(0f, 0f, 0f, 0.7f));
-            DrawCircle(center, radius, color);
-        }
+        // Worst-first so a damaged or unfinished installation is never hidden
+        // by a healthy neighbour in the same site.
+        var statuses = installations.Select(building => building.Status).ToList();
+        if (statuses.Contains(BuildingStatus.Destroyed)) return BuildingStatus.Destroyed;
+        if (statuses.Contains(BuildingStatus.Damaged)) return BuildingStatus.Damaged;
+        if (statuses.Contains(BuildingStatus.UnderConstruction)) return BuildingStatus.UnderConstruction;
+        if (statuses.Contains(BuildingStatus.Idle)) return BuildingStatus.Idle;
+        if (statuses.Contains(BuildingStatus.Operational)) return BuildingStatus.Operational;
+        return BuildingStatus.Planned;
     }
 
     private static Color BuildingStatusColor(BuildingStatus status) => status switch
@@ -549,46 +498,6 @@ public partial class RegionView : Node2D
         BuildingStatus.Destroyed => new Color(0.35f, 0.35f, 0.4f),
         _ => new Color(0.9f, 0.9f, 0.95f),
     };
-
-    private void DrawGhost(float scale)
-    {
-        if (ViewMode != RegionViewMode.Buildings || _ghostOrdinals.Length == 0)
-            return;
-
-        var color = _ghostValid ? new Color(0.35f, 1f, 0.55f) : new Color(1f, 0.35f, 0.3f);
-        var fill = new Color(color.R, color.G, color.B, 0.32f);
-
-        foreach (var ordinal in _ghostOrdinals)
-        {
-            var corners = _corners[ordinal];
-            var screen = ScreenBuffer(corners.Length);
-            for (var v = 0; v < corners.Length; v++)
-                screen[v] = ToScreen(corners[v], scale);
-
-            DrawColoredPolygon(screen, fill);
-            DrawPolyline(Close(screen), color, 2f, true);
-        }
-    }
-
-    private void DrawPlacementLabel(float scale)
-    {
-        var anchor = ToScreen(_centers[_hovered], scale) + new Vector2(14, 6);
-        var text = _ghostOrdinals.Length == 0
-            ? _activeBuilding!.DisplayName
-            : _ghostValid
-                ? $"{_activeBuilding!.DisplayName} · place"
-                : _ghostError;
-
-        if (text.Length > 64)
-            text = text[..61] + "...";
-
-        var color = _ghostValid
-            ? new Color(0.65f, 1f, 0.72f)
-            : new Color(1f, 0.68f, 0.62f);
-
-        DrawString(_font, anchor, text, HorizontalAlignment.Left, -1, 11, color);
-    }
-
 
     private void DrawMarker(int ordinal, float scale, Color color)
     {
@@ -625,11 +534,6 @@ public partial class RegionView : Node2D
 
             case InputEventMouseMotion motion:
                 HandleMouseMotion(motion);
-                break;
-
-            case InputEventKey { Pressed: true, Echo: false } key
-                when (key.Keycode is Key.Delete or Key.Backspace) && ViewMode == RegionViewMode.Buildings:
-                RemoveHoveredBuilding();
                 break;
         }
     }
@@ -684,7 +588,6 @@ public partial class RegionView : Node2D
             _pan += motion.Position - _lastMouse;
             _lastMouse = motion.Position;
             _hovered = -1;
-            UpdateGhost();
             QueueRedraw();
             return;
         }
@@ -711,7 +614,6 @@ public partial class RegionView : Node2D
             return;
 
         _hovered = hit;
-        UpdateGhost();
         QueueRedraw();
 
         if (hit < 0)
@@ -729,7 +631,6 @@ public partial class RegionView : Node2D
         {
             _selected = -1;
             ClearRoute();
-            UpdateGhost();
             QueueRedraw();
             return;
         }
@@ -737,13 +638,6 @@ public partial class RegionView : Node2D
         _selected = _hovered;
         EmitSignal(SignalName.HexSelected, _selected, _biomeIds[_selected],
             (int)_elevations[_selected], (int)_craters[_selected]);
-
-        if (ViewMode == RegionViewMode.Buildings)
-        {
-            PlaceActiveBuilding();
-            QueueRedraw();
-            return;
-        }
 
         if (_routeFrom < 0 || _route is not null)
         {
@@ -779,24 +673,7 @@ public partial class RegionView : Node2D
         EmitSignal(SignalName.RouteCleared);
     }
 
-    /// <summary>Sets the building catalogue used for placement and cycling.</summary>
-    public void SetBuildingRegistry(BuildingRegistry registry)
-    {
-        _registry = registry;
-        _buildingChoices = registry.All.Values
-            .OrderBy(def => def.Category)
-            .ThenBy(def => def.Id, StringComparer.Ordinal)
-            .ToList();
-
-        _activeBuilding = _buildingChoices.FirstOrDefault();
-        if (_activeBuilding is not null)
-            EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
-
-        UpdateGhost();
-        QueueRedraw();
-    }
-
-    /// <summary>Binds the campaign that owns building state for every region.</summary>
+    /// <summary>Binds the campaign that owns site state for every region.</summary>
     public void SetCampaign(CampaignState campaign)
     {
         ArgumentNullException.ThrowIfNull(campaign);
@@ -804,7 +681,6 @@ public partial class RegionView : Node2D
         _campaign = campaign;
         SiteConfig = campaign.SiteConfig;
         RefreshBuildings();
-        UpdateGhost();
         QueueRedraw();
     }
 
@@ -827,7 +703,6 @@ public partial class RegionView : Node2D
             EnsureSiteScores();
 
         UpdateActiveFills();
-        UpdateGhost();
         EmitSignal(SignalName.ViewModeChanged, (int)mode);
         QueueRedraw();
     }
@@ -835,124 +710,6 @@ public partial class RegionView : Node2D
     /// <summary>Advances to the next overlay mode (wraps).</summary>
     public void CycleViewMode()
         => SetViewMode((RegionViewMode)(((int)ViewMode + 1) % 4));
-
-    /// <summary>Selects the previous/next building definition.</summary>
-    public void CycleActiveBuilding(int direction)
-    {
-        if (_buildingChoices.Count == 0)
-            return;
-
-        var index = _activeBuilding is null
-            ? 0
-            : _buildingChoices.FindIndex(def => def.Id == _activeBuilding.Id);
-        if (index < 0)
-            index = 0;
-
-        index = ((index + direction) % _buildingChoices.Count + _buildingChoices.Count) % _buildingChoices.Count;
-        _activeBuilding = _buildingChoices[index];
-
-        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
-        UpdateGhost();
-        QueueRedraw();
-    }
-
-    /// <summary>Selects a building definition by id.</summary>
-    public bool SetActiveBuilding(string defId)
-    {
-        var def = _buildingChoices.FirstOrDefault(candidate => candidate.Id == defId);
-        if (def is null)
-            return false;
-
-        _activeBuilding = def;
-        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
-        UpdateGhost();
-        QueueRedraw();
-        return true;
-    }
-
-    /// <summary>Places the active building on the hovered hex.</summary>
-    public bool PlaceActiveBuilding() => _hovered >= 0 && PlaceAt(_hovered);
-
-    /// <summary>Dev/demo: places the active building on a specific hex ordinal.</summary>
-    public bool PlaceActiveBuildingAt(int ordinal)
-    {
-        if (_tile is null || (uint)ordinal >= (uint)_tile.HexCount)
-            return false;
-
-        _hovered = ordinal;
-        _selected = ordinal;
-        return PlaceAt(ordinal);
-    }
-
-    private bool PlaceAt(int ordinal)
-    {
-        if (_tile is null || _activeBuilding is null || _campaign is null)
-            return false;
-
-        var result = _campaign.TryPlace(_activeBuilding, _tile, ordinal);
-        if (!result.Success)
-        {
-            _ghostValid = false;
-            _ghostError = result.Error;
-            EmitSignal(SignalName.PlacementFeedback, false, result.Error);
-            QueueRedraw();
-            return false;
-        }
-
-        RefreshBuildings();
-        UpdateGhost();
-
-        var message = $"Placed {_activeBuilding.DisplayName}";
-        if (result.Warnings.Count > 0)
-            message += $" · {string.Join(" · ", result.Warnings)}";
-
-        EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
-        EmitSignal(SignalName.PlacementFeedback, true, message);
-        QueueRedraw();
-        return true;
-    }
-
-    /// <summary>Removes the building occupying the hovered hex, if any.</summary>
-    public bool RemoveHoveredBuilding()
-    {
-        if (_tile is null || _hovered < 0 || _campaign is null)
-            return false;
-
-        if (!_campaign.TryRemove(_tile, _hovered, out var building) || building is null)
-        {
-            EmitSignal(SignalName.PlacementFeedback, false, "No building on this hex");
-            return false;
-        }
-
-        RefreshBuildings();
-        UpdateGhost();
-
-        EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
-        EmitSignal(SignalName.PlacementFeedback, true, $"Removed {building.DefId}");
-        QueueRedraw();
-        return true;
-    }
-
-    /// <summary>Removes every building in the current region.</summary>
-    public void ClearBuildings()
-    {
-        if (_tile is null || _campaign is null)
-            return;
-
-        var removed = _campaign.Clear(_tile);
-        if (removed == 0)
-        {
-            EmitSignal(SignalName.PlacementFeedback, false, "No buildings to clear");
-            return;
-        }
-
-        RefreshBuildings();
-        UpdateGhost();
-
-        EmitSignal(SignalName.BuildingsChanged, _buildings.Count);
-        EmitSignal(SignalName.PlacementFeedback, true, $"Cleared {removed} building(s)");
-        QueueRedraw();
-    }
 
     private void EnsureSiteScores()
     {
@@ -1025,49 +782,6 @@ public partial class RegionView : Node2D
         };
 
         _fillMeshDirty = true;
-    }
-
-    private void UpdateGhost()
-    {
-        _ghostValid = false;
-        _ghostError = string.Empty;
-        _ghostOrdinals = Array.Empty<int>();
-
-        if (ViewMode != RegionViewMode.Buildings || _activeBuilding is null || _tile is null || _hovered < 0)
-            return;
-
-        var result = _campaign is not null
-            ? _campaign.Preview(_activeBuilding, _tile, _hovered)
-            : _activeBuilding.CanPlaceAt(_tile, _hovered, _world, SiteConfig);
-
-        _ghostValid = result.Success;
-        _ghostError = result.Success ? string.Empty : result.Error;
-
-        var footprint = result.Footprint.Count > 0
-            ? result.Footprint
-            : _activeBuilding.BuildFootprint(_tile, _hovered);
-
-        var ordinals = new List<int>(footprint.Count);
-        foreach (var hex in footprint)
-        {
-            if (_ordinalByIndex.TryGetValue((ulong)hex, out var ordinal))
-                ordinals.Add(ordinal);
-        }
-
-        _ghostOrdinals = ordinals.ToArray();
-    }
-
-    private Color BuildingColor(string defId)
-    {
-        if (_buildingColorCache.TryGetValue(defId, out var cached))
-            return cached;
-
-        var color = new Color(0.85f, 0.85f, 0.92f, 0.85f);
-        if (_registry is not null && _registry.TryGet(defId, out var def) && !string.IsNullOrWhiteSpace(def!.FootprintColor))
-            color = Color.FromHtml(def.FootprintColor);
-
-        _buildingColorCache[defId] = color;
-        return color;
     }
 
     /// <summary>Dev/demo: plans a route between two hex ordinals without clicking.</summary>

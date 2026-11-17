@@ -114,60 +114,82 @@ public sealed class CampaignState
     }
 
     /// <summary>
-    /// Validates a placement and returns the footprint to preview. Always includes
-    /// a footprint, so a rejected ghost can still be drawn in red.
+    /// Validates a site placement and returns its local footprint for the ghost.
+    /// The footprint is always included, so a rejected preview can be drawn red.
     /// </summary>
-    public PlacementResult Preview(BuildingDef def, RegionTile tile, int centerOrdinal)
+    public PlacementResult Preview(BuildingDef def, RegionTile tile, int hexOrdinal, LocalCell localCenter)
     {
         ArgumentNullException.ThrowIfNull(def);
         ArgumentNullException.ThrowIfNull(tile);
 
-        if (!IsTechUnlocked(def.RequiredTech))
-        {
-            var techFootprint = (uint)centerOrdinal < (uint)tile.HexCount
-                ? def.BuildFootprint(tile, centerOrdinal)
-                : Array.Empty<H3Index>();
+        var footprint = LocalGrid.Footprint(localCenter, def.FootprintRadius);
+        if ((uint)hexOrdinal >= (uint)tile.HexCount)
+            return PlacementResult.FailLocal($"Hex ordinal {hexOrdinal} out of range (0..{tile.HexCount - 1})", footprint);
 
-            return new PlacementResult
-            {
-                Success = false,
-                Error = $"requires tech: {def.RequiredTech}",
-                Footprint = techFootprint,
-            };
+        if (!IsTechUnlocked(def.RequiredTech))
+            return PlacementResult.FailLocal($"requires tech: {def.RequiredTech}", footprint);
+
+        var parentHex = tile.Cells[hexOrdinal];
+        var score = tile.ScoreSite(hexOrdinal, _world, _siteConfig);
+        if (!score.Factors.Buildable)
+            return PlacementResult.FailLocal("Site is not buildable", footprint);
+
+        var composite = score.Factors.Composite(_siteConfig.Weights);
+        if (composite < def.MinSiteScore)
+            return PlacementResult.FailLocal($"Site score {composite:P0} below minimum {def.MinSiteScore:P0}", footprint);
+
+        var biomeCode = tile.BiomeCode(hexOrdinal);
+        if (!_world.Biomes.TryGet(biomeCode, out var biome))
+            return PlacementResult.FailLocal($"Unknown biome code {biomeCode}", footprint);
+
+        if (def.AllowedBiomeIds.Count > 0 && !def.AllowedBiomeIds.Contains(biome.Id))
+            return PlacementResult.FailLocal($"Biome {biome.Id} not in allowed list", footprint);
+
+        if (def.ForbiddenBiomeIds.Contains(biome.Id))
+            return PlacementResult.FailLocal($"Biome {biome.Id} is forbidden", footprint);
+
+        foreach (var cell in footprint)
+        {
+            if (!LocalGrid.IsInside(cell))
+                return PlacementResult.FailLocal("Footprint extends outside the site grid", footprint);
         }
 
-        var occupancy = GetRegion(tile.Entry.Index).Occupancy;
-        var result = def.CanPlaceAt(tile, centerOrdinal, _world, _siteConfig, occupancy);
+        SiteState? site = null;
+        if (_regions.TryGetValue(tile.Entry.Index, out var region))
+            region.TryGetSite(parentHex, out site);
 
-        if (result.Success || result.Footprint.Count > 0)
-            return result;
-
-        return new PlacementResult
+        if (site is not null)
         {
-            Success = false,
-            Error = result.Error,
-            Footprint = def.BuildFootprint(tile, centerOrdinal),
-            Warnings = result.Warnings,
-        };
+            foreach (var cell in footprint)
+            {
+                if (site.TryGetAt(cell, out var occupant) && occupant is not null)
+                    return PlacementResult.FailLocal($"Cell {cell} already occupied by {occupant.DefId}", footprint);
+            }
+        }
+
+        var warnings = new List<string>();
+        if (def.Prerequisites.Count > 0)
+        {
+            var present = new HashSet<string>(
+                (site?.Installations ?? Array.Empty<BuildingInstance>()).Select(b => b.DefId),
+                StringComparer.Ordinal);
+            var missing = def.Prerequisites.Where(p => !present.Contains(p)).ToList();
+            if (missing.Count > 0)
+                warnings.Add($"Missing prerequisites: {string.Join(", ", missing)}");
+        }
+
+        return PlacementResult.OkLocal(footprint, warnings);
     }
 
-    /// <summary>Validates and, on success, pays for and places a building.</summary>
-    public PlacementResult TryPlace(BuildingDef def, RegionTile tile, int centerOrdinal)
+    /// <summary>Validates and, on success, pays for and places an installation in a site.</summary>
+    public PlacementResult TryPlace(BuildingDef def, RegionTile tile, int hexOrdinal, LocalCell localCenter)
     {
-        var result = Preview(def, tile, centerOrdinal);
+        var result = Preview(def, tile, hexOrdinal, localCenter);
         if (!result.Success)
             return result;
 
         if (!TryPay(def.Cost, out var paymentError))
-        {
-            return new PlacementResult
-            {
-                Success = false,
-                Error = paymentError,
-                Footprint = result.Footprint,
-                Warnings = result.Warnings,
-            };
-        }
+            return PlacementResult.FailLocal(paymentError, result.LocalFootprint);
 
         var regionIndex = tile.Entry.Index;
         var operational = def.BuildTimeHours <= 0.0;
@@ -175,8 +197,9 @@ public sealed class CampaignState
         GetRegion(regionIndex).Add(new BuildingInstance
         {
             DefId = def.Id,
-            CenterHex = tile.Cells[centerOrdinal],
-            Footprint = result.Footprint,
+            ParentHex = tile.Cells[hexOrdinal],
+            LocalCenter = localCenter,
+            LocalFootprint = result.LocalFootprint,
             Status = operational ? BuildingStatus.Operational : BuildingStatus.Planned,
             Progress = operational ? 1.0 : 0.0,
             ConstructionStartTime = Meta.GameTimeHours,
@@ -236,22 +259,22 @@ public sealed class CampaignState
         return true;
     }
 
-    /// <summary>Removes the building occupying a hex ordinal.</summary>
-    public bool TryRemove(RegionTile tile, int ordinal, out BuildingInstance? removed)
+    /// <summary>Removes the installation occupying a local cell of a site.</summary>
+    public bool TryRemove(RegionTile tile, int hexOrdinal, LocalCell localCell, out BuildingInstance? removed)
     {
         ArgumentNullException.ThrowIfNull(tile);
 
         removed = null;
-        if ((uint)ordinal >= (uint)tile.HexCount)
+        if ((uint)hexOrdinal >= (uint)tile.HexCount)
             return false;
 
         var regionIndex = tile.Entry.Index;
         var state = GetRegion(regionIndex);
 
-        if (!state.TryGetAt((ulong)tile.Cells[ordinal], out removed))
+        if (!state.TryGetAt(tile.Cells[hexOrdinal], localCell, out removed) || removed is null)
             return false;
 
-        state.Remove(removed!);
+        state.Remove(removed);
         Touch(regionIndex);
         return true;
     }
@@ -270,22 +293,28 @@ public sealed class CampaignState
         return removed;
     }
 
-    /// <summary>Returns the building occupying a hex ordinal, if any.</summary>
-    public bool TryGetAt(RegionTile tile, int ordinal, out BuildingInstance? building)
+    /// <summary>Returns the installation occupying a local cell of a site, if any.</summary>
+    public bool TryGetAt(RegionTile tile, int hexOrdinal, LocalCell localCell, out BuildingInstance? building)
     {
         ArgumentNullException.ThrowIfNull(tile);
 
         building = null;
-        if ((uint)ordinal >= (uint)tile.HexCount)
+        if ((uint)hexOrdinal >= (uint)tile.HexCount)
             return false;
 
-        return GetRegion(tile.Entry.Index).TryGetAt((ulong)tile.Cells[ordinal], out building);
+        return GetRegion(tile.Entry.Index).TryGetAt(tile.Cells[hexOrdinal], localCell, out building);
     }
 
+    /// <summary>Sites in a region, keyed by parent fine hex.</summary>
+    public IReadOnlyDictionary<ulong, SiteState> Sites(ulong regionIndex)
+        => _regions.TryGetValue(regionIndex, out var region)
+            ? region.Sites
+            : new Dictionary<ulong, SiteState>();
+
     /// <summary>
-    /// Validates stored buildings against the live tile and installs them. The
-    /// footprint is rebuilt from the definition, so a save only needs the center
-    /// hex; records that no longer fit are dropped and reported.
+    /// Validates stored installations against the live tile and installs them.
+    /// Local footprints are rebuilt from the definition, so a save only needs the
+    /// parent hex and local centre; records that no longer fit are dropped.
     /// </summary>
     public RegionLoadReport InstallRegion(RegionLoadResult stored, RegionTile tile)
     {
@@ -299,7 +328,7 @@ public sealed class CampaignState
 
         var warnings = new List<string>(stored.Warnings);
         var accepted = new List<BuildingInstance>(stored.Buildings.Count);
-        var claimed = new Dictionary<ulong, BuildingInstance>();
+        var claimed = new Dictionary<ulong, Dictionary<LocalCell, BuildingInstance>>();
         var ordinals = BuildOrdinalMap(tile);
 
         foreach (var candidate in stored.Buildings)
@@ -310,29 +339,27 @@ public sealed class CampaignState
                 continue;
             }
 
-            var centerHex = (ulong)candidate.CenterHex;
-            if (!ordinals.TryGetValue(centerHex, out var centerOrdinal))
+            var parentHex = (ulong)candidate.ParentHex;
+            if (!ordinals.TryGetValue(parentHex, out var hexOrdinal))
             {
-                warnings.Add($"{def.Id}: center hex {centerHex} is not in region {regionIndex}");
+                warnings.Add($"{def.Id}: parent hex {parentHex} is not in region {regionIndex}");
                 continue;
             }
 
-            var footprint = def.BuildFootprint(tile, centerOrdinal);
-
-            if (def.FootprintRadius > 0)
+            var footprint = LocalGrid.Footprint(candidate.LocalCenter, def.FootprintRadius);
+            if (footprint.Any(cell => !LocalGrid.IsInside(cell)))
             {
-                var expected = 3 * def.FootprintRadius * (def.FootprintRadius + 1) + 1;
-                if (footprint.Count != expected)
-                {
-                    warnings.Add($"{def.Id} at {centerHex}: footprint clipped by the region boundary");
-                    continue;
-                }
+                warnings.Add($"{def.Id} at {parentHex}: footprint outside the site grid");
+                continue;
             }
 
+            if (!claimed.TryGetValue(parentHex, out var occupancy))
+                claimed[parentHex] = occupancy = new Dictionary<LocalCell, BuildingInstance>();
+
             BuildingInstance? clash = null;
-            foreach (var hex in footprint)
+            foreach (var cell in footprint)
             {
-                if (claimed.TryGetValue((ulong)hex, out var other))
+                if (occupancy.TryGetValue(cell, out var other))
                 {
                     clash = other;
                     break;
@@ -341,20 +368,20 @@ public sealed class CampaignState
 
             if (clash is not null)
             {
-                warnings.Add($"{def.Id} at {centerHex}: overlaps {clash.DefId}");
+                warnings.Add($"{def.Id} at {parentHex}: overlaps {clash.DefId} in the same site");
                 continue;
             }
 
             var building = candidate with
             {
                 Id = candidate.Id == Guid.Empty ? Guid.NewGuid() : candidate.Id,
-                CenterHex = tile.Cells[centerOrdinal],
-                Footprint = footprint,
+                ParentHex = tile.Cells[hexOrdinal],
+                LocalFootprint = footprint,
             };
 
             accepted.Add(building);
-            foreach (var hex in footprint)
-                claimed[(ulong)hex] = building;
+            foreach (var cell in footprint)
+                occupancy[cell] = building;
         }
 
         GetRegion(regionIndex).ReplaceAll(accepted);
@@ -402,14 +429,14 @@ public sealed class CampaignState
         return new TickReport(hours, steps, completed, idled);
     }
 
-    /// <summary>Pauses or resumes one building's construction or operation.</summary>
-    public bool TrySetPaused(RegionTile tile, int ordinal, bool paused, out string error)
+    /// <summary>Pauses or resumes one installation's construction or operation.</summary>
+    public bool TrySetPaused(RegionTile tile, int hexOrdinal, LocalCell localCell, bool paused, out string error)
     {
         ArgumentNullException.ThrowIfNull(tile);
 
-        if (!TryGetAt(tile, ordinal, out var building) || building is null)
+        if (!TryGetAt(tile, hexOrdinal, localCell, out var building) || building is null)
         {
-            error = "no building on this hex";
+            error = "no installation on this cell";
             return false;
         }
 

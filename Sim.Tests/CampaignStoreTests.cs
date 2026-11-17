@@ -4,6 +4,7 @@ using H3;
 using Sim.Buildings;
 using Sim.Campaign;
 using Sim.Hex;
+using Sim.Site;
 using Xunit;
 
 namespace Sim.Tests;
@@ -156,8 +157,9 @@ public class CampaignStoreTests : IDisposable
         {
             Id = id,
             DefId = "rtg_generator",
-            CenterHex = CenterHex,
-            Footprint = new[] { CenterHex },
+            ParentHex = CenterHex,
+            LocalCenter = LocalGrid.Center,
+            LocalFootprint = new[] { LocalGrid.Center },
             Progress = 0.75,
             Health = 42.0,
             Status = BuildingStatus.Operational,
@@ -178,8 +180,9 @@ public class CampaignStoreTests : IDisposable
         var restored = Assert.Single(loaded.Buildings);
         Assert.Equal(id, restored.Id);
         Assert.Equal("rtg_generator", restored.DefId);
-        Assert.Equal((ulong)CenterHex, (ulong)restored.CenterHex);
-        Assert.Empty(restored.Footprint);
+        Assert.Equal((ulong)CenterHex, (ulong)restored.ParentHex);
+        Assert.Equal(LocalGrid.Center, restored.LocalCenter);
+        Assert.Empty(restored.LocalFootprint);
         Assert.Equal(0.75, restored.Progress);
         Assert.Equal(42.0, restored.Health);
         Assert.Equal(BuildingStatus.Operational, restored.Status);
@@ -202,8 +205,9 @@ public class CampaignStoreTests : IDisposable
             new BuildingInstance
             {
                 DefId = "from_a_mod",
-                CenterHex = CenterHex,
-                Footprint = Array.Empty<H3Index>(),
+                ParentHex = CenterHex,
+                LocalCenter = LocalGrid.Center,
+                LocalFootprint = Array.Empty<LocalCell>(),
             },
         });
 
@@ -233,8 +237,9 @@ public class CampaignStoreTests : IDisposable
             new BuildingInstance
             {
                 DefId = "first",
-                CenterHex = CenterHex,
-                Footprint = Array.Empty<H3Index>(),
+                ParentHex = CenterHex,
+                LocalCenter = LocalGrid.Center,
+                LocalFootprint = Array.Empty<LocalCell>(),
             },
         });
         store.SaveRegion(123, new[]
@@ -242,8 +247,9 @@ public class CampaignStoreTests : IDisposable
             new BuildingInstance
             {
                 DefId = "second",
-                CenterHex = CenterHex,
-                Footprint = Array.Empty<H3Index>(),
+                ParentHex = CenterHex,
+                LocalCenter = LocalGrid.Center,
+                LocalFootprint = Array.Empty<LocalCell>(),
             },
         });
 
@@ -346,6 +352,236 @@ public class CampaignStoreTests : IDisposable
         Assert.False(File.Exists(store.RegionPath(1)));
         Assert.False(File.Exists(store.RegionPath(1) + ".bak"));
         Assert.False(File.Exists(store.RegionPath(2)));
+    }
+
+    [Fact]
+    public void Region_V3RoundTripsTwoInstallationsInOneSite()
+    {
+        var store = new CampaignStore(_root);
+        var parent = new H3Index(12345);
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        var buildings = new[]
+        {
+            new BuildingInstance
+            {
+                Id = firstId,
+                DefId = "rtg_generator",
+                ParentHex = parent,
+                LocalCenter = new LocalCell(0, 0),
+                LocalFootprint = new[] { LocalGrid.Center },
+            },
+            new BuildingInstance
+            {
+                Id = secondId,
+                DefId = "habitat",
+                ParentHex = parent,
+                LocalCenter = new LocalCell(1, 0),
+                LocalFootprint = new[] { new LocalCell(1, 0) },
+            },
+        };
+
+        store.SaveRegion(123, buildings);
+        var json = File.ReadAllText(store.RegionPath(123));
+        Assert.Contains("\"version\": 3", json);
+        Assert.Contains("\"sites\"", json);
+        Assert.Contains("\"localCenter\"", json);
+        Assert.DoesNotContain("\"footprint\"", json);
+
+        var loaded = store.LoadRegion(123);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(2, loaded.Buildings.Count);
+        Assert.Equal(firstId, loaded.Buildings[0].Id);
+        Assert.Equal(new LocalCell(0, 0), loaded.Buildings[0].LocalCenter);
+        Assert.Equal(secondId, loaded.Buildings[1].Id);
+        Assert.Equal(new LocalCell(1, 0), loaded.Buildings[1].LocalCenter);
+        Assert.All(loaded.Buildings, building =>
+        {
+            Assert.Equal((ulong)parent, (ulong)building.ParentHex);
+            Assert.Empty(building.LocalFootprint);
+        });
+        Assert.Equal(2, store.CountStoredBuildings().Buildings);
+    }
+
+    [Fact]
+    public void Region_V3MissingSitesIsRejected()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        File.WriteAllText(store.RegionPath(123), """
+            { "format": "spm-campaign", "version": 3, "region": "123" }
+            """);
+
+        var error = Assert.Throws<InvalidDataException>(() => store.LoadRegion(123));
+
+        Assert.Contains("missing 'sites'", error.Message);
+    }
+
+    [Fact]
+    public void Region_V3LegacyBuildingsAreRejected()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        File.WriteAllText(store.RegionPath(123), $$"""
+            {
+              "format": "spm-campaign",
+              "version": 3,
+              "region": "123",
+              "sites": [],
+              "buildings": [
+                { "defId": "rtg_generator", "centerHex": "{{(ulong)CenterHex}}" }
+              ]
+            }
+            """);
+
+        var error = Assert.Throws<InvalidDataException>(() => store.LoadRegion(123));
+
+        Assert.Contains("legacy 'buildings'", error.Message);
+    }
+
+    [Fact]
+    public void Region_V3NullInstallationsAreTolerated()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        File.WriteAllText(store.RegionPath(123), $$"""
+            {
+              "format": "spm-campaign",
+              "version": 3,
+              "region": "123",
+              "sites": [
+                { "parentHex": "{{(ulong)CenterHex}}", "installations": null }
+              ]
+            }
+            """);
+
+        var loaded = store.LoadRegion(123);
+
+        Assert.Empty(loaded.Buildings);
+        Assert.Single(loaded.Warnings);
+        Assert.Contains("missing installations", loaded.Warnings[0]);
+    }
+
+    [Fact]
+    public void Region_MigratesV2ShardToOneSitePerCentreHex()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        var secondHex = (ulong)CenterHex + 1;
+        File.WriteAllText(store.RegionPath(123), $$"""
+            {
+              "format": "spm-campaign",
+              "version": 2,
+              "region": "123",
+              "buildings": [
+                {
+                  "id": "11111111-1111-1111-1111-111111111111",
+                  "defId": "rtg_generator",
+                  "centerHex": "{{(ulong)CenterHex}}",
+                  "progress": 0.75,
+                  "health": 42.0,
+                  "status": "Operational",
+                  "paused": true,
+                  "statusReason": "maintenance unpaid",
+                  "storedResources": { "power": 3.5 },
+                  "constructionStartTime": 10.0,
+                  "constructionCompleteTime": 34.0,
+                  "state": { "fuel": 12.0, "mode": "idle", "sealed": true }
+                },
+                {
+                  "defId": "habitat",
+                  "centerHex": "{{secondHex}}",
+                  "status": "Idle"
+                }
+              ]
+            }
+            """);
+
+        var loaded = store.LoadRegion(123);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(2, loaded.Buildings.Count);
+        var generator = loaded.Buildings[0];
+        Assert.Equal(Guid.Parse("11111111-1111-1111-1111-111111111111"), generator.Id);
+        Assert.Equal("rtg_generator", generator.DefId);
+        Assert.Equal((ulong)CenterHex, (ulong)generator.ParentHex);
+        Assert.Equal(LocalGrid.Center, generator.LocalCenter);
+        Assert.Equal(0.75, generator.Progress);
+        Assert.Equal(42.0, generator.Health);
+        Assert.Equal(BuildingStatus.Operational, generator.Status);
+        Assert.True(generator.Paused);
+        Assert.Equal("maintenance unpaid", generator.StatusReason);
+        Assert.Equal(3.5, generator.StoredResources["power"]);
+        Assert.Equal(10.0, generator.ConstructionStartTime);
+        Assert.Equal(34.0, generator.ConstructionCompleteTime);
+        Assert.Equal(12.0, generator.State["fuel"]);
+        Assert.Equal("idle", generator.State["mode"]);
+        Assert.Equal(true, generator.State["sealed"]);
+        Assert.Equal(secondHex, (ulong)loaded.Buildings[1].ParentHex);
+        Assert.Equal(BuildingStatus.Idle, loaded.Buildings[1].Status);
+        Assert.Equal(LocalGrid.Center, loaded.Buildings[1].LocalCenter);
+
+        // A subsequent save upgrades the shard without losing either site.
+        store.SaveRegion(123, loaded.Buildings);
+        var upgraded = store.LoadRegion(123);
+        Assert.Equal(2, upgraded.Buildings.Count);
+        Assert.Contains("\"version\": 3", File.ReadAllText(store.RegionPath(123)));
+    }
+
+    [Fact]
+    public void Region_MigratesV1ShardWithTheSameShape()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        File.WriteAllText(store.RegionPath(123), $$"""
+            {
+              "format": "spm-campaign",
+              "version": 1,
+              "region": "123",
+              "buildings": [
+                { "defId": "old_generator", "centerHex": "{{(ulong)CenterHex}}", "status": "Operational" }
+              ]
+            }
+            """);
+
+        var loaded = store.LoadRegion(123);
+
+        var building = Assert.Single(loaded.Buildings);
+        Assert.Equal("old_generator", building.DefId);
+        Assert.Equal((ulong)CenterHex, (ulong)building.ParentHex);
+        Assert.Equal(LocalGrid.Center, building.LocalCenter);
+        Assert.Equal(BuildingStatus.Operational, building.Status);
+    }
+
+    [Fact]
+    public void Region_RejectsUnsupportedVersion()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(Path.Combine(_root, "regions"));
+        File.WriteAllText(store.RegionPath(123), $$"""
+            { "format": "spm-campaign", "version": 99, "region": "123" }
+            """);
+
+        var error = Assert.Throws<InvalidDataException>(() => store.LoadRegion(123));
+
+        Assert.Contains("not supported", error.Message);
+    }
+
+    [Fact]
+    public void SlotView_RoundTripsSiteSelection()
+    {
+        var store = new CampaignStore(_root);
+        store.SaveSummary(new SlotSummary
+        {
+            Id = "slot",
+            Name = "Slot",
+            View = new SlotViewState { Mode = "site", SelectedHexOrdinal = 7 },
+        });
+
+        Assert.True(store.TryReadSummary(out var summary));
+        Assert.Equal("site", summary!.View.Mode);
+        Assert.Equal(7, summary.View.SelectedHexOrdinal);
     }
 
     public void Dispose()

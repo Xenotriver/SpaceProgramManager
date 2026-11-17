@@ -1,6 +1,7 @@
 using H3;
 using Sim.Buildings;
 using Sim.Campaign;
+using Sim.Site;
 using Xunit;
 
 namespace Sim.Tests;
@@ -243,7 +244,8 @@ public class CampaignSlotTests : IDisposable
     private static BuildingInstance Building(string defId) => new()
     {
         DefId = defId,
-        CenterHex = new H3Index(1),
-        Footprint = Array.Empty<H3Index>(),
+        ParentHex = new H3Index(1),
+        LocalCenter = LocalGrid.Center,
+        LocalFootprint = Array.Empty<LocalCell>(),
     };
 }

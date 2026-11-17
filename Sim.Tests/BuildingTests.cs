@@ -142,14 +142,17 @@ public class BuildingTests
         using var fixture = new BuildingFixture();
         using var world = fixture.Open();
         var tile = world.GetRegion((ulong)fixture.Region);
-
         var existing = new BuildingInstance
         {
             DefId = "existing",
-            CenterHex = tile.Cells[fixture.CenterOrdinal],
-            Footprint = new[] { tile.Cells[fixture.CenterOrdinal] },
+            ParentHex = tile.Cells[fixture.CenterOrdinal],
+            LocalCenter = LocalGrid.Center,
+            LocalFootprint = new[] { LocalGrid.Center },
         };
-        var occupancy = BuildingRegistry.BuildOccupancy(new[] { existing });
+        var occupancy = new Dictionary<ulong, BuildingInstance>
+        {
+            [(ulong)tile.Cells[fixture.CenterOrdinal]] = existing,
+        };
 
         var result = MakeDef("new").CanPlaceAt(tile, fixture.CenterOrdinal, world, Config, occupancy);
 
@@ -209,37 +212,6 @@ public class BuildingTests
         Assert.False(fail);
         Assert.Equal("nope", fail.Error);
         Assert.Empty(fail.Footprint);
-    }
-
-    [Fact]
-    public void BuildOccupancy_MapsEveryFootprintHexAndRejectsOverlap()
-    {
-        using var fixture = new BuildingFixture();
-        using var world = fixture.Open();
-        var tile = world.GetRegion((ulong)fixture.Region);
-        var center = tile.Cells[fixture.CenterOrdinal];
-        var footprint = MakeDef("large", footprintRadius: 1).BuildFootprint(tile, fixture.CenterOrdinal);
-
-        var building = new BuildingInstance
-        {
-            DefId = "large",
-            CenterHex = center,
-            Footprint = footprint,
-        };
-
-        var occupancy = BuildingRegistry.BuildOccupancy(new[] { building });
-
-        Assert.Equal(7, occupancy.Count);
-        Assert.All(footprint, hex => Assert.Same(building, occupancy[(ulong)hex]));
-
-        var overlapping = new BuildingInstance
-        {
-            DefId = "overlap",
-            CenterHex = center,
-            Footprint = new[] { center },
-        };
-
-        Assert.Throws<ArgumentException>(() => BuildingRegistry.BuildOccupancy(new[] { building, overlapping }));
     }
 
     [Fact]

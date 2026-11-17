@@ -35,10 +35,6 @@ public partial class ManagementView : Node2D
     [Signal]
     public delegate void ViewModeChangedEventHandler(int mode);
 
-    /// <summary>Active building definition changed.</summary>
-    [Signal]
-    public delegate void ActiveBuildingChangedEventHandler(string defId);
-
     private const float MinZoom = 0.6f;
     private const float MaxZoom = 10f;
     private const float DragThresholdPixels = 4f;
@@ -57,9 +53,7 @@ public partial class ManagementView : Node2D
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
     private CampaignState? _campaign;
-    private BuildingRegistry? _registry;
-    private BuildingDef? _activeBuilding;
-    private readonly List<BuildingDef> _buildingChoices = new();
+    private Font _font = null!;
 
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private Vector2[][] _rotatedCorners = Array.Empty<Vector2[]>();
@@ -133,19 +127,16 @@ public partial class ManagementView : Node2D
 
     public int HexCount => _tile?.HexCount ?? 0;
 
-    /// <summary>Buildings placed in this region.</summary>
+    /// <summary>Installations placed in this region.</summary>
     public int BuildingCount => _campaign is null || _tile is null ? 0 : _campaign.BuildingCount(_tile.Entry.Index);
+
+    /// <summary>Fine hexes in this region that contain at least one installation.</summary>
+    public int SiteCount => _campaign is null || _tile is null ? 0 : _campaign.Sites(_tile.Entry.Index).Count;
 
     public int SelectedHex => _selected;
 
-    /// <summary>The region tile (for placement).</summary>
+    /// <summary>The region tile displayed by this view.</summary>
     public RegionTile Tile => _tile;
-
-    /// <summary>Building selected for placement, or null before a registry is set.</summary>
-    public BuildingDef? ActiveBuilding => _activeBuilding;
-
-    /// <summary>Number of building definitions available for cycling.</summary>
-    public int BuildingChoiceCount => _buildingChoices.Count;
 
     /// <summary>Number of 60° steps in a full camera orbit.</summary>
     public const int RotationStepCount = 6;
@@ -326,86 +317,6 @@ public partial class ManagementView : Node2D
     /// <summary>Advances to the next overlay (wraps).</summary>
     public void CycleOverlay() => SetOverlay((RegionViewMode)(((int)Overlay + 1) % 4));
 
-    /// <summary>Sets the building catalogue used for placement and cycling.</summary>
-    public void SetBuildingRegistry(BuildingRegistry registry)
-    {
-        _registry = registry;
-        _buildingChoices.Clear();
-        _buildingChoices.AddRange(registry.All.Values
-            .OrderBy(def => def.Category)
-            .ThenBy(def => def.Id, StringComparer.Ordinal));
-
-        _activeBuilding = _buildingChoices.FirstOrDefault();
-    }
-
-    /// <summary>Selects the previous/next building definition.</summary>
-    public void CycleActiveBuilding(int direction)
-    {
-        if (_buildingChoices.Count == 0)
-            return;
-
-        var index = _activeBuilding is null
-            ? 0
-            : _buildingChoices.FindIndex(def => def.Id == _activeBuilding.Id);
-        if (index < 0)
-            index = 0;
-
-        index = ((index + direction) % _buildingChoices.Count + _buildingChoices.Count) % _buildingChoices.Count;
-        _activeBuilding = _buildingChoices[index];
-
-        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
-    }
-
-    /// <summary>Selects a building definition by id.</summary>
-    public bool SetActiveBuilding(string defId)
-    {
-        var def = _buildingChoices.FirstOrDefault(candidate => candidate.Id == defId);
-        if (def is null)
-            return false;
-
-        _activeBuilding = def;
-        EmitSignal(SignalName.ActiveBuildingChanged, _activeBuilding.Id);
-        return true;
-    }
-
-    /// <summary>Places the active building on the selected hex via the campaign.</summary>
-    public bool PlaceAt(RegionTile tile, int ordinal, CampaignState campaign, BuildingRegistry registry)
-    {
-        if (_activeBuilding is null || campaign is null)
-        {
-            GD.PushWarning("PlaceAt: no active building or campaign");
-            return false;
-        }
-
-        var result = campaign.TryPlace(_activeBuilding, tile, ordinal);
-        if (!result.Success)
-        {
-            GD.PushWarning($"placement: failed · {result.Error}");
-            return false;
-        }
-
-        _meshDirty = true;
-        QueueRedraw();
-        return true;
-    }
-
-    /// <summary>Removes the building on the selected hex via the campaign.</summary>
-    public bool RemoveAt(RegionTile tile, int ordinal, CampaignState campaign)
-    {
-        if (campaign is null)
-            return false;
-
-        if (!campaign.TryRemove(tile, ordinal, out var building) || building is null)
-        {
-            GD.PushWarning("No building on this hex");
-            return false;
-        }
-
-        _meshDirty = true;
-        QueueRedraw();
-        return true;
-    }
-
     /// <summary>Orbits the camera by whole 60° steps (positive is clockwise).</summary>
     public void Rotate(int steps) => SetRotation(_yawSteps + steps);
 
@@ -456,6 +367,8 @@ public partial class ManagementView : Node2D
 
     public override void _Ready()
     {
+        _font = ThemeDB.FallbackFont;
+
         var white = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
         white.Fill(Colors.White);
         _whiteTexture = ImageTexture.CreateFromImage(white);
@@ -834,29 +747,44 @@ public partial class ManagementView : Node2D
     }
 
     /// <summary>
-    /// Status-coloured pins for occupied hexes in the colony view. Drawn for every
-    /// overlay so a built region is never a needle in a haystack.
+    /// One aggregate pin per site. The colony view is an inspector: a parent hex
+    /// may hold many installations, so only the count and most urgent status are
+    /// drawn here. Placement happens inside the site view.
     /// </summary>
     private void DrawBuildingMarkers(float scale)
     {
-        foreach (var building in _campaign!.Buildings(_tile!.Entry.Index))
+        foreach (var group in _campaign!.Buildings(_tile!.Entry.Index)
+                     .GroupBy(building => (ulong)building.ParentHex))
         {
-            if (!_ordinalByIndex.TryGetValue((ulong)building.CenterHex, out var ordinal))
+            if (!_ordinalByIndex.TryGetValue(group.Key, out var ordinal))
                 continue;
 
-            var color = BuildingStatusColor(building.Status);
+            var installations = group.ToArray();
+            var color = BuildingStatusColor(AggregateStatus(installations));
             var center = ToScreen(_isoCenters[ordinal], scale);
             var radius = Mathf.Max(5f, _cellRadius * scale * 0.42f);
 
             DrawCircle(center, radius + 2f, new Color(0f, 0f, 0f, 0.75f));
             DrawCircle(center, radius, color);
 
-            if (building.Status == BuildingStatus.UnderConstruction)
+            if (installations.Length > 1)
             {
-                DrawArc(center, radius + 4f, 0f, Mathf.Tau * (float)building.Progress, 20,
-                    new Color(1f, 0.85f, 0.4f, 0.95f), 2f, true);
+                DrawString(_font, center + new Vector2(radius + 4f, -radius - 6f),
+                    installations.Length.ToString(), HorizontalAlignment.Left, -1, 11,
+                    new Color(0.98f, 0.98f, 1f));
             }
         }
+    }
+
+    private static BuildingStatus AggregateStatus(IReadOnlyList<BuildingInstance> installations)
+    {
+        var statuses = installations.Select(building => building.Status).ToList();
+        if (statuses.Contains(BuildingStatus.Destroyed)) return BuildingStatus.Destroyed;
+        if (statuses.Contains(BuildingStatus.Damaged)) return BuildingStatus.Damaged;
+        if (statuses.Contains(BuildingStatus.UnderConstruction)) return BuildingStatus.UnderConstruction;
+        if (statuses.Contains(BuildingStatus.Idle)) return BuildingStatus.Idle;
+        if (statuses.Contains(BuildingStatus.Operational)) return BuildingStatus.Operational;
+        return BuildingStatus.Planned;
     }
 
     private static Color BuildingStatusColor(BuildingStatus status) => status switch

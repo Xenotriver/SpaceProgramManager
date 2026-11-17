@@ -322,7 +322,13 @@ public readonly record struct PlacementResult
 
     public bool Success { get; init; }
     public string Error { get; init; } = string.Empty;
+
+    /// <summary>H3 footprint returned by the region-scale site validation.</summary>
     public IReadOnlyList<H3Index> Footprint { get; init; } = Array.Empty<H3Index>();
+
+    /// <summary>Local-cell footprint returned by site-scoped placement validation.</summary>
+    public IReadOnlyList<LocalCell> LocalFootprint { get; init; } = Array.Empty<LocalCell>();
+
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
     public static PlacementResult Ok(IReadOnlyList<H3Index>? footprint = null, IReadOnlyList<string>? warnings = null)
@@ -333,8 +339,22 @@ public readonly record struct PlacementResult
             Warnings = warnings ?? Array.Empty<string>(),
         };
 
+    public static PlacementResult OkLocal(
+        IReadOnlyList<LocalCell> footprint,
+        IReadOnlyList<string>? warnings = null)
+        => new()
+        {
+            Success = true,
+            LocalFootprint = footprint,
+            Warnings = warnings ?? Array.Empty<string>(),
+        };
+
     public static PlacementResult Fail(string error)
         => new() { Success = false, Error = error };
+
+    /// <summary>Failure that still carries a local footprint so the ghost can be drawn red.</summary>
+    public static PlacementResult FailLocal(string error, IReadOnlyList<LocalCell> footprint)
+        => new() { Success = false, Error = error, LocalFootprint = footprint };
 
     public static implicit operator bool(PlacementResult result) => result.Success;
 }
@@ -353,11 +373,14 @@ public sealed record BuildingInstance
     /// <summary>Reference to the building definition.</summary>
     public required string DefId { get; init; }
 
-    /// <summary>Center hex of the building.</summary>
-    public required H3Index CenterHex { get; init; }
+    /// <summary>Fine hex containing this installation's site.</summary>
+    public required H3Index ParentHex { get; init; }
 
-    /// <summary>All hexes occupied by this building.</summary>
-    public required IReadOnlyList<H3Index> Footprint { get; init; }
+    /// <summary>Centre cell of the installation inside the site's local grid.</summary>
+    public required LocalCell LocalCenter { get; init; }
+
+    /// <summary>All local cells occupied by this installation.</summary>
+    public required IReadOnlyList<LocalCell> LocalFootprint { get; init; }
 
     /// <summary>Construction progress 0..1.</summary>
     public double Progress { get; set; } = 0.0;

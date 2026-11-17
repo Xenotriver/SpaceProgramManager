@@ -2,22 +2,23 @@
 
 A space-agency management game built in **Godot 4.7 (.NET / C#)**. Real Solar
 System bodies are baked offline into an **H3** hexagonal grid; the runtime renders
-a globe, a per-region hex map, and a close-up isometric colony view where you
-place and remove buildings. Campaign state is engine-free and saved as JSON.
+a globe, a per-region hex map, a region-scale isometric colony view, and a close-up
+per-hex **site view** where installations are placed on a local grid. Campaign
+state is engine-free and saved as JSON.
 
 ## Status at a glance
 
-Snapshot: **2026-11-17**, M1 simulation loop, **113 tests passing**.
+Snapshot: **2026-11-17**, M3 site view, **132 tests passing**.
 
 | Area | State |
 |---|---|
 | Moon data pipeline | **Done** — 41,162 regions, 14,117,882 fine hexes, biome + crater + elevation |
-| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, campaign, save store, slot catalogue |
-| Godot runtime | **Done** — main menu, slots, globe, region view, isometric colony view, placement, save/load, CLI automation |
+| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, sites, campaign, save store, slot catalogue |
+| Godot runtime | **Done** — main menu, slots, globe, region/colony inspectors, site placement, save/load, CLI automation |
 | Campaign shell | **Done (M2)** — new/continue/load, manual save, toasts, pause scaffold, region search, settings |
-| Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement, save v2 |
-| Site view (per-hex grid) | **Planned** — see `docs/roadmap.md` |
-| Multi-body | **Planned** — Moon only today |
+| Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
+| Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
+| Multi-body | **Planned (M4)** — Moon only today |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -96,12 +97,9 @@ mouse for the same actions.
 |---|---|
 | Wheel / right drag | Zoom / pan |
 | Left click | Select hex; a second click plans a rover route |
-| `1` `2` `3` `4` / Tab | Biome / terrain / site score / buildings overlay |
+| `1` `2` `3` `4` / Tab | Biome / terrain / site score / sites overlay |
+| `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
 | `M` | Enter the colony view |
-| `,` `.` | Cycle the active building definition |
-| Left click (Buildings overlay) | Place the active building |
-| Del / Backspace (Buildings overlay) | Remove the hovered building |
-| `C` | Clear all buildings in the region |
 | Esc | Back to the globe |
 
 **Colony view (isometric)**
@@ -113,10 +111,24 @@ mouse for the same actions.
 | `Q` / `E` | Orbit the camera by 60° |
 | `[` / `]` | Decrease / increase relief exaggeration |
 | `1`–`4` / Tab | Overlay |
-| `C` | Place the active building at the selected hex |
-| Del / Backspace | Remove the building at the selected hex |
-| `,` `.` | Cycle the active building definition |
+| `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
 | Esc | Back to the region view |
+
+**Site view (per-hex grid)**
+
+| Input | Action |
+|---|---|
+| Wheel / right drag | Zoom / pan |
+| Hover | Preview the active building's local footprint |
+| Left click | Select a local cell and place the active building there |
+| `,` / `.` | Cycle the active building definition |
+| Del / Backspace | Remove the installation under the selection (or cursor) |
+| `C` | Clear installations in this site only |
+| Esc | Back to the region or colony view |
+
+Region and colony views are **inspectors**: they draw one aggregate marker per
+occupied fine hex with a count and the most urgent status. All placement and
+removal happens in the site view through `CampaignState`.
 
 A session starts at 1×. `Space` pauses/resumes the clock in every view; the pause
 menu also has direct Pause / 1× / 2× / 4× buttons. At 1× one real second is one
@@ -132,18 +144,24 @@ Everything after `--` is read as a user argument. Typical headless capture:
 ```sh
 godot --path Game -- --region=589971619905011711 --view=management \
   --overlay=terrain --rot=120 --shot=C:/tmp/colony.png
+
+# Site: two installations in one fine hex, then advance construction.
+godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
+  --active=air_reclaimer --place=0,0 --place=1,0 --advance=24 \
+  --shot=C:/tmp/site.png
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--region=<h3>` | Open a region by H3 index (restores the last active region when omitted) |
-| `--view=management` or `--iso` | Enter the colony view after loading the region |
-| `--overlay=biome\|terrain\|score\|buildings` | Select the overlay for the active mode |
+| `--view=region\|management\|site` | Select the active view; `--iso` aliases `management` |
+| `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
+| `--overlay=biome\|terrain\|score\|buildings\|sites` | Select the overlay for region/colony views |
 | `--rot=<degrees>` | Colony camera angle, quantised to the nearest 60° |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`) |
-| `--active=<defId>` | Select the building definition to place |
-| `--place=<ordinal>[,<ordinal>…]` | Place the active building at region hex ordinals |
-| `--route=<from>,<to>` | Plan a rover route between two hex ordinals |
+| `--active=<defId>` | Select the building definition to place; site view only |
+| `--place=<q>,<r>` | Place the active building at a local grid cell; repeat the flag for more installations; requires `--view=site` |
+| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals |
 | `--speed=<km/h>` | Rover base speed (default `10`) |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera |
 | `--slot=<id>` | Open a slot under the save root directly |
@@ -169,14 +187,14 @@ Campaigns live under `user://saves/<slotId>/`:
 ├─ campaign.json              # clock, treasury, stockpile, visited/active regions, bake fingerprint
 ├─ slot.json                  # derived list summary + last view (safe to delete)
 └─ regions/
-   └─ <h3-index>.json         # buildings for one region
+   └─ <h3-index>.json         # sites and installations for one region
 ```
 
 Writes are atomic and keep a `.bak`; unreadable shards are quarantined as
-`.corrupt` instead of being overwritten. The campaign schema is **v2**; v1 saves
-are migrated in memory with starting credits, stockpile and a deterministic RNG
-seed. Saving happens on every placement or removal, on pause, every 5 seconds,
-on `F5`, and on exit. See [`docs/save-format.md`](docs/save-format.md).
+`.corrupt` instead of being overwritten. The campaign schema is **v3**; v1 and v2
+saves are migrated in memory and upgraded only on the next save. Saving happens
+on every placement or removal, on pause, every 5 seconds, on `F5`, and on exit.
+See [`docs/save-format.md`](docs/save-format.md).
 
 ## Data pipeline
 
@@ -199,7 +217,10 @@ Robbins (2019) lunar crater catalogue. See [`docs/development.md`](docs/developm
 
 ## Design notes
 
-- **Fine hex** — H3 resolution 6 on the Moon (~0.9 km edge): the buildable cell.
+- **Fine hex** — H3 resolution 6 on the Moon (~0.9 km edge): a site container,
+  not a single-building slot.
+- **Site** — a radius-3 axial disk of **37** local cells inside one fine hex.
+  Installations occupy local cells; footprints are derived from the definition.
 - **Region** — H3 resolution 3 (~60 km): the data tile and overview unit. Each
   region contains **343** fine hexes (286 on the 12 pentagons).
 - Biomes are assigned by area share, then neighbour majority, then distance,

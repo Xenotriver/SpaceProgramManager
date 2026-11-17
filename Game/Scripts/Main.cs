@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Godot;
@@ -26,9 +27,11 @@ public partial class Main : Node2D
 
     private const string GlobeStatus = "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · Esc pause";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · M colony · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · Enter site · M colony · Esc back";
     private const string ManagementStatus =
-        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Esc back";
+        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Enter site · Esc back";
+    private const string SiteStatus =
+        "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -39,6 +42,7 @@ public partial class Main : Node2D
         Globe,
         Region,
         Management,
+        Site,
     }
 
     private BodyWorld _world = null!;
@@ -48,6 +52,7 @@ public partial class Main : Node2D
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
     private ManagementView _managementView = null!;
+    private SiteView _siteView = null!;
     private ShellOverlay _shell = null!;
     private CanvasLayer _worldLayer = null!;
     private GameSettings _settings = null!;
@@ -68,6 +73,8 @@ public partial class Main : Node2D
     private int _hoverHexes;
 
     private int _selectedHex = -1;
+    private int _siteParentOrdinal = -1;
+    private Mode _returnMode = Mode.Region;
     private string _selectedBiome = string.Empty;
     private int _selectedElevation;
     private CraterKind _selectedCrater;
@@ -121,9 +128,6 @@ public partial class Main : Node2D
         _regionView.RouteComputed += OnRouteComputed;
         _regionView.RouteCleared += OnRouteCleared;
         _regionView.ViewModeChanged += OnViewModeChanged;
-        _regionView.ActiveBuildingChanged += OnActiveBuildingChanged;
-        _regionView.BuildingsChanged += OnBuildingsChanged;
-        _regionView.PlacementFeedback += OnPlacementFeedback;
         _regionView.BaseSpeedKmh = FloatArgument("--speed", 10f);
 
         _registry = new BuildingRegistry(MoonBuildings.All);
@@ -133,8 +137,15 @@ public partial class Main : Node2D
         _managementView.HexHovered += OnHexHovered;
         _managementView.HexSelected += OnHexSelected;
         _managementView.ViewModeChanged += OnViewModeChanged;
-        _managementView.ActiveBuildingChanged += OnActiveBuildingChanged;
         _managementView.ReliefScale = FloatArgument("--relief", _settings.ReliefScale);
+
+        _siteView = new SiteView { Visible = false };
+        _worldLayer.AddChild(_siteView);
+        _siteView.HexHovered += OnSiteHexHovered;
+        _siteView.HexSelected += OnSiteHexSelected;
+        _siteView.ActiveBuildingChanged += OnActiveBuildingChanged;
+        _siteView.BuildingsChanged += OnBuildingsChanged;
+        _siteView.PlacementFeedback += OnPlacementFeedback;
 
         _shell = new ShellOverlay { SaveRootLabel = _settings.SaveRoot };
         AddChild(_shell);
@@ -225,9 +236,7 @@ public partial class Main : Node2D
         _campaignService.StatusChanged += QueueRedraw;
 
         _regionView.SetCampaign(_campaign);
-        _regionView.SetBuildingRegistry(_registry);
         _managementView.SetCampaign(_campaign);
-        _managementView.SetBuildingRegistry(_registry);
 
         _campaignService.Load();
         _started = true;
@@ -263,6 +272,11 @@ public partial class Main : Node2D
         {
             ShowRegion(activeRegion);
         }
+        else if (string.Equals(view.Mode, "site", StringComparison.OrdinalIgnoreCase)
+                 && view.SelectedHexOrdinal is { } restoredHex)
+        {
+            ShowSite(restoredHex);
+        }
 
         _managementView.SetRotation(view.ColonyRotationSteps);
         SetOverlay(ParseOverlay(view.Overlay));
@@ -291,6 +305,7 @@ public partial class Main : Node2D
         _globe.Visible = true;
         _regionView.Visible = false;
         _managementView.Visible = false;
+        _siteView.Visible = false;
 
         var fingerprint = BakeFingerprint.From(_world.Manifest);
         _shell.OpenMenu(_catalogue.List(fingerprint), _settings.LastSlotId);
@@ -413,11 +428,22 @@ public partial class Main : Node2D
         }
 
         var view = ArgumentValue("--view");
-        if ((HasArgument("--iso")
-             || string.Equals(view, "management", StringComparison.OrdinalIgnoreCase))
-            && _mode == Mode.Region)
+        if (string.Equals(view, "site", StringComparison.OrdinalIgnoreCase))
         {
-            ShowManagement();
+            var hex = IntArgument("--hex", 0);
+            ShowSite(hex);
+        }
+        else if (string.Equals(view, "region", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_regionView.IsLoaded)
+                ShowRegion(_regionView.RegionIndex);
+        }
+        else if (HasArgument("--iso")
+                 || string.Equals(view, "management", StringComparison.OrdinalIgnoreCase))
+        {
+            // The CLI view overrides the slot's restored mode, including site.
+            if (_regionView.IsLoaded)
+                ShowManagement();
         }
 
         var route = ArgumentValue("--route");
@@ -447,26 +473,35 @@ public partial class Main : Node2D
         var active = ArgumentValue("--active");
         if (active is not null)
         {
-            var success = _mode == Mode.Management
-                ? _managementView.SetActiveBuilding(active)
-                : _regionView.SetActiveBuilding(active);
-            if (!success)
+            if (_mode != Mode.Site)
+                GD.PushWarning("--active requires --view=site (region and colony views are inspectors)");
+            else if (!_siteView.SetActiveBuilding(active))
                 GD.PushWarning($"Unknown building id: {active}");
         }
 
-        var place = ArgumentValue("--place");
-        if (place is not null)
+        var places = ArgumentValues("--place").ToArray();
+        if (_mode == Mode.Site)
         {
-            foreach (var part in place.Split(','))
+            // Site view uses axial coordinates: --place=q,r. Repeating the flag
+            // places several installations in the same site in order.
+            foreach (var place in places)
             {
-                if (int.TryParse(part, out var ordinal))
+                var parts = place.Split(',');
+                if (parts.Length == 2
+                    && int.TryParse(parts[0], out var q)
+                    && int.TryParse(parts[1], out var r))
                 {
-                    if (_mode == Mode.Region)
-                        _regionView.PlaceActiveBuildingAt(ordinal);
-                    else if (_mode == Mode.Management && _managementView.Tile is not null)
-                        _managementView.PlaceAt(_managementView.Tile, ordinal, _campaign, _registry);
+                    _siteView.PlaceAt(q, r);
+                }
+                else
+                {
+                    GD.PushWarning($"Invalid site placement '--place={place}' (expected q,r)");
                 }
             }
+        }
+        else if (places.Length > 0)
+        {
+            GD.PushWarning("--place requires --view=site (use --place=q,r)");
         }
 
         // Automation hook: advance the loaded regions immediately, e.g.
@@ -479,6 +514,7 @@ public partial class Main : Node2D
             _campaignService.SaveSimulation();
             _regionView.QueueRedraw();
             _managementView.QueueRedraw();
+            _siteView.QueueRedraw();
             GD.Print($"time: advanced {report.Hours:F2} h · {report.Steps} step(s) · " +
                      $"{report.Completed} completed · {report.Idled} idled");
             QueueRedraw();
@@ -522,8 +558,10 @@ public partial class Main : Node2D
         {
             Mode.Management => "management",
             Mode.Region => "region",
+            Mode.Site => "site",
             _ => "globe",
         },
+        SelectedHexOrdinal = _mode == Mode.Site ? _siteParentOrdinal : null,
         GlobeYawDegrees = _globe.YawDegrees,
         GlobePitchDegrees = _globe.PitchDegrees,
         GlobeZoom = _globe.Zoom,
@@ -602,6 +640,8 @@ public partial class Main : Node2D
                     _regionView.QueueRedraw();
                 else if (_mode == Mode.Management)
                     _managementView.QueueRedraw();
+                else if (_mode == Mode.Site)
+                    _siteView.QueueRedraw();
 
                 QueueRedraw();
             }
@@ -618,6 +658,8 @@ public partial class Main : Node2D
             _regionView.QueueRedraw();
         else if (_benchRedraw && _mode == Mode.Management)
             _managementView.QueueRedraw();
+        else if (_benchRedraw && _mode == Mode.Site)
+            _siteView.QueueRedraw();
 
         if (!_reportFps)
             return;
@@ -631,6 +673,8 @@ public partial class Main : Node2D
             Mode.Region => $" · draw avg {_regionView.AverageDrawMs:F2} ms · last {_regionView.LastDrawMs:F2} ms",
             Mode.Management =>
                 $" · draw avg {_managementView.AverageDrawMs:F2} ms · last {_managementView.LastDrawMs:F2} ms",
+            Mode.Site =>
+                $" · draw avg {_siteView.AverageDrawMs:F2} ms · last {_siteView.LastDrawMs:F2} ms",
             _ => string.Empty,
         };
 
@@ -639,6 +683,7 @@ public partial class Main : Node2D
         _frameSeconds = 0;
         _regionView.ResetDrawStats();
         _managementView.ResetDrawStats();
+        _siteView.ResetDrawStats();
     }
 
     public override void _Draw()
@@ -682,6 +727,11 @@ public partial class Main : Node2D
                 RefreshMarkers();
                 break;
 
+            case Key.Enter when _mode is Mode.Region or Mode.Management:
+            case Key.KpEnter when _mode is Mode.Region or Mode.Management:
+                ShowSite(_selectedHex >= 0 ? _selectedHex : 0);
+                break;
+
             case Key.Key1 when _mode is Mode.Region or Mode.Management:
                 SetOverlay(RegionViewMode.Biome);
                 break;
@@ -718,49 +768,28 @@ public partial class Main : Node2D
                 ShowManagement();
                 break;
 
-            case Key.Comma when _mode == Mode.Region:
-                _regionView.CycleActiveBuilding(-1);
+            case Key.Comma when _mode == Mode.Site:
+                _siteView.CycleActiveBuilding(-1);
                 break;
 
-            case Key.Period when _mode == Mode.Region:
-                _regionView.CycleActiveBuilding(1);
+            case Key.Period when _mode == Mode.Site:
+                _siteView.CycleActiveBuilding(1);
                 break;
 
-            case Key.Comma when _mode == Mode.Management:
-                _managementView.CycleActiveBuilding(-1);
+            case Key.C when _mode == Mode.Site && !key.CtrlPressed:
+                _siteView.ClearInstallations();
                 break;
 
-            case Key.Period when _mode == Mode.Management:
-                _managementView.CycleActiveBuilding(1);
+            case Key.Delete when _mode == Mode.Site:
+            case Key.Backspace when _mode == Mode.Site:
+                _siteView.RemoveSelected();
                 break;
 
-            case Key.C when _mode == Mode.Region && !key.CtrlPressed:
-                _regionView.ClearBuildings();
-                break;
-
-            case Key.C when _mode == Mode.Management && !key.CtrlPressed:
-                if (_managementView.SelectedHex >= 0 && _campaign is not null)
-                {
-                    // Place active building at selected hex
-                    var tile = _regionView.Tile;
-                    if (tile is not null)
-                    {
-                        var ordinal = _managementView.SelectedHex;
-                        _managementView.PlaceAt(tile, ordinal, _campaign, _registry);
-                    }
-                }
-                break;
-
-            case Key.Delete when _mode == Mode.Management:
-            case Key.Backspace when _mode == Mode.Management:
-                if (_managementView.SelectedHex >= 0 && _campaign is not null)
-                {
-                    var tile = _regionView.Tile;
-                    if (tile is not null)
-                    {
-                        _managementView.RemoveAt(tile, _managementView.SelectedHex, _campaign);
-                    }
-                }
+            case Key.Escape when _mode == Mode.Site:
+                if (_returnMode == Mode.Management)
+                    ShowManagement();
+                else
+                    ShowRegion(_regionView.RegionIndex);
                 break;
 
             case Key.Escape when _mode == Mode.Management:
@@ -791,6 +820,7 @@ public partial class Main : Node2D
         _regionView.Load(_world, regionIndex);
         _regionView.Visible = true;
         _managementView.Visible = false;
+        _siteView.Visible = false;
         _globe.Visible = false;
         _mode = Mode.Region;
         _status = RegionStatus;
@@ -810,6 +840,7 @@ public partial class Main : Node2D
         _managementView.Load(_world, _regionView.RegionIndex);
         _managementView.Visible = true;
         _regionView.Visible = false;
+        _siteView.Visible = false;
         _globe.Visible = false;
         _status = ManagementStatus;
         _selectedHex = -1;
@@ -819,10 +850,42 @@ public partial class Main : Node2D
         QueueRedraw();
     }
 
+    private void ShowSite(int hexOrdinal)
+    {
+        if (!_regionView.IsLoaded)
+        {
+            GD.PushWarning("Open a region before opening a site.");
+            return;
+        }
+
+        var tile = _regionView.Tile;
+        if ((uint)hexOrdinal >= (uint)tile.HexCount)
+        {
+            GD.PushWarning($"Hex ordinal {hexOrdinal} is outside this region (0..{tile.HexCount - 1}).");
+            return;
+        }
+
+        _campaignService.EnsureRegionLoaded(tile.Entry.Index);
+        _returnMode = _mode == Mode.Management ? Mode.Management : Mode.Region;
+        _siteParentOrdinal = hexOrdinal;
+
+        _siteView.Load(_world, tile, hexOrdinal, _campaign, _registry);
+        _siteView.Visible = true;
+        _regionView.Visible = false;
+        _managementView.Visible = false;
+        _globe.Visible = false;
+        _mode = Mode.Site;
+        _status = SiteStatus;
+        _selectedHex = -1;
+        RefreshMarkers();
+        QueueRedraw();
+    }
+
     private void ShowGlobe()
     {
         _regionView.Visible = false;
         _managementView.Visible = false;
+        _siteView.Visible = false;
         _globe.Visible = true;
         _mode = Mode.Globe;
         _status = GlobeStatus;
@@ -865,7 +928,7 @@ public partial class Main : Node2D
     {
         if (ordinal < 0)
         {
-            _status = RegionStatus;
+            _status = _mode == Mode.Management ? ManagementStatus : RegionStatus;
             QueueRedraw();
             return;
         }
@@ -880,6 +943,20 @@ public partial class Main : Node2D
         _selectedBiome = biomeId;
         _selectedElevation = elevationM;
         _selectedCrater = (CraterKind)craterKind;
+        QueueRedraw();
+    }
+
+    private void OnSiteHexHovered(int q, int r)
+    {
+        _status = q == -1 && r == -1
+            ? SiteStatus
+            : $"site cell ({q},{r}) · click to place · Del remove · , / . cycle";
+        QueueRedraw();
+    }
+
+    private void OnSiteHexSelected(int q, int r)
+    {
+        _status = $"site cell ({q},{r})";
         QueueRedraw();
     }
 
@@ -908,14 +985,14 @@ public partial class Main : Node2D
             {
                 RegionViewMode.Terrain => "colony · terrain relief · Q/E rotate · [ ] exaggeration · Tab cycle",
                 RegionViewMode.SiteScore => "colony · site-score relief · Q/E rotate · Tab cycle",
-                RegionViewMode.Buildings => "colony · building overlay · Q/E rotate · Tab cycle",
+                RegionViewMode.Buildings => "colony · sites overlay · Q/E rotate · Enter opens site",
                 _ => ManagementStatus,
             }
             : overlay switch
             {
                 RegionViewMode.Terrain => "terrain overlay · Tab to cycle · 1-4 mode",
                 RegionViewMode.SiteScore => "site-score heatmap (7-hex footprint) · Tab to cycle",
-                RegionViewMode.Buildings => "buildings overlay · click place · Del remove · C clear",
+                RegionViewMode.Buildings => "sites overlay · Enter opens selected site · 1-4 mode",
                 _ => RegionStatus,
             };
 
@@ -924,19 +1001,13 @@ public partial class Main : Node2D
 
     private void OnActiveBuildingChanged(string defId)
     {
-        if (_mode == Mode.Management)
-        {
-            var def = _managementView.ActiveBuilding;
-            _status = def is not null
-                ? $"active: {def.DisplayName} · click hex · C place · Del remove · , / . cycle"
-                : $"active: {defId}";
-        }
-        else
-        {
-            _status = _registry.TryGet(defId, out var def) && def is not null
-                ? $"active: {def.DisplayName} · click to place · , / . cycle"
-                : $"active: {defId}";
-        }
+        if (_mode != Mode.Site)
+            return;
+
+        var def = _siteView.ActiveBuilding;
+        _status = def is not null
+            ? $"active: {def.DisplayName} · click cell · , / . cycle · Del remove"
+            : $"active: {defId}";
 
         QueueRedraw();
     }
@@ -979,6 +1050,10 @@ public partial class Main : Node2D
 
             case Mode.Management:
                 DrawManagementPanel();
+                break;
+
+            case Mode.Site:
+                DrawSitePanel();
                 break;
 
             default:
@@ -1075,7 +1150,9 @@ public partial class Main : Node2D
         else
         {
             DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 158),
-                mode == RegionViewMode.Buildings ? "click to place · Del remove · C clear" : "click two hexes for a route preview",
+                mode == RegionViewMode.Buildings
+                    ? "Enter opens the selected site"
+                    : "click two hexes for a route preview",
                 HorizontalAlignment.Left, -1, 12, MutedText);
         }
 
@@ -1114,12 +1191,105 @@ public partial class Main : Node2D
                 break;
 
             case RegionViewMode.Buildings:
-                DrawBuildingLegend(y);
+                DrawSiteLegend(y);
                 break;
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height - 10),
             "Esc back to globe · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
+    }
+
+    private void DrawSitePanel()
+    {
+        var tile = _siteView.IsLoaded ? _regionView.Tile : null;
+        var parentHex = tile is not null && (uint)_siteParentOrdinal < (uint)tile.HexCount
+            ? tile.Cells[_siteParentOrdinal]
+            : new H3Index(0);
+        var biomeId = tile is not null && (uint)_siteParentOrdinal < (uint)tile.HexCount
+            ? _world.Biomes[tile[_siteParentOrdinal].BiomeCode].Id
+            : string.Empty;
+        var installations = _siteView.Installations;
+        var active = _siteView.ActiveBuilding;
+
+        var rows = installations.Count == 0 ? 1 : Math.Min(installations.Count, MaxColonyRows);
+        var height = 226f + rows * LegendRowHeight + 18f;
+        var panel = new Rect2(PanelLeft, PanelTop, PanelWidth, height);
+
+        DrawRect(panel, PanelColor);
+        DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.55f, 0.9f, 0.75f, 0.9f));
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · SITE",
+            HorizontalAlignment.Left, -1, 17, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
+            $"{DisplayName(biomeId)} · hex {_siteParentOrdinal}", HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 70),
+            $"H3 {parentHex}", HorizontalAlignment.Left, -1, 11, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 94),
+            $"{_siteView.InstallationCount} installation(s) · 37 local cells", HorizontalAlignment.Left, -1, 12,
+            new Color(0.55f, 0.95f, 0.75f));
+
+        if (active is not null)
+        {
+            var color = string.IsNullOrWhiteSpace(active.FootprintColor)
+                ? new Color(0.85f, 0.85f, 0.92f)
+                : Color.FromHtml(active.FootprintColor);
+            DrawRect(new Rect2(PanelLeft + 18, PanelTop + 112, 12, 12), color);
+            DrawString(_font, new Vector2(PanelLeft + 38, PanelTop + 123), active.DisplayName,
+                HorizontalAlignment.Left, -1, 13, AccentText);
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 146),
+                $"{FootprintHexes(active)} local cell(s) · , / . cycle ({_siteView.BuildingChoiceCount})",
+                HorizontalAlignment.Left, -1, 11, MutedText);
+        }
+        else
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 123), "no building definitions",
+                HorizontalAlignment.Left, -1, 12, MutedText);
+        }
+
+        if (!_siteView.GhostValid && _siteView.GhostError.Length > 0)
+        {
+            var error = _siteView.GhostError.Length > 42 ? _siteView.GhostError[..39] + "..." : _siteView.GhostError;
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 166), error,
+                HorizontalAlignment.Left, -1, 11, new Color(1f, 0.62f, 0.55f));
+        }
+        else
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 166),
+                "click cell · Del remove · C clear this site", HorizontalAlignment.Left, -1, 11, MutedText);
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 190), "installations",
+            HorizontalAlignment.Left, -1, 11, MutedText);
+
+        var y = PanelTop + 210f;
+        if (installations.Count == 0)
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, y + 11), "empty site",
+                HorizontalAlignment.Left, -1, 12, MutedText);
+        }
+        else
+        {
+            var hidden = Math.Max(0, installations.Count - MaxColonyRows);
+            if (hidden > 0)
+                DrawString(_font, new Vector2(PanelLeft + 18, y + 11), $"+{hidden} more",
+                    HorizontalAlignment.Left, -1, 10, MutedText);
+
+            foreach (var building in installations.Take(MaxColonyRows))
+            {
+                var def = _registry.TryGet(building.DefId, out var found) ? found : null;
+                var name = def?.DisplayName ?? building.DefId;
+                var color = BuildingStatusColor(building.Status);
+
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), false, 1f);
+                DrawString(_font, new Vector2(PanelLeft + 38, y + 11),
+                    $"{name} · {building.LocalCenter}", HorizontalAlignment.Left, -1, 11, AccentText);
+                y += LegendRowHeight;
+            }
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height - 10),
+            "Enter/Esc navigate · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
     private void DrawManagementPanel()
@@ -1235,7 +1405,7 @@ public partial class Main : Node2D
                 $"elevation · {_managementView.TerrainMinM:N0} – {_managementView.TerrainMaxM:N0} m",
             RegionViewMode.SiteScore =>
                 $"site score · {_managementView.SiteScoreMin:P0} – {_managementView.SiteScoreMax:P0} · {_managementView.SiteScoreMs:F1} ms",
-            _ => "buildings",
+            _ => $"sites · {_managementView.SiteCount} occupied hexes",
         };
     }
 
@@ -1246,34 +1416,31 @@ public partial class Main : Node2D
             $"elevation · {_regionView.TerrainMinM:N0} – {_regionView.TerrainMaxM:N0} m",
         RegionViewMode.SiteScore =>
             $"site score · {_regionView.SiteScoreMin:P0} – {_regionView.SiteScoreMax:P0} · {_regionView.SiteScoreMs:F1} ms",
-        _ => $"buildings · {_regionView.Buildings.Count} placed",
+        _ => $"sites · {_regionView.SiteCount} occupied hexes",
     };
 
-    private void DrawBuildingLegend(float y)
+    private void DrawSiteLegend(float y)
     {
-        var active = _regionView.ActiveBuilding;
-        if (active is null)
-        {
-            DrawString(_font, new Vector2(PanelLeft + 18, y + 11), "no building definitions",
-                HorizontalAlignment.Left, -1, 12, MutedText);
-            return;
-        }
+        var buildings = _regionView.Buildings;
+        var sites = _regionView.SiteCount;
+        var status = sites == 0
+            ? BuildingStatus.Planned
+            : buildings.Select(building => building.Status).DefaultIfEmpty(BuildingStatus.Planned).Max();
 
-        var color = Color.FromHtml(active.FootprintColor);
-        DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
+        DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), BuildingStatusColor(status));
         DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
         DrawString(_font, new Vector2(PanelLeft + 38, y + 11),
-            $"{active.DisplayName} · {active.Category}", HorizontalAlignment.Left, -1, 13, AccentText);
+            $"{sites} site(s) · {buildings.Count} installation(s)",
+            HorizontalAlignment.Left, -1, 13, AccentText);
 
         y += LegendRowHeight;
-        var tech = string.IsNullOrEmpty(active.RequiredTech) ? string.Empty : $" · tech {active.RequiredTech}";
         DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
-            $"{FootprintHexes(active)} hex · min {active.MinSiteScore:P0}{tech}",
+            "one marker per occupied hex · count shown when > 1",
             HorizontalAlignment.Left, -1, 11, MutedText);
 
         y += LegendRowHeight;
         DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
-            $", / . cycle ({_regionView.BuildingChoiceCount}) · C clear",
+            "Enter opens a site · M switches to colony",
             HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
@@ -1283,14 +1450,16 @@ public partial class Main : Node2D
         if (buildings.Count == 0)
         {
             DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
-                "no buildings · C to place", HorizontalAlignment.Left, -1, 12, MutedText);
+                "no installations · open a site from region/colony view",
+                HorizontalAlignment.Left, -1, 12, MutedText);
             return;
         }
 
+        var sites = _campaign.Sites(regionIndex).Count;
         var hidden = Math.Max(0, buildings.Count - MaxColonyRows);
         var header = hidden == 0
-            ? $"colony · {buildings.Count} building(s) · Del remove · , / . cycle"
-            : $"colony · {buildings.Count} building(s) (+{hidden} more)";
+            ? $"colony · {sites} site(s) · {buildings.Count} installation(s)"
+            : $"colony · {sites} site(s) · {buildings.Count} installation(s) (+{hidden} more)";
         DrawString(_font, new Vector2(PanelLeft + 18, y + 11),
             header, HorizontalAlignment.Left, -1, 12, new Color(0.95f, 0.8f, 0.55f));
         y += LegendRowHeight;
@@ -1378,8 +1547,9 @@ public partial class Main : Node2D
             Mode.Globe when _hoverRegion != 0 => $"{_hoverBiome} · {_hoverHexes} hexes",
             Mode.Globe => "SPACE PROGRAM MANAGER · M1",
             Mode.Management =>
-                $"{ModeName(_managementView.Overlay)} · {_managementView.BuildingCount} buildings",
-            _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.Buildings.Count} buildings",
+                $"{ModeName(_managementView.Overlay)} · {_managementView.SiteCount} sites",
+            Mode.Site => $"SITE · {_siteView.InstallationCount} installations",
+            _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.SiteCount} sites",
         };
 
         DrawString(_font, new Vector2(size.X - 340, size.Y - 32), right,
@@ -1396,6 +1566,7 @@ public partial class Main : Node2D
         {
             Mode.Region when _regionView.IsLoaded => (ulong?)_regionView.RegionIndex,
             Mode.Management when _managementView.IsLoaded => (ulong?)_managementView.RegionIndex,
+            Mode.Site when _siteView.IsLoaded => (ulong?)_regionView.RegionIndex,
             _ => null,
         };
 
@@ -1440,7 +1611,7 @@ public partial class Main : Node2D
     {
         RegionViewMode.Terrain => "TERRAIN",
         RegionViewMode.SiteScore => "SITE SCORE",
-        RegionViewMode.Buildings => "BUILDINGS",
+        RegionViewMode.Buildings => "SITES",
         _ => "BIOME",
     };
 
@@ -1448,7 +1619,7 @@ public partial class Main : Node2D
     {
         "terrain" => RegionViewMode.Terrain,
         "score" or "sitescore" => RegionViewMode.SiteScore,
-        "buildings" or "building" => RegionViewMode.Buildings,
+        "buildings" or "building" or "sites" or "site" => RegionViewMode.Buildings,
         _ => RegionViewMode.Biome,
     };
 
@@ -1495,17 +1666,23 @@ public partial class Main : Node2D
     private static ulong UlongArgument(string name)
         => ulong.TryParse(ArgumentValue(name), out var value) ? value : 0UL;
 
-    private static string? ArgumentValue(string name)
+    private static IEnumerable<string> ArgumentValues(string name)
     {
         var prefix = name + "=";
         foreach (var argument in OS.GetCmdlineUserArgs())
         {
             if (argument.StartsWith(prefix, StringComparison.Ordinal))
-                return argument[prefix.Length..];
+                yield return argument[prefix.Length..];
         }
-
-        return null;
     }
+
+    private static string? ArgumentValue(string name) => ArgumentValues(name).FirstOrDefault();
+
+    private static int IntArgument(string name, int fallback)
+        => int.TryParse(ArgumentValue(name), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : fallback;
 
     private static string? FindShotPath() => ArgumentValue("--shot");
 
