@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 103` — 103 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 113` — 113 passed, 0 failed, 0 skipped on a machine with
 `data/moon` present. Tests that need the real bake **skip** when it is absent — do
 not make them fail. Set `SPM_REQUIRE_DATA=1` to turn that skip into a failure
 (intended for CI).
@@ -40,7 +40,7 @@ installs.
 | File | Tests | Covers |
 |---|---:|---|
 | `BuildingTests.cs` | 16 | Registry consistency, all placement rejection paths, footprint shape, boundary clipping, tech filtering, real-bake biome ids |
-| `CampaignStoreTests.cs` | 14 | Meta/shard round-trip, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering |
+| `CampaignStoreTests.cs` | 16 | Meta/shard round-trip, v1 → v2 migration, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering |
 | `CampaignSlotTests.cs` | 15 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/unreadable states, delete safety, view-state round-trip |
 | `CampaignTests.cs` | 11 | Place/remove/clear, preview footprint, install-from-save (unknown, overlap, clipped), visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
@@ -48,11 +48,9 @@ installs.
 | `HexGridTests.cs` | 5 | H3 index ↔ lat/long round-trip, 6 neighbours on a normal cell, region parent/children, canonical H3 example |
 | `MovementModelTests.cs` | 6 | Uphill/downhill multipliers, crater penalties, non-stacking rule |
 | `RoutePlannerTests.cs` | 6 | Cheapest-time path, crater on destination, unreachable goal, empty route, leg totals |
+| `SimulationTests.cs` | 8 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, deterministic replay, 5-neighbour pentagon |
 | `SiteScoringTests.cs` | 6 | Composite factors, viability threshold, weight presets, resource deposit, config defaults |
 | `WorldLoaderTests.cs` | 15 | Data-root resolution, manifest + tile-header validation, synthetic bake (343 + 286), real Moon bake |
-
-Known gap: no test asserts **5 neighbours on a pentagon cell** (pentagon *child
-order* is covered). Tracked as an M1 task in [`roadmap.md`](roadmap.md).
 
 ## 3. Run the game
 
@@ -111,6 +109,8 @@ $shot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\colony.png'
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign. |
 | `--nosave` | Disable persistence for this run. |
+| `--time=<0\|1\|2\|4>` | Starting clock speed (default `1×`; `0` pauses). |
+| `--advance=<hours>` | Tick loaded regions immediately, save, then continue (e.g. finish a 24 h build). |
 | `--shot=<png>` | Wait a few frames, save a screenshot, quit. |
 | `--fps` | Print FPS plus per-view draw timings. |
 | `--redraw` | Force a redraw every frame (benchmarking). |

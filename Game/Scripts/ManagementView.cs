@@ -480,6 +480,9 @@ public partial class ManagementView : Node2D
 
         DrawGridOutlines(scale);
 
+        if (_campaign is not null && _tile is not null)
+            DrawBuildingMarkers(scale);
+
         if (_hovered >= 0)
             DrawCellOutline(_hovered, scale, HoverColor, 2f);
 
@@ -829,6 +832,43 @@ public partial class ManagementView : Node2D
 
         DrawMultiline(_outlinePoints, BorderColor, 1f, false);
     }
+
+    /// <summary>
+    /// Status-coloured pins for occupied hexes in the colony view. Drawn for every
+    /// overlay so a built region is never a needle in a haystack.
+    /// </summary>
+    private void DrawBuildingMarkers(float scale)
+    {
+        foreach (var building in _campaign!.Buildings(_tile!.Entry.Index))
+        {
+            if (!_ordinalByIndex.TryGetValue((ulong)building.CenterHex, out var ordinal))
+                continue;
+
+            var color = BuildingStatusColor(building.Status);
+            var center = ToScreen(_isoCenters[ordinal], scale);
+            var radius = Mathf.Max(5f, _cellRadius * scale * 0.42f);
+
+            DrawCircle(center, radius + 2f, new Color(0f, 0f, 0f, 0.75f));
+            DrawCircle(center, radius, color);
+
+            if (building.Status == BuildingStatus.UnderConstruction)
+            {
+                DrawArc(center, radius + 4f, 0f, Mathf.Tau * (float)building.Progress, 20,
+                    new Color(1f, 0.85f, 0.4f, 0.95f), 2f, true);
+            }
+        }
+    }
+
+    private static Color BuildingStatusColor(BuildingStatus status) => status switch
+    {
+        BuildingStatus.Planned => new Color(0.65f, 0.65f, 0.75f),
+        BuildingStatus.UnderConstruction => new Color(1f, 0.78f, 0.32f),
+        BuildingStatus.Operational => new Color(0.32f, 0.95f, 0.55f),
+        BuildingStatus.Idle => new Color(0.45f, 0.72f, 1f),
+        BuildingStatus.Damaged => new Color(0.95f, 0.5f, 0.3f),
+        BuildingStatus.Destroyed => new Color(0.35f, 0.35f, 0.4f),
+        _ => new Color(0.9f, 0.9f, 0.95f),
+    };
 
     private void DrawCellOutline(int ordinal, float scale, Color color, float width)
     {

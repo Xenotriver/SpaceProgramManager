@@ -187,18 +187,20 @@ polygon containment.
 | New body | `pipeline/spm/bodies.py`, bake, then `BodyWorld.Open`; `Main.OpenMoon()` is currently hardcoded |
 | New overlay | `RegionViewMode`, palette in `RegionPalettes`, fill computation in `RegionView`/`ManagementView` |
 | New building | Add a `BuildingDef` to `MoonBuildings`, keep `MoonBuildings_AreConsistent` green |
-| Simulation tick | New `Sim/Time` project folder; `CampaignState.Tick(hours)`; drive from `Main._Process` |
+| Simulation tick | `Sim/Time/SimulationClock.cs` + `CampaignState.Tick(hours)`; already driven from `Main._Process` |
 | Site view | New view over one hex; reuse `IsoProjection` and the campaign shard |
 | Save migration | `CampaignStore.Version` + `EnsureSupported` + migration tests |
 
 ## 9. Known constraints
 
-- Single body, single open region, no simulation clock.
+- Single body and one open region; the clock now runs, but `CampaignState.Tick`
+  only simulates regions installed in memory so the globe stays cheap.
 - Building footprints may not overlap, although the design intends multiple
   installations per hex (plan §2.5). The per-hex site view is where that is meant
   to be resolved.
-- `RequiredTech` is displayed but not enforced at placement; `Cost` is data only.
-- `Main.cs` (~1,150 lines) owns world HUD/input and startup; `ShellOverlay`
-  (~680 lines) owns the menu/pause/settings screens since M2. Further screen
-  splitting is deferred until the clock UI lands.
+- `RequiredTech` and `Cost` are enforced at placement; the tech *selection* UI is
+  still M5, so `UnlockTech` is currently only reachable from code/tests.
+- `Main.cs` (~1,370 lines) owns world HUD/input, simulation clock and startup;
+  `ShellOverlay` owns the menu/pause/time/settings screens since M2. Further
+  screen splitting remains deferred.
 - No CI, analyzers, or automated screenshot regression yet.

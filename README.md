@@ -7,7 +7,7 @@ place and remove buildings. Campaign state is engine-free and saved as JSON.
 
 ## Status at a glance
 
-Snapshot: **2026-11-16**, M2 campaign shell, **103 tests passing**.
+Snapshot: **2026-11-17**, M1 simulation loop, **113 tests passing**.
 
 | Area | State |
 |---|---|
@@ -15,7 +15,7 @@ Snapshot: **2026-11-16**, M2 campaign shell, **103 tests passing**.
 | Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, campaign, save store, slot catalogue |
 | Godot runtime | **Done** — main menu, slots, globe, region view, isometric colony view, placement, save/load, CLI automation |
 | Campaign shell | **Done (M2)** — new/continue/load, manual save, toasts, pause scaffold, region search, settings |
-| Simulation loop | **Next (M1)** — no clock, construction progress, economy, power/life support or tech unlocks |
+| Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement, save v2 |
 | Site view (per-hex grid) | **Planned** — see `docs/roadmap.md` |
 | Multi-body | **Planned** — Moon only today |
 
@@ -72,7 +72,7 @@ mouse for the same actions.
 | New campaign | Create an auto-named slot and start immediately |
 | Load campaign | Pick a slot; `×` deletes after confirmation |
 | Settings | Save root, keybind reference, open save folder |
-| Pause (`Esc` in game) | Resume, save now (`F5`), load, settings, main menu, quit |
+| Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
 
 **Globe**
@@ -85,6 +85,7 @@ mouse for the same actions.
 | Left click | Open the region under the cursor |
 | `/` | Jump to an H3 index |
 | `Home` | Focus the active region |
+| `Space` | Pause / resume time (resumes at 1×) |
 | `F5` | Save now |
 | F12 | Screenshot to `user://moon_overview.png` |
 | Esc | Pause menu |
@@ -117,8 +118,12 @@ mouse for the same actions.
 | `,` `.` | Cycle the active building definition |
 | Esc | Back to the region view |
 
+A session starts at 1×. `Space` pauses/resumes the clock in every view; the pause
+menu also has direct Pause / 1× / 2× / 4× buttons. At 1× one real second is one
+game hour; steps are 0.25 h. The bottom-left HUD shows the day/hour, speed and credits, plus power
+supply/demand, idle count and the first status reason when a region is open.
 The bottom-right HUD shows the current save status. Saving is immediate on every
-placement or removal, and metadata is flushed on exit.
+placement or removal, on pause, every 5 seconds, and on exit.
 
 ## Command-line automation
 
@@ -147,6 +152,8 @@ godot --path Game -- --region=589971619905011711 --view=management \
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |
+| `--time=<0\|1\|2\|4>` | Starting speed (default `1×`; `0` pauses) |
+| `--advance=<hours>` | Tick loaded regions immediately, save, then continue |
 | `--shot=<png>` | Render a few frames, save a screenshot, quit |
 | `--fps` / `--redraw` / `--spin` | Print FPS + draw timings / force redraws / spin the globe |
 
@@ -166,8 +173,10 @@ Campaigns live under `user://saves/<slotId>/`:
 ```
 
 Writes are atomic and keep a `.bak`; unreadable shards are quarantined as
-`.corrupt` instead of being overwritten. Saving happens on every placement or
-removal, on `F5`, and on exit. See [`docs/save-format.md`](docs/save-format.md).
+`.corrupt` instead of being overwritten. The campaign schema is **v2**; v1 saves
+are migrated in memory with starting credits, stockpile and a deterministic RNG
+seed. Saving happens on every placement or removal, on pause, every 5 seconds,
+on `F5`, and on exit. See [`docs/save-format.md`](docs/save-format.md).
 
 ## Data pipeline
 

@@ -371,6 +371,18 @@ public sealed record BuildingInstance
     /// <summary>Operational status.</summary>
     public BuildingStatus Status { get; set; } = BuildingStatus.Planned;
 
+    /// <summary>
+    /// Player pause. Under construction it freezes progress; when operational it
+    /// stops production and consumption without losing the building.
+    /// </summary>
+    public bool Paused { get; set; }
+
+    /// <summary>
+    /// Why the building is not doing its job (power deficit, paused, missing
+    /// input). Empty while everything is nominal; shown in the HUD.
+    /// </summary>
+    public string StatusReason { get; set; } = string.Empty;
+
     /// <summary>Game time (hours) when construction started.</summary>
     public double ConstructionStartTime { get; init; }
 

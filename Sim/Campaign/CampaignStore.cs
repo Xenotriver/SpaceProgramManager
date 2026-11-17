@@ -22,7 +22,10 @@ public sealed class CampaignStore
     public const string FormatId = "spm-campaign";
 
     /// <summary>Current save schema version.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
+
+    /// <summary>Oldest schema that can be read and migrated in place.</summary>
+    public const int OldestSupportedVersion = 1;
 
     /// <summary>Format id written into <c>slot.json</c>.</summary>
     public const string SlotFormatId = "spm-slot";
@@ -66,6 +69,27 @@ public sealed class CampaignStore
     public string RegionPath(ulong regionIndex)
         => Path.Combine(RootDirectory, "regions", $"{regionIndex.ToString(CultureInfo.InvariantCulture)}.json");
 
+    /// <summary>
+    /// Region indices that have a shard on disk. Used for globe markers without
+    /// loading every region into memory.
+    /// </summary>
+    public IReadOnlyCollection<ulong> ListRegionIndices()
+    {
+        var directory = Path.Combine(RootDirectory, "regions");
+        if (!Directory.Exists(directory))
+            return Array.Empty<ulong>();
+
+        var indices = new List<ulong>();
+        foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (ulong.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var index))
+                indices.Add(index);
+        }
+
+        return indices;
+    }
+
     /// <summary>Writes campaign metadata, refusing to silently change the bake it belongs to.</summary>
     public void SaveMeta(CampaignMeta meta, BakeFingerprint fingerprint)
     {
@@ -84,6 +108,10 @@ public sealed class CampaignStore
             UpdatedUtc = meta.UpdatedUtc,
             GameTimeHours = meta.GameTimeHours,
             Credits = meta.Credits,
+            SciencePoints = meta.SciencePoints,
+            RngSeed = meta.RngSeed,
+            RngState = meta.RngState,
+            UnlockedTechs = meta.UnlockedTechs.OrderBy(tech => tech, StringComparer.Ordinal).ToList(),
             Stockpile = new Dictionary<string, double>(meta.Stockpile, StringComparer.Ordinal),
             VisitedRegions = meta.VisitedRegions
                 .OrderBy(index => index)
@@ -138,16 +166,45 @@ public sealed class CampaignStore
             UpdatedUtc = dto.UpdatedUtc,
             GameTimeHours = dto.GameTimeHours,
             Credits = dto.Credits,
+            SciencePoints = dto.SciencePoints,
             ActiveRegionIndex = TryParseHex(dto.ActiveRegion, out var active) ? active : null,
         };
 
+        // The constructor seeds starting stockpile/tech; a stored campaign is
+        // authoritative, so clear before applying what it actually has.
+        meta.Stockpile.Clear();
+        meta.UnlockedTechs.Clear();
+
         foreach (var (resource, amount) in dto.Stockpile)
             meta.Stockpile[resource] = amount;
+
+        foreach (var tech in dto.UnlockedTechs)
+        {
+            if (!string.IsNullOrWhiteSpace(tech))
+                meta.UnlockedTechs.Add(tech);
+        }
 
         foreach (var text in dto.VisitedRegions)
         {
             if (TryParseHex(text, out var index))
                 meta.VisitedRegions.Add(index);
+        }
+
+        if (dto.Version == 1)
+        {
+            // v1 had no economy, tech or RNG. Seed from the stored creation time
+            // (not the CampaignMeta constructor's clock), then give the migrated
+            // save the same starting means as a new campaign.
+            meta.RngSeed = CampaignDefaults.DeterministicSeed(meta.CreatedUtc);
+            meta.RngState = meta.RngSeed;
+            CampaignDefaults.Apply(meta);
+        }
+        else
+        {
+            meta.RngSeed = dto.RngSeed == 0
+                ? CampaignDefaults.DeterministicSeed(meta.CreatedUtc)
+                : dto.RngSeed;
+            meta.RngState = dto.RngState == 0 ? meta.RngSeed : dto.RngState;
         }
 
         return meta;
@@ -404,6 +461,8 @@ public sealed class CampaignStore
                 Status = Enum.TryParse<BuildingStatus>(stored.Status, ignoreCase: true, out var status)
                     ? status
                     : BuildingStatus.Planned,
+                Paused = stored.Paused,
+                StatusReason = stored.StatusReason ?? string.Empty,
                 StoredResources = new Dictionary<string, double>(
                     stored.StoredResources ?? new Dictionary<string, double>(),
                     StringComparer.Ordinal),
@@ -483,6 +542,8 @@ public sealed class CampaignStore
             Progress = building.Progress,
             Health = building.Health,
             Status = building.Status.ToString(),
+            Paused = building.Paused,
+            StatusReason = building.StatusReason.Length == 0 ? null : building.StatusReason,
             StoredResources = new Dictionary<string, double>(building.StoredResources, StringComparer.Ordinal),
             ConstructionStartTime = building.ConstructionStartTime,
             ConstructionCompleteTime = building.ConstructionCompleteTime,
@@ -510,9 +571,10 @@ public sealed class CampaignStore
         if (!string.Equals(format, FormatId, StringComparison.Ordinal))
             throw new InvalidDataException($"{path}: expected format '{FormatId}', got '{format}'.");
 
-        if (version != Version)
+        if (version < OldestSupportedVersion || version > Version)
             throw new InvalidDataException(
-                $"{path}: save version {version} is not supported (runtime supports {Version}).");
+                $"{path}: save version {version} is not supported (runtime supports " +
+                $"{OldestSupportedVersion}..{Version}).");
     }
 
     private static object? ToPrimitive(object? value) => value switch
@@ -583,6 +645,10 @@ public sealed class CampaignStore
         public DateTimeOffset UpdatedUtc { get; set; }
         public double GameTimeHours { get; set; }
         public double Credits { get; set; }
+        public double SciencePoints { get; set; }
+        public ulong RngSeed { get; set; }
+        public ulong RngState { get; set; }
+        public List<string> UnlockedTechs { get; set; } = new();
         public Dictionary<string, double> Stockpile { get; set; } = new();
         public List<string> VisitedRegions { get; set; } = new();
         public string? ActiveRegion { get; set; }
@@ -604,6 +670,8 @@ public sealed class CampaignStore
         public double Progress { get; set; }
         public double Health { get; set; } = 100.0;
         public string Status { get; set; } = nameof(BuildingStatus.Planned);
+        public bool Paused { get; set; }
+        public string? StatusReason { get; set; }
         public Dictionary<string, double>? StoredResources { get; set; }
         public double ConstructionStartTime { get; set; }
         public double? ConstructionCompleteTime { get; set; }

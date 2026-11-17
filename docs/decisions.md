@@ -290,8 +290,66 @@ load is already part of startup.
 
 ---
 
+## D17 — Fixed-step clock at 1 real second = 1 game hour
+
+**Commit:** M1, 2026-11-17 · **Status:** active
+
+**Decision.** `SimulationClock` accumulates real seconds and emits 0.25 game-hour
+steps. A session starts at 1× (one real second per game hour); the pause menu also
+offers 2× and 4×, and `--time=0` pins the clock for automation. `CampaignState.Tick`
+accepts any duration but subdivides it into the same step.
+
+**Why.** Fixed steps make construction, production and idling order reproducible
+and keep a long frame from changing outcomes. One hour per second makes a 24-hour
+solar array finish in 24 seconds at 1× — visible but not tedious; 4× is available
+for longer builds.
+
+**Cost.** Time is tied to frame deltas rather than wall-clock timestamps, so a
+suspended tab does not fast-forward. Only regions installed in memory are ticked;
+a fleet pass over all shards is future work.
+
+---
+
+## D18 — `RequiredTech` and `Cost` are authoritative
+
+**Commit:** M1, 2026-11-17 · **Status:** active
+
+**Decision.** `CampaignState.Preview` rejects a definition whose `RequiredTech` is
+locked, and `TryPlace` charges `Cost` (credits plus stockpile) atomically before it
+adds a building. A failed charge changes nothing. `BuildingRegistry.GetAvailableAtSite`
+still filters for UI, but it is no longer the only guard.
+
+**Why.** A view can be wrong or bypassed by automation; the campaign owner must be
+the single authority. All-or-nothing payment keeps an unaffordable placement from
+leaving a half-charged treasury.
+
+**Cost.** Tech selection has no UI yet (M5), so `UnlockTech` is currently reachable
+only from code and tests. Definition authors must keep costs affordable in the
+starting stockpile or mark the building as later-game content.
+
+---
+
+## D19 — Save v2 migrates v1 without overwriting it
+
+**Commit:** M1, 2026-11-17 · **Status:** active
+
+**Decision.** `campaign.json` and region shards move to version 2. Loading a v1 save
+is read-only: the runtime derives an RNG seed from the stored `createdUtc`, fills
+missing starting credits/stockpile, and defaults new building flags. The file is
+upgraded only on the next save. Versions outside 1–2 are refused and left untouched.
+
+**Why.** The M2 shell shipped with v1 saves in the wild, so a silent rewrite on load
+would risk losing player data. Deriving the seed from the save rather than the load
+time also keeps repeated loads deterministic.
+
+**Cost.** `LoadMeta` carries a migration branch that must be kept until v1 support
+is dropped. Every new schema field needs a migration rule and a fixture test.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
-multi-installation hexes, tech/cost enforcement, time scale, and bake-change save
-migration. The slot metadata layout is settled by D15.
+multi-installation hexes, site-view layout, and bake-change save migration.
+Tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
+layout is settled by D15.

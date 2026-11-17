@@ -17,6 +17,10 @@ public enum ShellCommand
     OpenSaveFolder,
     MainMenu,
     Quit,
+    PauseTime,
+    Speed1,
+    Speed2,
+    Speed4,
 }
 
 /// <summary>
@@ -40,6 +44,12 @@ public partial class ShellOverlay : Node2D
     private const float RowHeight = 46f;
     private const float FooterHeight = 58f;
     private const float ToastLifetime = 4.5f;
+
+    private static readonly int[] TimeSpeeds = { 0, 1, 2, 4 };
+    private static readonly ShellCommand[] TimeCommands =
+    {
+        ShellCommand.PauseTime, ShellCommand.Speed1, ShellCommand.Speed2, ShellCommand.Speed4,
+    };
 
     private static readonly Color PanelColor = new(0.045f, 0.055f, 0.075f, 0.97f);
     private static readonly Color RowColor = new(0.10f, 0.12f, 0.16f, 0.9f);
@@ -75,6 +85,16 @@ public partial class ShellOverlay : Node2D
 
     /// <summary>True while the slot list is showing (used to refresh it).</summary>
     public bool IsShowingSlots => _screen == Screen.Slots;
+
+    /// <summary>Current simulation multiplier shown by the pause-screen buttons.</summary>
+    public int TimeSpeed { get; private set; }
+
+    /// <summary>Updates the highlighted time button.</summary>
+    public void SetTimeSpeed(int speed)
+    {
+        TimeSpeed = speed is 1 or 2 or 4 ? speed : 0;
+        QueueRedraw();
+    }
 
     public override void _Ready()
     {
@@ -238,7 +258,7 @@ public partial class ShellOverlay : Node2D
         DrawString(_font, new Vector2(layout.Panel.Position.X + 28f, layout.Panel.End.Y - 22f), layout.Hint,
             HorizontalAlignment.Left, -1, 12, MutedText);
 
-        DrawRight("M2 · shell", layout.Panel.End.X - 28f, layout.Panel.End.Y - 22f, 11, DisabledText);
+        DrawRight("M1 · simulation", layout.Panel.End.X - 28f, layout.Panel.End.Y - 22f, 11, DisabledText);
     }
 
     private void DrawRight(string text, float rightX, float y, int size, Color color)
@@ -335,6 +355,18 @@ public partial class ShellOverlay : Node2D
             case Key.F5 when _screen == Screen.Pause:
                 Command?.Invoke(ShellCommand.SaveNow, null);
                 return;
+
+            case Key.Key1 when _screen == Screen.Pause:
+                Command?.Invoke(ShellCommand.Speed1, null);
+                return;
+
+            case Key.Key2 when _screen == Screen.Pause:
+                Command?.Invoke(ShellCommand.Speed2, null);
+                return;
+
+            case Key.Key4 when _screen == Screen.Pause:
+                Command?.Invoke(ShellCommand.Speed4, null);
+                return;
         }
     }
 
@@ -372,8 +404,14 @@ public partial class ShellOverlay : Node2D
             return;
         }
 
-        if (_screen == Screen.Pause && TimeButtonRects(layout.Panel).Any(rect => rect.HasPoint(position)))
-            PushToast("time system: M1 — the clock is not running yet");
+        var timeRects = TimeButtonRects(layout.Panel).ToList();
+        var timeIndex = timeRects.FindIndex(rect => rect.HasPoint(position));
+
+        if (_screen == Screen.Pause && timeIndex >= 0)
+        {
+            Command?.Invoke(TimeCommands[timeIndex], null);
+            return;
+        }
     }
 
     private void ActivateSelected()
@@ -679,14 +717,21 @@ public partial class ShellOverlay : Node2D
 
         foreach (var rect in TimeButtonRects(panel))
         {
-            DrawRect(rect, new Color(0.12f, 0.13f, 0.16f, 0.9f));
+            var active = TimeSpeeds[index] == TimeSpeed;
+            var fill = active ? new Color(0.16f, 0.30f, 0.23f, 0.95f) : new Color(0.12f, 0.13f, 0.16f, 0.9f);
+            DrawRect(rect, fill);
+            DrawRect(rect, active ? new Color(0.35f, 1f, 0.6f, 0.9f) : InfoColor,
+                filled: false, width: active ? 1.5f : 1f);
             DrawString(_font, new Vector2(rect.Position.X + 12f, rect.Position.Y + 20f), labels[index],
-                HorizontalAlignment.Left, -1, 13, DisabledText);
+                HorizontalAlignment.Left, -1, 13, active ? new Color(0.7f, 1f, 0.8f) : AccentText);
             index++;
         }
 
+        var detail = TimeSpeed == 0
+            ? "time paused · space resumes at 1×"
+            : $"1 real s = {TimeSpeed} game h · build times advance";
         DrawString(_font, new Vector2(panel.Position.X + 28f + 4f * 84f + 12f, panel.End.Y - FooterHeight - 20f),
-            "time system: M1", HorizontalAlignment.Left, -1, 12, WarmColor);
+            detail, HorizontalAlignment.Left, -1, 11, WarmColor);
     }
 
     private void DrawSearchBox(Rect2 panel)

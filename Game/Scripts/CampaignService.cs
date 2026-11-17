@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Godot;
 using Sim.Campaign;
 using Sim.World;
@@ -19,6 +20,7 @@ public sealed class CampaignService
     private readonly bool _fresh;
     private readonly List<string> _warnings = new();
     private readonly Dictionary<ulong, int> _regionCounts = new();
+    private readonly HashSet<ulong> _builtRegions = new();
     private string _slotName;
     private int _buildingTotal;
     private DateTimeOffset _lastPlayedUtc = DateTimeOffset.UtcNow;
@@ -74,6 +76,12 @@ public sealed class CampaignService
     /// <summary>Non-fatal load and save problems, already reported to the HUD.</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
+    /// <summary>
+    /// Regions known to hold buildings, including shards not open this session.
+    /// Drives the globe's occupied-region markers.
+    /// </summary>
+    public IReadOnlyCollection<ulong> BuiltRegions => _builtRegions;
+
     /// <summary>Raised whenever <see cref="Status"/> changes.</summary>
     public event Action? StatusChanged;
 
@@ -127,6 +135,10 @@ public sealed class CampaignService
             SaveSummary();
             SetStatus($"save · loaded · {meta.VisitedRegions.Count} region(s)");
             GD.Print($"campaign: loaded {Store.RootDirectory}");
+
+            _builtRegions.Clear();
+            foreach (var index in Store.ListRegionIndices())
+                _builtRegions.Add(index);
         }
         catch (Exception ex) when (IsStorageError(ex))
         {
@@ -171,6 +183,11 @@ public sealed class CampaignService
         // region accepted (dropped records are no longer in play).
         _regionCounts[regionIndex] = report.Loaded;
         _buildingTotal += report.Loaded - stored.Buildings.Count;
+
+        if (report.Loaded > 0)
+            _builtRegions.Add(regionIndex);
+        else
+            _builtRegions.Remove(regionIndex);
 
         foreach (var warning in report.Warnings)
             Notify($"region {regionIndex}: {warning}");
@@ -230,6 +247,50 @@ public sealed class CampaignService
         }
     }
 
+    /// <summary>
+    /// Persists simulation results: every loaded region shard plus time, treasury
+    /// and stockpile. Called on a timer while the clock runs and on pause/exit, so
+    /// a crash loses at most a few seconds of game time.
+    /// </summary>
+    public bool SaveSimulation()
+    {
+        if (Store is null)
+            return false;
+
+        try
+        {
+            foreach (var regionIndex in _campaign.LoadedRegions.OrderBy(index => index))
+            {
+                var count = _campaign.BuildingCount(regionIndex);
+                if (count == 0)
+                {
+                    Store.DeleteRegion(regionIndex);
+                    _builtRegions.Remove(regionIndex);
+                }
+                else
+                {
+                    Store.SaveRegion(regionIndex, _campaign.Buildings(regionIndex));
+                    _builtRegions.Add(regionIndex);
+                }
+
+                _regionCounts[regionIndex] = count;
+            }
+
+            if (!SaveMeta())
+                return false;
+
+            SaveSummary();
+            SetStatus($"save · autosaved · {DateTime.Now:HH:mm:ss}");
+            return true;
+        }
+        catch (Exception ex) when (IsStorageError(ex))
+        {
+            Notify($"save failed: {ex.Message}");
+            SetStatus($"save · failed · {ex.Message}");
+            return false;
+        }
+    }
+
     private void OnRegionChanged(ulong regionIndex)
     {
         if (Store is null)
@@ -243,9 +304,15 @@ public sealed class CampaignService
             _regionCounts[regionIndex] = count;
 
             if (count == 0)
+            {
                 Store.DeleteRegion(regionIndex);
+                _builtRegions.Remove(regionIndex);
+            }
             else
+            {
                 Store.SaveRegion(regionIndex, _campaign.Buildings(regionIndex));
+                _builtRegions.Add(regionIndex);
+            }
 
             Store.SaveMeta(_campaign.Meta, _fingerprint);
             SaveSummary();
@@ -268,6 +335,7 @@ public sealed class CampaignService
             var removed = Store!.DeleteAllRegions();
             _buildingTotal = 0;
             _regionCounts.Clear();
+            _builtRegions.Clear();
             SaveMeta();
             SaveSummary();
 

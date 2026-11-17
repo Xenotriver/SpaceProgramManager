@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-16**, M2 campaign shell, **103 tests passing**.
+Anchor: **2026-11-17**, M1 simulation loop, **113 tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -15,7 +15,7 @@ Anchor: **2026-11-16**, M2 campaign shell, **103 tests passing**.
 | Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, campaign, save store, slot catalogue |
 | Godot runtime | **Done** | Globe, region view, isometric colony view, placement/removal, save/load, CLI automation |
 | Campaign shell | **Done (M2)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause scaffold, search, settings |
-| Simulation loop | **Next (M1)** | No `Sim/Time`; `GameTimeHours` never advances; buildings stay `Planned` |
+| Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, save v2, live controls |
 | Site view (per-hex grid) | **Planned (M3)** | Only the region-scale colony view exists |
 | Multi-body | **Planned (M4)** | `Main.OpenMoon()` is hardcoded |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
@@ -28,8 +28,12 @@ index, open a region, inspect hexes across four overlays, plan a rover route,
 place/remove buildings from either the 2D region view or the isometric colony
 view, and have all of it persist across launches against a fingerprinted bake.
 
-The player cannot: pass time, finish construction, spend credits, research
-anything, rename a campaign, or play a second body yet.
+The player can also pass time with pause/1×/2×/4×, watch buildings finish
+construction, earn/spend credits and stockpile resources, see power or life-support
+shortfalls called out in the HUD, and find occupied hexes in every overlay.
+
+The player cannot: pick a tech in the UI, rename a campaign, or play a second
+body yet.
 
 ### Naming (locked)
 
@@ -73,16 +77,17 @@ Scope (as planned):
    Drawn with the existing immediate-mode HUD style; no scene restructure required.
 2. **Save-slot service** over `CampaignStore` — enumerate/create/delete slots under
    `user://saves/`, slot summary (name, created, updated, building count, visited
-   regions), last-played ordering. `campaign.json` stays **v1-compatible**; slot
-   summary is a sibling file or optional additive fields, never a breaking change.
+   regions), last-played ordering. M2 itself kept `campaign.json` **v1-compatible**;
+   slot summary is a sibling file or optional additive fields, never a breaking
+   change. (M1 later introduced v2 with a tested v1 migration.)
 3. **Manual save + visible feedback** — `F5` saves; save/load failures become
    on-screen notifications instead of `GD.PushWarning` only.
 4. **Notifications/toasts** — small log for save, load, quarantine, placement errors.
 5. **Region search and markers** — jump to an H3 index, "go to active region", and
    visited/active markers drawn on the globe.
 6. **Settings panel** — save root, default relief exaggeration, keybind reference.
-7. **Pause overlay + time controls, scaffolded** — visible but disabled with
-   `time system: M1`. There is no clock to pause yet; M1 fills these in.
+7. **Pause overlay + time controls, scaffolded** — M2 shipped visible but
+   disabled buttons; M1 wired them to the live clock.
 
 **Acceptance criteria** — all verified on 2026-11-16:
 
@@ -95,37 +100,52 @@ Scope (as planned):
 - [x] No change to the v1 save schema that breaks an existing `campaign.json`
   (legacy `slot1` with 17 buildings loads and gains a `slot.json`).
 
-### M1 — Simulation loop
+### M1 — Simulation loop (done)
 
 **Outcome:** time passes and buildings actually get built and run.
 
-Scope:
+**Status:** shipped 2026-11-17 · **113 tests passing** · resolves open questions 4
+and 7.
 
-1. **`Sim/Time`** — deterministic clock (game hours), fixed-step tick, seeded RNG
-   service (required for reliability rolls later).
-2. **`CampaignState.Tick(hours)`** — drives construction, status transitions,
-   maintenance and production; pure and unit-testable.
-3. **Construction lifecycle** — `Planned → UnderConstruction → Operational` using
-   `BuildTimeHours`, `ConstructionStartTime`, `progress`; pause/resume/cancel.
-4. **Economy** — charge `Cost` at placement (credits + stockpile), apply
-   maintenance, aggregate per-region production/consumption.
-5. **Power and life support** — per-region balance; deficits set buildings `Idle`
-   instead of silently producing.
-6. **Tech unlocks** — `RequiredTech` enforced in `CampaignState.Preview`, not only
-   in `BuildingRegistry.GetAvailableAtSite`; minimal research state.
-7. **Save v2 + migration** — new fields (`SimTime`, RNG seed, per-building
-   construction timestamps) with a tested v1 → v2 migration.
-8. **Live time controls** — pause/1×/2×/4× wired to the M2 scaffold.
-9. **Pentagon neighbour test** — 5 neighbours on a pentagon cell (gap carried over from the Phase 1 checklist).
+Implemented:
 
-**Acceptance criteria**
+1. **`Sim/Time`** — `SimulationClock` (game hours, 0.25 h fixed step) and
+   `DeterministicRandom` (SplitMix64 with an explicit persisted state).
+2. **`CampaignState.Tick(hours)`** — engine-free, fixed-step construction,
+   production, maintenance and status transitions. Only regions installed in
+   memory are ticked; that keeps the globe cheap and is a documented M1 limitation.
+3. **Construction lifecycle** — `Planned → UnderConstruction → Operational` from
+   `BuildTimeHours` and `ConstructionStartTime`; zero build time is immediately
+   operational; `Paused` freezes construction and production.
+4. **Economy** — all-or-nothing `Cost` charge at placement (credits + stockpile),
+   per-hour maintenance and throughput, aggregated `RegionEconomy` for the HUD.
+5. **Power and life support** — `PowerKw < 0` generates; consumers are idled in a
+   deterministic category/Id order when supply, stockpile inputs or maintenance
+   are short, with a human-readable `StatusReason`.
+6. **Tech unlocks** — `RequiredTech` is enforced in `CampaignState.Preview` and
+   `TryPlace`, not only `BuildingRegistry.GetAvailableAtSite`; `UnlockTech` and
+   `Meta.UnlockedTechs` provide the minimal research state.
+7. **Save v2 + migration** — `GameTimeHours`, `SciencePoints`, `RngSeed`,
+   `RngState`, `UnlockedTechs`, per-building `Paused` and `StatusReason`; a tested
+   v1 → v2 migration grants starting credits, stockpile and a stable RNG seed.
+   Unknown/incompatible saves are still refused, never overwritten.
+8. **Live time controls** — pause/1×/2×/4× in the pause overlay, `Space` to toggle
+   pause, HUD day/hour and economy line, 5-second autosave, `--time` and
+   `--advance` automation hooks.
+9. **Pentagon neighbour test** — 5 distinct neighbours on a pentagon cell.
+10. **Occupied-region markers** — green rings on the globe and status-coloured
+    pins/outlines in biome, terrain, score and buildings overlays of both the
+    region and colony views.
 
-- A habitat plus a solar array reach `Operational` after their build times.
-- A region with negative power marks consumers `Idle` and the HUD says why.
-- Credits decrease by exactly the building cost; an unaffordable placement is refused.
-- Save → reload preserves time, progress, status and treasury.
-- Deterministic tick tests: same seed + same tick count = same state.
-- A v1 fixture loads and migrates under v2.
+**Acceptance criteria** — verified on 2026-11-17:
+
+- [x] A habitat plus a solar array reach `Operational` after their build times.
+- [x] A region with negative power marks consumers `Idle` and the HUD says why.
+- [x] Credits decrease by exactly the building cost; an unaffordable placement is refused.
+- [x] Save → reload preserves time, progress, status and treasury.
+- [x] Deterministic tick tests: same seed + same tick count = same state.
+- [x] A v1 fixture loads and migrates under v2.
+- [x] Occupied regions stay findable in every globe/region/colony overlay.
 
 ### M3 — Site view (plan §2.6)
 
@@ -177,11 +197,11 @@ Not tied to a milestone; pull in when they start hurting.
 
 | Item | Why |
 |---|---|
-| CI (build + tests + headless smoke shot) | 103 tests only run when someone remembers |
+| CI (build + tests + headless smoke shot) | 113 tests only run when someone remembers |
 | Screenshot regression harness | `--shot` already works; wire it to reference images |
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
 | Globe performance budget | 41,162 instances today; add a frame-time gate before Earth |
-| Replay/determinism harness | Needed once M1 introduces time and RNG |
+| Replay/determinism harness | M1 covers same-seed ticks; extend it to longer event sequences |
 | `.editorconfig` + analyzers | Current tree is consistent by convention only |
 | Localization, audio, LICENSE, changelog | Release hygiene |
 
@@ -192,10 +212,10 @@ Not tied to a milestone; pull in when they start hurting.
 | 1 | Rover default speed: code uses **10 km/h**, plan §2.3 says testing default **8 km/h** | **Drift — decide in M5** (speed is a rover property) |
 | 2 | Fine hexes per region: plan says ~2,400 (res 7), the bake uses **343** (res 6) | **Drift — plan text is stale; res 6 is the real choice** |
 | 3 | Multiple installations per hex (plan §2.5) vs no-overlap footprints (today) | Resolve in **M3** |
-| 4 | Are `RequiredTech` and `Cost` authoritative or advisory? | Resolve in **M1** (enforce both) |
+| 4 | Are `RequiredTech` and `Cost` authoritative or advisory? | **Decided in M1:** authoritative; both enforced in `CampaignState.Preview`/`TryPlace` |
 | 5 | Slot metadata file vs additive fields in `campaign.json` | **Decided in M2:** sibling `slot.json` cache (D15); v1 stays unchanged |
 | 6 | Does the site view replace or complement the colony view? | Decide in **M3** |
-| 7 | Time scale: real hours vs accelerated game hours | Decide in **M1** |
+| 7 | Time scale: real hours vs accelerated game hours | **Decided in M1:** 1 real s = 1 game h at 1×; 1×/2×/4×, 0.25 h fixed steps |
 | 8 | Save migration strategy when the bake fingerprint changes | Open; likely remap by H3 index |
 | 9 | Landmark crater special cases (plan §2.3) | Deferred |
 | 10 | Site-view build-grid dimensions | Deferred to M3 |

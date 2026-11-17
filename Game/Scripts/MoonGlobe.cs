@@ -61,6 +61,7 @@ public partial class MoonGlobe : Node2D
     private int _selected = -1;
 
     private HashSet<ulong> _visitedMarkers = new();
+    private HashSet<ulong> _builtMarkers = new();
     private ulong? _activeMarker;
 
     private bool _dragging;
@@ -80,10 +81,14 @@ public partial class MoonGlobe : Node2D
     /// <summary>Current zoom factor.</summary>
     public float Zoom => _zoom;
 
-    /// <summary>Draws visited and active markers on the globe.</summary>
-    public void SetMarkers(IReadOnlyCollection<ulong> visited, ulong? active)
+    /// <summary>Draws visited, occupied and active markers on the globe.</summary>
+    public void SetMarkers(
+        IReadOnlyCollection<ulong> visited,
+        IReadOnlyCollection<ulong> built,
+        ulong? active)
     {
         _visitedMarkers = new HashSet<ulong>(visited);
+        _builtMarkers = new HashSet<ulong>(built);
         _activeMarker = active;
         QueueRedraw();
     }
@@ -373,11 +378,28 @@ public partial class MoonGlobe : Node2D
         float cosPitch,
         float sinPitch)
     {
-        if (_visitedMarkers.Count == 0 && _activeMarker is null)
+        if (_visitedMarkers.Count == 0 && _builtMarkers.Count == 0 && _activeMarker is null)
             return;
+
+        // An occupied region is drawn first and larger: it must be findable at a
+        // glance in every globe overlay, even when the terrain is unremarkable.
+        foreach (var regionIndex in _builtMarkers)
+        {
+            if (!_indexLookup.TryGetValue(regionIndex, out var index))
+                continue;
+
+            if (!TryProjectCentroid(index, scale, origin, cosYaw, sinYaw, cosPitch, sinPitch, out var point))
+                continue;
+
+            DrawCircle(point, 4.2f, new Color(0.25f, 1f, 0.55f, 0.28f));
+            DrawArc(point, 6.5f, 0f, Mathf.Tau, 20, new Color(0.35f, 1f, 0.6f, 0.95f), 1.8f, true);
+            DrawCircle(point, 1.6f, new Color(0.75f, 1f, 0.82f, 1f));
+        }
 
         foreach (var regionIndex in _visitedMarkers)
         {
+            if (_builtMarkers.Contains(regionIndex))
+                continue;
             if (!_indexLookup.TryGetValue(regionIndex, out var index))
                 continue;
 

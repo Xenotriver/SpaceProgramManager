@@ -1,9 +1,11 @@
-# Save format (v1)
+# Save format (v2)
 
 The campaign save is a directory ("slot") containing one metadata file, one
 derived summary, and one JSON shard per region that has buildings. The
 implementation is `Sim/Campaign/CampaignStore.cs` and
-`Sim/Campaign/CampaignSlotStore.cs`; this document is the contract.
+`Sim/Campaign/CampaignSlotStore.cs`; this document is the contract. The current
+schema is **v2**; v1 saves are read and migrated in memory, never overwritten on
+load.
 
 ## Layout
 
@@ -34,17 +36,21 @@ integer range).
 ```json
 {
   "format": "spm-campaign",
-  "version": 1,
+  "version": 2,
   "bodyKey": "moon",
   "fineResolution": 6,
   "regionResolution": 3,
   "regionCount": 41162,
   "generatedUtc": "2026-11-11T21:48:07+00:00",
   "createdUtc": "2026-11-15T10:32:08.9438921+00:00",
-  "updatedUtc": "2026-11-15T10:32:08.9438921+00:00",
-  "gameTimeHours": 0,
-  "credits": 0,
-  "stockpile": {},
+  "updatedUtc": "2026-11-17T09:14:00.331109+00:00",
+  "gameTimeHours": 32.5,
+  "credits": 9750000,
+  "sciencePoints": 125.5,
+  "rngSeed": 1234567890123456789,
+  "rngState": 1234567890123456797,
+  "stockpile": { "metals": 220, "oxygen": 487.5 },
+  "unlockedTechs": ["basic_metallurgy"],
   "visitedRegions": ["589971619905011711"],
   "activeRegion": "589971619905011711"
 }
@@ -53,16 +59,37 @@ integer range).
 | Field | Meaning |
 |---|---|
 | `format` | Always `spm-campaign` |
-| `version` | Schema version; currently `1` |
+| `version` | Schema version; currently `2` (v1 is accepted and migrated) |
 | `bodyKey`, `fineResolution`, `regionResolution`, `regionCount`, `generatedUtc` | **Bake fingerprint** — must equal the loaded manifest |
 | `createdUtc`, `updatedUtc` | Campaign timestamps (UTC, ISO 8601) |
-| `gameTimeHours` | In-game clock; persisted but not advanced yet |
-| `credits`, `stockpile` | Treasury and global resources; persisted but not simulated yet |
+| `gameTimeHours` | Authoritative in-game clock in hours; advanced in 0.25 h steps by `CampaignState.Tick` |
+| `credits`, `stockpile` | Authoritative treasury and global resources; charged at placement, consumed by maintenance and changed by production |
+| `sciencePoints` | Accumulated science from operational labs |
+| `rngSeed`, `rngState` | SplitMix64 seed and opaque current state (unsigned JSON numbers); the state advances with each random draw and is restored exactly |
+| `unlockedTechs` | Technology ids available to `CampaignState.Preview`; empty at game start |
 | `visitedRegions` | Regions opened at least once (decimal H3 strings, sorted) |
 | `activeRegion` | Region to reopen on launch, or omitted |
 
 Null fields are omitted (`JsonIgnoreCondition.WhenWritingNull`). Property names
-are camelCase.
+are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
+
+### Migration from v1
+
+A v1 file has no tech, RNG or per-building pause fields, and its clock/economy
+were not simulated. `LoadMeta` accepts it without
+changing the file and applies these defaults in memory:
+
+- `credits`: kept when positive; set to `CampaignDefaults.StartingCredits`
+  (10,000,000) when zero or negative.
+- `stockpile`, `unlockedTechs`: existing entries are kept; missing starting
+  resources are filled from `CampaignDefaults`.
+- `rngSeed`: derived deterministically from the stored `createdUtc`; `rngState`
+  starts equal to the seed. It is **not** derived from the load time, so repeated
+  loads replay the same sequence.
+- `gameTimeHours`, `visitedRegions`, `activeRegion`, fingerprint: preserved.
+
+The next write (`SaveMeta`) stores v2. This path is covered by
+`CampaignStoreTests.Meta_MigratesV1SaveToCurrentDefaults`.
 
 ## `slot.json`
 
@@ -108,26 +135,30 @@ from `campaign.json` and `regions/*.json`.
 one in `campaign.json`. Otherwise the store recounts the region shards and
 rewrites it. A corrupt or missing summary never blocks opening a slot.
 
-The summary is not part of the save schema: `campaign.json` stays v1, an older
-runtime ignores `slot.json`, and a newer runtime rebuilds it from the campaign.
+The summary is not part of the campaign schema: `campaign.json` is v2 (v1 saves
+are migrated on load), an older runtime ignores `slot.json`, and a newer runtime
+rebuilds it from the campaign.
 
 ## `regions/<h3>.json`
 
 ```json
 {
   "format": "spm-campaign",
-  "version": 1,
+  "version": 2,
   "region": "589971619905011711",
   "buildings": [
     {
       "id": "5ca5eadc-8ffc-4187-90e3-080a5ef8eb85",
       "defId": "rtg_generator",
       "centerHex": "603482367650168831",
-      "progress": 0,
+      "progress": 1,
       "health": 100,
-      "status": "Planned",
+      "status": "Operational",
+      "paused": false,
+      "statusReason": "",
       "storedResources": {},
-      "constructionStartTime": 0
+      "constructionStartTime": 2.5,
+      "constructionCompleteTime": 5
     }
   ]
 }
@@ -141,11 +172,15 @@ runtime ignores `slot.json`, and a newer runtime rebuilds it from the campaign.
 | `buildings[].centerHex` | Centre cell; **the footprint is not stored** |
 | `progress`, `health` | 0..1 construction progress, 0..100 health |
 | `status` | `Planned`, `UnderConstruction`, `Operational`, `Idle`, `Damaged`, `Destroyed` |
+| `paused` | True when the player froze construction/production; wrong values become `false` in v1 shards |
+| `statusReason` | Human-readable reason for `Idle`/`Paused` (e.g. `power deficit: needs 5 kW, 0 kW available`); omitted when empty |
 | `storedResources` | Per-building resource buffer |
-| `constructionStartTime`, `constructionCompleteTime` | Game hours; currently only written |
+| `constructionStartTime`, `constructionCompleteTime` | Game hours when construction began and finished; the latter is omitted until complete |
 | `state` | Optional flat string/number/bool bag for future per-building data |
 
-`constructionCompleteTime` and `state` are omitted when null/empty.
+`statusReason`, `constructionCompleteTime` and `state` are omitted when
+null/empty. A v1 shard (without `paused`/`statusReason`) loads with defaults;
+the next write upgrades it to v2.
 
 ## Invariants
 
@@ -184,7 +219,9 @@ empty file.
 | Slot has no `slot.json` | Rebuilt from `campaign.json` + region shards on the next list |
 | `slot.json` has a stale `updatedUtc` | Rebuilt; its cached counts are ignored |
 | `slot.json` is corrupt or has another format/version | Ignored and overwritten when the slot is listed |
-| Metadata invalid JSON / wrong format / unsupported version | Listed as **unreadable**; opening is refused and the file is never overwritten |
+| Metadata invalid JSON / wrong format / version outside 1–2 | Listed as **unreadable**; opening is refused and the file is never overwritten |
+| Metadata version 1 | Migrated in memory with starting defaults; the file is unchanged until the next save |
+| Region shard version 1 | Loaded with `paused = false` and empty `statusReason`; upgraded on the next write |
 | Fingerprint mismatch | Listed as **incompatible** with both fingerprints; opening is refused and the files are kept |
 | Opening a readable slot | Load metadata, then `slot.json` (or a recount), then shards on demand |
 | Missing region shard | Empty region (not an error) |
@@ -193,16 +230,20 @@ empty file.
 | `--fresh` | Delete every file in `regions/`, rewrite metadata and summary |
 
 Metadata and the summary are saved on: campaign creation, active-region change,
-every region mutation, manual save (`F5`), and `Flush()` on exit. Region shards
-are saved immediately on mutation. `slot.json` also records the view snapshot
-taken when the scene closes or the player returns to the menu.
+every region mutation, pausing the clock, the 5-second autosave, manual save
+(`F5`), and `Flush()` on exit. Region shards are saved immediately on mutation.
+`slot.json` also records the view snapshot taken when the scene closes or the
+player returns to the menu. Only regions installed in memory are ticked, so a
+long pause in one region does not silently advance distant colonies.
 
 ## Compatibility policy
 
-- `version` is exact: the runtime accepts only `1`. Unknown versions are refused,
-  not guessed.
-- Any schema change requires: bump `Version`, add a migration path, add a
-  `CampaignStoreTests` case that loads a v1 fixture, and update this document.
+- `version` is bounded: the runtime accepts `1` and `2`; `1` is migrated in
+  memory. Unknown or future versions are refused, not guessed, and the file is
+  never overwritten.
+- Any schema change requires: bump `Version`, add a migration path from every
+  still-supported older version, add a `CampaignStoreTests` fixture for each
+  migration, and update this document.
 - Unknown **fields** are tolerated by `System.Text.Json` (ignored), which allows
   additive changes in a future version only if old runtimes can safely ignore
   them. Do not rely on that for semantic changes.

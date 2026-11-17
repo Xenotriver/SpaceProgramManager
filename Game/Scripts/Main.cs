@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Godot;
 using H3;
 using Sim.Biomes;
@@ -7,6 +8,7 @@ using Sim.Buildings;
 using Sim.Campaign;
 using Sim.Hex;
 using Sim.Movement;
+using Sim.Time;
 using Sim.World;
 
 /// <summary>
@@ -20,6 +22,7 @@ public partial class Main : Node2D
     private const float PanelLeft = 18f;
     private const float PanelTop = 18f;
     private const float PanelWidth = 300f;
+    private const double AutosaveSeconds = 5.0;
 
     private const string GlobeStatus = "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · Esc pause";
     private const string RegionStatus =
@@ -77,6 +80,22 @@ public partial class Main : Node2D
     private bool _benchRedraw;
     private int _frameCounter;
     private double _frameSeconds;
+
+    private readonly SimulationClock _clock = new();
+    private double _autosaveElapsed;
+
+    private int GameDay => (int)Math.Floor(_campaign.Meta.GameTimeHours / 24.0) + 1;
+
+    private string GameClockText
+    {
+        get
+        {
+            var hours = _campaign.Meta.GameTimeHours;
+            var hour = (int)Math.Floor(hours % 24.0);
+            var minute = (int)Math.Floor((hours - Math.Floor(hours)) * 60.0);
+            return $"{hour:00}:{minute:00}";
+        }
+    }
 
     public override void _Ready()
     {
@@ -247,6 +266,18 @@ public partial class Main : Node2D
 
         _managementView.SetRotation(view.ColonyRotationSteps);
         SetOverlay(ParseOverlay(view.Overlay));
+
+        _clock.Reset(_campaign.Meta.GameTimeHours);
+        _autosaveElapsed = 0.0;
+        // A fresh session runs at 1×; automation can pin the clock with --time=0.
+        ApplyTimeSpeed(DoubleArgument("--time", 1.0) switch
+        {
+            <= 0.0 => 0,
+            < 2.0 => 1,
+            < 4.0 => 2,
+            _ => 4,
+        });
+
         RefreshMarkers();
         QueueRedraw();
     }
@@ -319,6 +350,22 @@ public partial class Main : Node2D
                 SaveNowAndToast();
                 return;
 
+            case ShellCommand.PauseTime:
+                ApplyTimeSpeed(0);
+                return;
+
+            case ShellCommand.Speed1:
+            case ShellCommand.Speed2:
+            case ShellCommand.Speed4:
+                ApplyTimeSpeed(command switch
+                {
+                    ShellCommand.Speed2 => 2,
+                    ShellCommand.Speed4 => 4,
+                    _ => 1,
+                });
+                _shell.Close();
+                return;
+
             case ShellCommand.Search:
                 GoToRegion(payload);
                 return;
@@ -329,7 +376,10 @@ public partial class Main : Node2D
 
             case ShellCommand.MainMenu:
                 if (_campaignService is not null)
+                {
                     _campaignService.SetViewState(CaptureView());
+                    _campaignService.SaveSimulation();
+                }
 
                 _forceMenu = true;
                 _skipCliView = true;
@@ -418,6 +468,42 @@ public partial class Main : Node2D
                 }
             }
         }
+
+        // Automation hook: advance the loaded regions immediately, e.g.
+        // --advance=24 to prove a 24 h construction finishes before a screenshot.
+        var advance = DoubleArgument("--advance", 0.0);
+        if (advance > 0.0)
+        {
+            var report = _campaign.Tick(advance);
+            _clock.Reset(_campaign.Meta.GameTimeHours);
+            _campaignService.SaveSimulation();
+            _regionView.QueueRedraw();
+            _managementView.QueueRedraw();
+            GD.Print($"time: advanced {report.Hours:F2} h · {report.Steps} step(s) · " +
+                     $"{report.Completed} completed · {report.Idled} idled");
+            QueueRedraw();
+        }
+    }
+
+    private void ApplyTimeSpeed(int speed)
+    {
+        _clock.SetSpeed(speed);
+        AfterTimeChanged();
+    }
+
+    private void AfterTimeChanged()
+    {
+        _shell.SetTimeSpeed(_clock.Speed);
+        _autosaveElapsed = 0.0;
+
+        // Pausing is a natural save point; it captures progress and treasury
+        // without waiting for the periodic autosave.
+        if (_started && _clock.IsPaused)
+            _campaignService.SaveSimulation();
+
+        GD.Print($"time: {_clock.Label} · day {GameDay:0} {GameClockText}" +
+                 $" · {_campaign.Meta.Credits:N0} cr");
+        QueueRedraw();
     }
 
     private void SaveNowAndToast()
@@ -426,7 +512,7 @@ public partial class Main : Node2D
             return;
 
         _campaignService.SetViewState(CaptureView());
-        var saved = _campaignService.SaveNow();
+        var saved = _campaignService.SaveSimulation() && _campaignService.SaveNow();
         _shell.PushToast(saved ? "campaign saved" : "save failed", error: !saved);
     }
 
@@ -452,7 +538,10 @@ public partial class Main : Node2D
         if (_campaign is null)
             return;
 
-        _globe.SetMarkers(_campaign.Meta.VisitedRegions, _campaign.Meta.ActiveRegionIndex);
+        _globe.SetMarkers(
+            _campaign.Meta.VisitedRegions,
+            _campaignService.BuiltRegions,
+            _campaign.Meta.ActiveRegionIndex);
     }
 
     private static string OverlayName(RegionViewMode mode) => mode switch
@@ -501,6 +590,29 @@ public partial class Main : Node2D
     {
         if (!_started)
             return;
+
+        if (!_shell.IsOpen && !_clock.IsPaused)
+        {
+            var steps = _clock.Advance(delta);
+            if (steps > 0)
+            {
+                _campaign.Tick(steps * SimulationClock.FixedStepHours);
+
+                if (_mode == Mode.Region)
+                    _regionView.QueueRedraw();
+                else if (_mode == Mode.Management)
+                    _managementView.QueueRedraw();
+
+                QueueRedraw();
+            }
+
+            _autosaveElapsed += delta;
+            if (_autosaveElapsed >= AutosaveSeconds)
+            {
+                _autosaveElapsed = 0.0;
+                _campaignService.SaveSimulation();
+            }
+        }
 
         if (_benchRedraw && _mode == Mode.Region)
             _regionView.QueueRedraw();
@@ -554,6 +666,11 @@ public partial class Main : Node2D
 
             case Key.F5:
                 SaveNowAndToast();
+                break;
+
+            case Key.Space when !_shell.IsOpen:
+                _clock.TogglePause();
+                AfterTimeChanged();
                 break;
 
             case Key.Slash when _mode == Mode.Globe:
@@ -719,6 +836,7 @@ public partial class Main : Node2D
         if (_campaignService is not null)
         {
             _campaignService.SetViewState(CaptureView());
+            _campaignService.SaveSimulation();
             _campaignService.Flush();
         }
 
@@ -1194,15 +1312,21 @@ public partial class Main : Node2D
             DrawString(_font, new Vector2(PanelLeft + 38, y + 11),
                 $"{name} · {statusText}", HorizontalAlignment.Left, -1, 12, AccentText);
 
-            if (building.Progress < 1.0 && building.Status == BuildingStatus.UnderConstruction)
+            var detail = building.StatusReason.Length > 0
+                ? building.StatusReason
+                : building.Progress < 1.0 && building.Status == BuildingStatus.UnderConstruction
+                    ? $"{building.Progress:P0} built"
+                    : building.Health < 100.0
+                        ? $"hp {building.Health:F0}%"
+                        : string.Empty;
+
+            if (detail.Length > 0)
             {
+                if (detail.Length > 28)
+                    detail = detail[..25] + "...";
+
                 DrawString(_font, new Vector2(PanelLeft + 180, y + 11),
-                    $"{building.Progress:P0}", HorizontalAlignment.Left, -1, 11, MutedText);
-            }
-            else if (building.Health < 100.0)
-            {
-                DrawString(_font, new Vector2(PanelLeft + 180, y + 11),
-                    $"hp {building.Health:F0}%", HorizontalAlignment.Left, -1, 11, MutedText);
+                    detail, HorizontalAlignment.Left, -1, 10, statusColor);
             }
 
             y += LegendRowHeight;
@@ -1245,22 +1369,54 @@ public partial class Main : Node2D
         var background = new Rect2(0, size.Y - 52, size.X, 52);
         DrawRect(background, new Color(0.03f, 0.04f, 0.05f, 0.8f));
 
-        DrawString(_font, new Vector2(24, size.Y - 22), _status, HorizontalAlignment.Left, -1, 15, AccentText);
+        DrawString(_font, new Vector2(24, size.Y - 32), _status, HorizontalAlignment.Left, -1, 15, AccentText);
+        DrawString(_font, new Vector2(24, size.Y - 14), SimulationLine(),
+            HorizontalAlignment.Left, -1, 12, MutedText);
 
         var right = _mode switch
         {
             Mode.Globe when _hoverRegion != 0 => $"{_hoverBiome} · {_hoverHexes} hexes",
-            Mode.Globe => "SPACE PROGRAM MANAGER · M2",
+            Mode.Globe => "SPACE PROGRAM MANAGER · M1",
             Mode.Management =>
                 $"{ModeName(_managementView.Overlay)} · {_managementView.BuildingCount} buildings",
             _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.Buildings.Count} buildings",
         };
 
-        DrawString(_font, new Vector2(size.X - 340, size.Y - 22), right,
+        DrawString(_font, new Vector2(size.X - 340, size.Y - 32), right,
             HorizontalAlignment.Left, -1, 12, MutedText);
-
-        DrawString(_font, new Vector2(size.X - 340, size.Y - 38), _campaignService.Status,
+        DrawString(_font, new Vector2(size.X - 340, size.Y - 14), _campaignService.Status,
             HorizontalAlignment.Left, -1, 11, MutedText);
+    }
+
+    /// <summary>Clock, money and (when in a region) the power situation.</summary>
+    private string SimulationLine()
+    {
+        var line = $"day {GameDay:0} · {GameClockText} · {_clock.Label} · {_campaign.Meta.Credits:N0} cr";
+        var regionIndex = _mode switch
+        {
+            Mode.Region when _regionView.IsLoaded => (ulong?)_regionView.RegionIndex,
+            Mode.Management when _managementView.IsLoaded => (ulong?)_managementView.RegionIndex,
+            _ => null,
+        };
+
+        if (regionIndex is not { } index)
+            return line;
+
+        var economy = _campaign.GetEconomy(index);
+        line += $" · power {economy.SupplyKw:F0}/{economy.DemandKw:F0} kW · {economy.IdleCount} idle";
+
+        var reason = _campaign.Buildings(index)
+            .Select(building => building.StatusReason)
+            .FirstOrDefault(text => !string.IsNullOrEmpty(text));
+
+        if (!string.IsNullOrEmpty(reason))
+        {
+            if (reason.Length > 48)
+                reason = reason[..45] + "...";
+            line += $" · {reason}";
+        }
+
+        return line;
     }
 
     private string DisplayName(string biomeId)
@@ -1321,6 +1477,16 @@ public partial class Main : Node2D
         var value = ArgumentValue(name);
         return value is not null
                && float.TryParse(value, System.Globalization.NumberStyles.Float,
+                   System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : fallback;
+    }
+
+    private static double DoubleArgument(string name, double fallback)
+    {
+        var value = ArgumentValue(name);
+        return value is not null
+               && double.TryParse(value, System.Globalization.NumberStyles.Float,
                    System.Globalization.CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : fallback;

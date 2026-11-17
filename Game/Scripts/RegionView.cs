@@ -405,6 +405,8 @@ public partial class RegionView : Node2D
 
         if (ViewMode == RegionViewMode.Buildings)
             DrawBuildings(scale);
+        else
+            DrawBuildingMarkers(scale);
 
         DrawGhost(scale);
 
@@ -501,6 +503,52 @@ public partial class RegionView : Node2D
             }
         }
     }
+
+    /// <summary>
+    /// Occupied-hex markers for the terrain, biome and site-score overlays. The
+    /// buildings overlay draws full footprints instead; the other overlays only
+    /// get a status-coloured pin and a faint outline so locations stay findable.
+    /// </summary>
+    private void DrawBuildingMarkers(float scale)
+    {
+        foreach (var building in _buildings)
+        {
+            var color = BuildingStatusColor(building.Status);
+            var outline = new Color(color.R, color.G, color.B, 0.45f);
+
+            foreach (var hex in building.Footprint)
+            {
+                if (!_ordinalByIndex.TryGetValue((ulong)hex, out var ordinal))
+                    continue;
+
+                var corners = _corners[ordinal];
+                var screen = ScreenBuffer(corners.Length);
+                for (var v = 0; v < corners.Length; v++)
+                    screen[v] = ToScreen(corners[v], scale);
+
+                DrawPolyline(Close(screen), outline, 1.5f, true);
+            }
+
+            if (!_ordinalByIndex.TryGetValue((ulong)building.CenterHex, out var centerOrdinal))
+                continue;
+
+            var center = ToScreen(_centers[centerOrdinal], scale);
+            var radius = Mathf.Max(3.5f, _cellRadius * scale * 0.28f);
+            DrawCircle(center, radius + 1.5f, new Color(0f, 0f, 0f, 0.7f));
+            DrawCircle(center, radius, color);
+        }
+    }
+
+    private static Color BuildingStatusColor(BuildingStatus status) => status switch
+    {
+        BuildingStatus.Planned => new Color(0.65f, 0.65f, 0.75f),
+        BuildingStatus.UnderConstruction => new Color(1f, 0.78f, 0.32f),
+        BuildingStatus.Operational => new Color(0.32f, 0.95f, 0.55f),
+        BuildingStatus.Idle => new Color(0.45f, 0.72f, 1f),
+        BuildingStatus.Damaged => new Color(0.95f, 0.5f, 0.3f),
+        BuildingStatus.Destroyed => new Color(0.35f, 0.35f, 0.4f),
+        _ => new Color(0.9f, 0.9f, 0.95f),
+    };
 
     private void DrawGhost(float scale)
     {

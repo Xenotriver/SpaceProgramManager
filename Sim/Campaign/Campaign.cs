@@ -1,6 +1,7 @@
 using H3;
 using Sim.Buildings;
 using Sim.Site;
+using Sim.Time;
 using Sim.World;
 
 namespace Sim.Campaign;
@@ -29,10 +30,14 @@ public sealed class CampaignState
         _world = world;
         _registry = registry;
         _siteConfig = siteConfig ?? new SiteScorerConfig { BodyRadiusKm = world.Manifest.Body.RadiusKm };
+        Random = new DeterministicRandom(Meta.RngSeed);
     }
 
     /// <summary>Campaign-wide state (clock, treasury, visited regions).</summary>
     public CampaignMeta Meta { get; private set; } = new();
+
+    /// <summary>Seeded RNG for future reliability/event rolls; state is persisted.</summary>
+    public DeterministicRandom Random { get; private set; }
 
     /// <summary>Replaces campaign-wide state with a snapshot read from storage.</summary>
     public void RestoreMeta(CampaignMeta meta)
@@ -40,7 +45,33 @@ public sealed class CampaignState
         ArgumentNullException.ThrowIfNull(meta);
 
         Meta = meta;
+        Random = new DeterministicRandom(meta.RngSeed);
+        Random.State = meta.RngState == 0 ? meta.RngSeed : meta.RngState;
     }
+
+    /// <summary>Draws a number and records the new RNG position for the next save.</summary>
+    public double NextRandom()
+    {
+        var value = Random.NextDouble();
+        Meta.RngState = Random.State;
+        return value;
+    }
+
+    /// <summary>Marks a technology as available to this campaign.</summary>
+    public bool UnlockTech(string techId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(techId);
+
+        if (!Meta.UnlockedTechs.Add(techId))
+            return false;
+
+        Meta.UpdatedUtc = DateTimeOffset.UtcNow;
+        return true;
+    }
+
+    /// <summary>True when the campaign may build something requiring this tech.</summary>
+    public bool IsTechUnlocked(string techId)
+        => string.IsNullOrEmpty(techId) || Meta.UnlockedTechs.Contains(techId);
 
     /// <summary>Scoring configuration used for placement validation.</summary>
     public SiteScorerConfig SiteConfig => _siteConfig;
@@ -91,6 +122,20 @@ public sealed class CampaignState
         ArgumentNullException.ThrowIfNull(def);
         ArgumentNullException.ThrowIfNull(tile);
 
+        if (!IsTechUnlocked(def.RequiredTech))
+        {
+            var techFootprint = (uint)centerOrdinal < (uint)tile.HexCount
+                ? def.BuildFootprint(tile, centerOrdinal)
+                : Array.Empty<H3Index>();
+
+            return new PlacementResult
+            {
+                Success = false,
+                Error = $"requires tech: {def.RequiredTech}",
+                Footprint = techFootprint,
+            };
+        }
+
         var occupancy = GetRegion(tile.Entry.Index).Occupancy;
         var result = def.CanPlaceAt(tile, centerOrdinal, _world, _siteConfig, occupancy);
 
@@ -106,23 +151,89 @@ public sealed class CampaignState
         };
     }
 
-    /// <summary>Validates and, on success, places a building.</summary>
+    /// <summary>Validates and, on success, pays for and places a building.</summary>
     public PlacementResult TryPlace(BuildingDef def, RegionTile tile, int centerOrdinal)
     {
         var result = Preview(def, tile, centerOrdinal);
         if (!result.Success)
             return result;
 
+        if (!TryPay(def.Cost, out var paymentError))
+        {
+            return new PlacementResult
+            {
+                Success = false,
+                Error = paymentError,
+                Footprint = result.Footprint,
+                Warnings = result.Warnings,
+            };
+        }
+
         var regionIndex = tile.Entry.Index;
+        var operational = def.BuildTimeHours <= 0.0;
+
         GetRegion(regionIndex).Add(new BuildingInstance
         {
             DefId = def.Id,
             CenterHex = tile.Cells[centerOrdinal],
             Footprint = result.Footprint,
+            Status = operational ? BuildingStatus.Operational : BuildingStatus.Planned,
+            Progress = operational ? 1.0 : 0.0,
+            ConstructionStartTime = Meta.GameTimeHours,
+            ConstructionCompleteTime = operational ? Meta.GameTimeHours : null,
         });
 
+        Meta.UpdatedUtc = DateTimeOffset.UtcNow;
         Touch(regionIndex);
         return result;
+    }
+
+    /// <summary>
+    /// Pays a building cost from credits and the stockpile. Nothing is deducted
+    /// when any line is short, so a refused placement changes no state.
+    /// </summary>
+    private bool TryPay(IReadOnlyDictionary<string, double> cost, out string error)
+    {
+        foreach (var (resource, amount) in cost)
+        {
+            if (amount <= 0.0)
+                continue;
+
+            if (string.Equals(resource, "credits", StringComparison.Ordinal))
+            {
+                if (Meta.Credits + 1e-9 < amount)
+                {
+                    error = $"not enough credits: {amount:N0} needed, {Meta.Credits:N0} available";
+                    return false;
+                }
+
+                continue;
+            }
+
+            var stored = Meta.Stockpile.TryGetValue(resource, out var value) ? value : 0.0;
+            if (stored + 1e-9 < amount)
+            {
+                error = $"not enough {resource}: {amount:N1} needed, {stored:N1} available";
+                return false;
+            }
+        }
+
+        foreach (var (resource, amount) in cost)
+        {
+            if (amount <= 0.0)
+                continue;
+
+            if (string.Equals(resource, "credits", StringComparison.Ordinal))
+            {
+                Meta.Credits = Math.Max(0.0, Meta.Credits - amount);
+                continue;
+            }
+
+            Meta.Stockpile[resource] = Math.Max(0.0, Meta.Stockpile.GetValueOrDefault(resource) - amount);
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     /// <summary>Removes the building occupying a hex ordinal.</summary>
@@ -257,6 +368,336 @@ public sealed class CampaignState
             warnings);
     }
 
+    /// <summary>Longest single simulation step. Callers may pass any duration.</summary>
+    public const double MaxTickHours = 0.25;
+
+    /// <summary>
+    /// Advances time and simulates every region installed in memory. Regions whose
+    /// shards were never opened are not ticked; that keeps memory bounded and is a
+    /// documented M1 limitation (a future fleet pass can walk all shards).
+    /// </summary>
+    public TickReport Tick(double hours)
+    {
+        if (hours <= 0.0 || double.IsNaN(hours) || double.IsInfinity(hours))
+            return TickReport.None;
+
+        var remaining = hours;
+        var completed = 0;
+        var idled = 0;
+        var steps = 0;
+
+        while (remaining > 1e-9)
+        {
+            var step = Math.Min(remaining, MaxTickHours);
+            var report = Step(step);
+            completed += report.Completed;
+            idled += report.Idled;
+            steps += report.Steps;
+            remaining -= step;
+        }
+
+        if (steps > 0)
+            Meta.UpdatedUtc = DateTimeOffset.UtcNow;
+
+        return new TickReport(hours, steps, completed, idled);
+    }
+
+    /// <summary>Pauses or resumes one building's construction or operation.</summary>
+    public bool TrySetPaused(RegionTile tile, int ordinal, bool paused, out string error)
+    {
+        ArgumentNullException.ThrowIfNull(tile);
+
+        if (!TryGetAt(tile, ordinal, out var building) || building is null)
+        {
+            error = "no building on this hex";
+            return false;
+        }
+
+        if (building.Status is BuildingStatus.Destroyed or BuildingStatus.Damaged)
+        {
+            error = $"cannot pause a {building.Status.ToString().ToLowerInvariant()} building";
+            return false;
+        }
+
+        building.Paused = paused;
+        building.StatusReason = paused
+            ? building.Status is BuildingStatus.Planned or BuildingStatus.UnderConstruction
+                ? "construction paused"
+                : "paused"
+            : string.Empty;
+
+        Touch(tile.Entry.Index);
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Current power balance and status counts for one region. Reflects the last
+    /// tick (or placement) without mutating anything.
+    /// </summary>
+    public RegionEconomy GetEconomy(ulong regionIndex)
+    {
+        if (!_regions.TryGetValue(regionIndex, out var region))
+            return RegionEconomy.Empty;
+
+        var supply = 0.0;
+        var demand = 0.0;
+        var idle = 0;
+        var operational = 0;
+        var construction = 0;
+
+        foreach (var building in region.Buildings)
+        {
+            if (!_registry.TryGet(building.DefId, out var def) || def is null)
+                continue;
+
+            switch (building.Status)
+            {
+                case BuildingStatus.Operational:
+                    operational++;
+                    if (building.Paused)
+                        break;
+                    if (def.PowerKw < 0.0)
+                        supply += -def.PowerKw;
+                    else
+                        demand += def.PowerKw;
+                    break;
+
+                case BuildingStatus.Idle:
+                    idle++;
+                    break;
+
+                case BuildingStatus.Planned or BuildingStatus.UnderConstruction:
+                    construction++;
+                    break;
+            }
+        }
+
+        return new RegionEconomy(supply, demand, idle, operational, construction);
+    }
+
+    private TickReport Step(double hours)
+    {
+        Meta.GameTimeHours += hours;
+
+        var completed = 0;
+        var idled = 0;
+        var steps = 1;
+
+        // Sorted region order makes shared-stockpile updates reproducible.
+        foreach (var regionIndex in _loaded.OrderBy(index => index))
+        {
+            if (_regions.TryGetValue(regionIndex, out var region))
+                SimulateRegion(region, hours, ref completed, ref idled);
+        }
+
+        return new TickReport(hours, steps, completed, idled);
+    }
+
+    private void SimulateRegion(RegionState region, double hours, ref int completed, ref int idled)
+    {
+        var candidates = new List<Candidate>(region.Buildings.Count);
+        var now = Meta.GameTimeHours;
+
+        foreach (var building in region.Buildings)
+        {
+            if (!_registry.TryGet(building.DefId, out var def) || def is null)
+                continue;
+
+            if (building.Status is BuildingStatus.Destroyed or BuildingStatus.Damaged)
+                continue;
+
+            if (building.Status is BuildingStatus.Planned or BuildingStatus.UnderConstruction)
+            {
+                if (building.Paused)
+                {
+                    building.StatusReason = "construction paused";
+                    continue;
+                }
+
+                if (def.BuildTimeHours <= 0.0)
+                {
+                    CompleteConstruction(building, now);
+                    completed++;
+                    continue;
+                }
+
+                building.Status = BuildingStatus.UnderConstruction;
+                building.StatusReason = string.Empty;
+                building.Progress = Math.Min(1.0, building.Progress + hours / def.BuildTimeHours);
+
+                if (building.Progress >= 1.0)
+                {
+                    CompleteConstruction(building, now);
+                    completed++;
+                }
+
+                continue;
+            }
+
+            // Operational/Idle is recomputed every step so a power or input
+            // recovery reactivates the building without special cases.
+            building.Status = BuildingStatus.Operational;
+            building.StatusReason = building.Paused ? "paused" : string.Empty;
+
+            if (!building.Paused)
+                candidates.Add(new Candidate(building, def));
+        }
+
+        if (candidates.Count == 0)
+            return;
+
+        var active = ApplyPowerBalance(candidates, ref idled);
+        ApplyInputBalance(active, hours, ref idled);
+        ApplyThroughput(active, hours);
+        ApplyMaintenance(region, ref idled);
+    }
+
+    private List<Candidate> ApplyPowerBalance(List<Candidate> candidates, ref int idled)
+    {
+        var active = new List<Candidate>(candidates.Count);
+        var supply = 0.0;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Def.PowerKw < 0.0)
+                supply += -candidate.Def.PowerKw;
+            else if (candidate.Def.PowerKw <= 0.0)
+                active.Add(candidate);
+        }
+
+        var consumers = candidates
+            .Where(candidate => candidate.Def.PowerKw > 0.0)
+            .OrderBy(candidate => ConsumptionPriority(candidate.Def.Category))
+            .ThenBy(candidate => candidate.Building.Id.ToString("D"), StringComparer.Ordinal);
+
+        var remaining = supply;
+        foreach (var consumer in consumers)
+        {
+            if (consumer.Def.PowerKw <= remaining + 1e-9)
+            {
+                remaining -= consumer.Def.PowerKw;
+                active.Add(consumer);
+                continue;
+            }
+
+            consumer.Building.Status = BuildingStatus.Idle;
+            consumer.Building.StatusReason =
+                $"power deficit: needs {consumer.Def.PowerKw:F0} kW, {remaining:F0} kW available";
+            idled++;
+        }
+
+        return active;
+    }
+
+    private void ApplyInputBalance(List<Candidate> active, double hours, ref int idled)
+    {
+        var resources = active
+            .SelectMany(candidate => candidate.Def.ThroughputPerHour.Keys)
+            .Where(resource => !string.Equals(resource, "power", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(resource => resource, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var resource in resources)
+        {
+            while (true)
+            {
+                var net = 0.0;
+                foreach (var candidate in active)
+                    net += candidate.Def.ThroughputPerHour.GetValueOrDefault(resource);
+
+                var projected = Meta.Stockpile.GetValueOrDefault(resource) + net * hours;
+                if (projected >= -1e-9)
+                    break;
+
+                var consumer = active
+                    .Where(candidate => candidate.Def.ThroughputPerHour.GetValueOrDefault(resource) < 0.0)
+                    .OrderBy(candidate => ConsumptionPriority(candidate.Def.Category))
+                    .ThenBy(candidate => candidate.Def.CrewCapacity)
+                    .ThenBy(candidate => candidate.Building.Id.ToString("D"), StringComparer.Ordinal)
+                    .FirstOrDefault();
+
+                if (consumer is null)
+                    break;
+
+                active.Remove(consumer);
+                consumer.Building.Status = BuildingStatus.Idle;
+                consumer.Building.StatusReason = LifeSupportResources.Contains(resource)
+                    ? $"life support shortfall: {resource}"
+                    : $"input shortage: {resource}";
+                idled++;
+            }
+        }
+    }
+
+    private void ApplyThroughput(List<Candidate> active, double hours)
+    {
+        foreach (var candidate in active)
+        {
+            foreach (var (resource, perHour) in candidate.Def.ThroughputPerHour)
+            {
+                if (string.Equals(resource, "power", StringComparison.Ordinal) || perHour == 0.0)
+                    continue;
+
+                var current = Meta.Stockpile.GetValueOrDefault(resource);
+                Meta.Stockpile[resource] = Math.Max(0.0, current + perHour * hours);
+            }
+
+            if (candidate.Def.SciencePerHour > 0.0)
+                Meta.SciencePoints += candidate.Def.SciencePerHour * hours;
+        }
+    }
+
+    private void ApplyMaintenance(RegionState region, ref int idled)
+    {
+        foreach (var building in region.Buildings)
+        {
+            if (building.Status is not (BuildingStatus.Operational or BuildingStatus.Idle))
+                continue;
+
+            if (!_registry.TryGet(building.DefId, out var def) || def is null)
+                continue;
+
+            if (def.MaintenancePerHour.Count == 0)
+                continue;
+
+            if (TryPay(def.MaintenancePerHour, out _))
+                continue;
+
+            building.Status = BuildingStatus.Idle;
+            building.StatusReason = "maintenance unpaid";
+            idled++;
+        }
+    }
+
+    private static void CompleteConstruction(BuildingInstance building, double now)
+    {
+        building.Progress = 1.0;
+        building.Status = BuildingStatus.Operational;
+        building.ConstructionCompleteTime = now;
+        building.StatusReason = string.Empty;
+    }
+
+    private static readonly HashSet<string> LifeSupportResources =
+        new(StringComparer.Ordinal) { "oxygen", "water", "food" };
+
+    /// <summary>Lower keeps power/inputs first when a region is short.</summary>
+    private static int ConsumptionPriority(BuildingCategory category) => category switch
+    {
+        BuildingCategory.LifeSupport => 0,
+        BuildingCategory.Habitat => 1,
+        BuildingCategory.Science => 2,
+        BuildingCategory.Production => 3,
+        BuildingCategory.Storage => 4,
+        BuildingCategory.Logistics => 5,
+        BuildingCategory.Special => 6,
+        BuildingCategory.Defense => 7,
+        _ => 8,
+    };
+
+    private sealed record Candidate(BuildingInstance Building, BuildingDef Def);
+
     private void Touch(ulong regionIndex)
     {
         _loaded.Add(regionIndex);
@@ -273,4 +714,28 @@ public sealed class CampaignState
 
         return ordinals;
     }
+}
+
+/// <summary>Outcome of advancing the clock: how many buildings finished or stalled.</summary>
+public readonly record struct TickReport(double Hours, int Steps, int Completed, int Idled)
+{
+    public static TickReport None => new(0.0, 0, 0, 0);
+
+    /// <summary>True when time actually advanced.</summary>
+    public bool Changed => Steps > 0;
+}
+
+/// <summary>Power and status summary for one region, shown in the HUD.</summary>
+public readonly record struct RegionEconomy(
+    double SupplyKw,
+    double DemandKw,
+    int IdleCount,
+    int OperationalCount,
+    int UnderConstructionCount)
+{
+    public static RegionEconomy Empty => new(0.0, 0.0, 0, 0, 0);
+
+    public double NetKw => SupplyKw - DemandKw;
+
+    public bool HasDeficit => DemandKw > SupplyKw + 1e-9 || IdleCount > 0;
 }

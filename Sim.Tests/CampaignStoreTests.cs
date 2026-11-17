@@ -89,6 +89,65 @@ public class CampaignStoreTests : IDisposable
     }
 
     [Fact]
+    public void Meta_MigratesV1SaveToCurrentDefaults()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(store.MetaPath, $$"""
+            {
+              "format": "spm-campaign",
+              "version": 1,
+              "bodyKey": "{{Fingerprint.BodyKey}}",
+              "fineResolution": {{Fingerprint.FineResolution}},
+              "regionResolution": {{Fingerprint.RegionResolution}},
+              "regionCount": {{Fingerprint.RegionCount}},
+              "generatedUtc": "{{Fingerprint.GeneratedUtc}}",
+              "createdUtc": "2026-11-11T21:48:07+00:00",
+              "updatedUtc": "2026-11-11T22:00:00+00:00",
+              "gameTimeHours": 12.5,
+              "credits": 0,
+              "stockpile": {},
+              "unlockedTechs": [],
+              "visitedRegions": ["123"],
+              "activeRegion": "123"
+            }
+            """);
+
+        var loaded = store.LoadMeta(Fingerprint);
+
+        Assert.Equal(12.5, loaded.GameTimeHours);
+        Assert.Equal(CampaignDefaults.StartingCredits, loaded.Credits);
+        Assert.Equal(123UL, Assert.Single(loaded.VisitedRegions));
+        Assert.Equal(123UL, loaded.ActiveRegionIndex);
+        Assert.Equal(CampaignDefaults.StartingStockpile["oxygen"], loaded.Stockpile["oxygen"]);
+        Assert.Equal(
+            CampaignDefaults.DeterministicSeed(loaded.CreatedUtc),
+            loaded.RngSeed);
+        Assert.Equal(loaded.RngSeed, loaded.RngState);
+    }
+
+    [Fact]
+    public void Meta_RoundTripsSimulationFields()
+    {
+        var store = new CampaignStore(_root);
+        var meta = new CampaignMeta
+        {
+            SciencePoints = 321.5,
+            RngSeed = 12345,
+            RngState = 67890,
+        };
+        meta.UnlockedTechs.Add("nuclear_power");
+
+        store.SaveMeta(meta, Fingerprint);
+        var loaded = store.LoadMeta(Fingerprint);
+
+        Assert.Equal(meta.SciencePoints, loaded.SciencePoints);
+        Assert.Equal(meta.RngSeed, loaded.RngSeed);
+        Assert.Equal(meta.RngState, loaded.RngState);
+        Assert.Equal(new[] { "nuclear_power" }, loaded.UnlockedTechs);
+    }
+
+    [Fact]
     public void Region_RoundTripsBuildings()
     {
         var store = new CampaignStore(_root);
@@ -102,6 +161,8 @@ public class CampaignStoreTests : IDisposable
             Progress = 0.75,
             Health = 42.0,
             Status = BuildingStatus.Operational,
+            Paused = true,
+            StatusReason = "maintenance unpaid",
             ConstructionStartTime = 10.0,
             ConstructionCompleteTime = 34.0,
         };
@@ -122,6 +183,8 @@ public class CampaignStoreTests : IDisposable
         Assert.Equal(0.75, restored.Progress);
         Assert.Equal(42.0, restored.Health);
         Assert.Equal(BuildingStatus.Operational, restored.Status);
+        Assert.True(restored.Paused);
+        Assert.Equal("maintenance unpaid", restored.StatusReason);
         Assert.Equal(10.0, restored.ConstructionStartTime);
         Assert.Equal(34.0, restored.ConstructionCompleteTime);
         Assert.Equal(3.5, restored.StoredResources["power"]);
