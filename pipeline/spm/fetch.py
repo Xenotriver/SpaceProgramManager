@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from .bodies import BodyDef
 
 
 @dataclass(frozen=True)
@@ -74,12 +75,16 @@ def cache_dir(body_key: str = "moon") -> Path:
     return path
 
 
-def fetch(name: str, *, force: bool = False) -> Path:
-    """Download ``name`` into the cache (idempotent) and return its path."""
+def fetch(name: str, *, force: bool = False, body_key: str = "moon") -> Path:
+    """Download ``name`` into ``body_key``'s cache and return its path.
+
+    ``body_key`` defaults to ``moon`` so the existing Moon bake keeps using the
+    same cache directory it always has.
+    """
     import urllib.request
 
     source = SOURCES[name]
-    dest = cache_dir() / source.filename
+    dest = cache_dir(body_key) / source.filename
     if dest.exists() and not force:
         if source.size is None or dest.stat().st_size == source.size:
             return dest
@@ -150,3 +155,28 @@ def ensure_moon_inputs(dem_ppd: int, *, force: bool = False) -> dict[str, Path]:
     paths["craters"] = rob["craters.csv"]
 
     return paths
+
+
+def ensure_inputs(
+    body: BodyDef,
+    dem_ppd: int,
+    *,
+    force: bool = False,
+) -> dict[str, Path]:
+    """Ensure every real input for ``body`` exists.
+
+    Dispatch is by :attr:`BodyDef.source_profile`.  The Moon profile keeps the
+    exact legacy download/extract path.  Mars has no configured public raster
+    or crater catalogue yet, so its profile fails early with an actionable
+    message; the synthetic bake path bypasses fetching entirely.
+    """
+    if body.source_profile == "moon":
+        return ensure_moon_inputs(dem_ppd, force=force)
+
+    if body.source_profile == "mars":
+        raise RuntimeError(
+            "real Mars sources are not configured yet; run with --synthetic "
+            "until a MOLA MEGDR URL and optional geology/crater catalogues are verified"
+        )
+
+    raise ValueError(f"unknown source profile {body.source_profile!r} for {body.key!r}")

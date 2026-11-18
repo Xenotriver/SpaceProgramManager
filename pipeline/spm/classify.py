@@ -21,22 +21,28 @@ from .bodies import BodyDef
 
 def classify_surface(
     body: BodyDef,
-    geology_dn: np.ndarray,
+    geology_dn: np.ndarray | None,
     elevation_m: np.ndarray,
     lat: np.ndarray,
 ) -> np.ndarray:
-    """Return an ``int8`` raster of biome codes (indices into ``body.biomes``)."""
-    if not (geology_dn.shape == elevation_m.shape == lat.shape):
+    """Return an ``int8`` raster of biome codes (indices into ``body.biomes``).
+
+    ``geology_dn`` may be ``None`` for bodies without a configured geology
+    raster (Mars today); those bodies are classified from elevation and
+    latitude alone.  When it is present it must share the DEM grid shape.
+    """
+    if geology_dn is not None and not (geology_dn.shape == elevation_m.shape == lat.shape):
         raise ValueError(
             "geology_dn, elevation_m and lat must share a shape, got "
             f"{geology_dn.shape}, {elevation_m.shape}, {lat.shape}"
         )
 
-    code = {
-        b.id: i for i, b in enumerate(body.biomes)
-    }
+    code = {b.id: i for i, b in enumerate(body.biomes)}
 
-    mare = np.isin(geology_dn, np.fromiter(body.mare_geology_dns, dtype=np.int8))
+    if geology_dn is not None and body.mare_biome_id and body.mare_geology_dns:
+        mare = np.isin(geology_dn, np.fromiter(body.mare_geology_dns, dtype=np.int8))
+    else:
+        mare = np.zeros(elevation_m.shape, dtype=bool)
 
     # Elevation band index: 0 = Lowlands, 1 = Midlands, 2 = Highlands.
     band = np.zeros(elevation_m.shape, dtype=np.uint8)
@@ -48,9 +54,13 @@ def classify_surface(
 
     band_codes = np.array(
         [
-            [code["luna.pole_south_lowlands"], code["luna.pole_south_midlands"], code["luna.pole_south_highlands"]],
-            [code["luna.lowlands"], code["luna.midlands"], code["luna.highlands"]],
-            [code["luna.pole_north_lowlands"], code["luna.pole_north_midlands"], code["luna.pole_north_highlands"]],
+            [code[biome_id] for biome_id in body.pole_south_biome_ids],
+            [
+                code[body.lowlands_biome_id],
+                code[body.midlands_biome_id],
+                code[body.highlands_biome_id],
+            ],
+            [code[biome_id] for biome_id in body.pole_north_biome_ids],
         ],
         dtype=np.int8,
     )
@@ -61,5 +71,6 @@ def classify_surface(
     hemisphere[north] = 2
 
     out = band_codes[hemisphere, band]
-    out[mare] = code["luna.mare"]
+    if body.mare_biome_id is not None:
+        out[mare] = code[body.mare_biome_id]
     return out.astype(np.int8, copy=False)
