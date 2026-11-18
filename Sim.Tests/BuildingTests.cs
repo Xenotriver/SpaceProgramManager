@@ -27,6 +27,23 @@ public class BuildingTests
 
     private static readonly SiteScorerConfig Config = new() { BodyRadiusKm = 1737.4 };
 
+    private static readonly (string Id, string DisplayName, int ElevationRank, bool Buildable)[] MarsFixtureBiomes =
+    {
+        ("mars.lowlands", "Northern Lowlands", 0, true),
+        ("mars.midlands", "Midlands", 1, true),
+        ("mars.highlands", "Southern Highlands", 2, true),
+        ("mars.pole_north", "North Polar Region", 1, true),
+        ("mars.pole_south", "South Polar Region", 2, true),
+        ("mars.volcanic", "Volcanic Province", 3, true),
+        ("mars.canyon", "Canyon System", 1, true),
+    };
+
+    private static readonly (string Id, string DisplayName, int ElevationRank, bool Buildable)[] TestFixtureBiomes =
+    {
+        ("test.buildable", "Buildable", 1, true),
+        ("test.nonbuildable", "NonBuildable", 2, false),
+    };
+
     // Same normal region used by WorldLoaderTests; 343 fine hexes.
     private static readonly H3Index NormalRegion =
         HexGrid.FromLatLon(0.41590091884368713, 0.23004777276206262, 3);
@@ -297,6 +314,104 @@ public class BuildingTests
         }
     }
 
+    [Fact]
+    public void BuildingCatalogue_ForMoon_UsesCanonicalDefinitions()
+    {
+        var defs = BuildingCatalogue.For("MOON");
+
+        Assert.Same(MoonBuildings.All, defs);
+        Assert.Equal(MoonBuildings.All.Select(def => def.Id), defs.Select(def => def.Id));
+    }
+
+    [Fact]
+    public void BuildingCatalogue_ForMars_TranslatesBiomeRestrictions()
+    {
+        var defs = BuildingCatalogue.For("mars");
+
+        Assert.Equal(MoonBuildings.All.Count, defs.Count);
+        Assert.Equal(MoonBuildings.All.Select(def => def.Id), defs.Select(def => def.Id));
+
+        var restricted = defs.Where(def => def.AllowedBiomeIds.Count > 0 || def.ForbiddenBiomeIds.Count > 0)
+            .ToDictionary(def => def.Id, StringComparer.Ordinal);
+
+        Assert.Equal(
+            new[] { "ice_extractor", "solar_array_large", "solar_array_small", "telescope_array" },
+            restricted.Keys.OrderBy(id => id, StringComparer.Ordinal));
+
+        Assert.Equal(
+            new[] { "mars.lowlands", "mars.midlands", "mars.highlands" },
+            restricted["solar_array_small"].AllowedBiomeIds);
+        Assert.Equal(new[] { "mars.lowlands" }, restricted["solar_array_large"].AllowedBiomeIds);
+        Assert.Equal(
+            new[] { "mars.pole_north", "mars.pole_south" },
+            restricted["ice_extractor"].AllowedBiomeIds);
+        Assert.Equal(
+            new[] { "mars.highlands", "mars.pole_north", "mars.pole_south" },
+            restricted["telescope_array"].AllowedBiomeIds);
+        Assert.Equal(new[] { "mars.lowlands" }, restricted["telescope_array"].ForbiddenBiomeIds);
+
+        foreach (var def in defs)
+        {
+            var biomeIds = def.AllowedBiomeIds.Concat(def.ForbiddenBiomeIds).ToList();
+            Assert.DoesNotContain(biomeIds, biomeId => biomeId.StartsWith("luna.", StringComparison.Ordinal));
+            Assert.All(biomeIds, biomeId => Assert.StartsWith("mars.", biomeId));
+        }
+    }
+
+    [Fact]
+    public void BuildingCatalogue_UnknownBody_Throws()
+    {
+        var error = Assert.Throws<ArgumentException>(() => BuildingCatalogue.For("venus"));
+        Assert.Contains("No building catalogue", error.Message);
+    }
+
+    [Fact]
+    public void MarsBuildingRestrictions_ApplyAtPlacement()
+    {
+        using var fixture = new BuildingFixture("mars", MarsFixtureBiomes, 3389.5);
+        var config = new SiteScorerConfig { BodyRadiusKm = 3389.5 };
+        var defs = BuildingCatalogue.For("mars").ToDictionary(def => def.Id, StringComparer.Ordinal);
+
+        // Code 0 = mars.lowlands; code 3 = mars.pole_north.
+        using (var world = fixture.Open())
+        {
+            var tile = world.GetRegion((ulong)fixture.Region);
+            Assert.True(defs["solar_array_small"].CanPlaceAt(tile, fixture.CenterOrdinal, world, config).Success);
+            Assert.Contains(
+                "not in allowed list",
+                defs["ice_extractor"].CanPlaceAt(tile, fixture.CenterOrdinal, world, config).Error);
+        }
+
+        fixture.Biomes[fixture.CenterOrdinal] = 3;
+        fixture.Save();
+
+        using (var polarWorld = fixture.Open())
+        {
+            var polarTile = polarWorld.GetRegion((ulong)fixture.Region);
+            Assert.True(defs["ice_extractor"].CanPlaceAt(polarTile, fixture.CenterOrdinal, polarWorld, config).Success);
+            Assert.Contains(
+                "not in allowed list",
+                defs["solar_array_small"].CanPlaceAt(polarTile, fixture.CenterOrdinal, polarWorld, config).Error);
+        }
+    }
+
+    [Fact]
+    public void MarsBuildings_AllowedBiomeIdsExistInRealBake()
+    {
+        var root = TryFindRealDataRoot("mars");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("mars", root);
+        var known = world.Biomes.All.Select(biome => biome.Id).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var def in BuildingCatalogue.For("mars"))
+        {
+            foreach (var biomeId in def.AllowedBiomeIds.Concat(def.ForbiddenBiomeIds))
+                Assert.Contains(biomeId, known);
+        }
+    }
+
     private static BuildingDef MakeDef(
         string id,
         BuildingCategory category = BuildingCategory.Special,
@@ -340,13 +455,13 @@ public class BuildingTests
         throw new InvalidOperationException("Test region has no boundary cell.");
     }
 
-    private static string? TryFindRealDataRoot()
+    private static string? TryFindRealDataRoot(string bodyKey = "moon")
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "data", "moon", "manifest.json")))
+            if (File.Exists(Path.Combine(directory.FullName, "data", bodyKey, "manifest.json")))
                 return Path.Combine(directory.FullName, "data");
 
             directory = directory.Parent;
@@ -361,8 +476,15 @@ public class BuildingTests
     /// </summary>
     private sealed class BuildingFixture : IDisposable
     {
-        public BuildingFixture()
+        public BuildingFixture(
+            string bodyKey = "test",
+            IReadOnlyList<(string Id, string DisplayName, int ElevationRank, bool Buildable)>? biomes = null,
+            double radiusKm = 1737.4)
         {
+            BodyKey = bodyKey;
+            BiomeDefinitions = biomes ?? TestFixtureBiomes;
+            RadiusKm = radiusKm;
+
             Region = NormalRegion;
             Cells = HexGrid.FineHexesInRegion(Region, FineResolution);
             Biomes = new byte[Cells.Count];
@@ -377,7 +499,11 @@ public class BuildingTests
             Save();
         }
 
-        public string BodyKey => "test";
+        public string BodyKey { get; }
+
+        public double RadiusKm { get; }
+
+        public IReadOnlyList<(string Id, string DisplayName, int ElevationRank, bool Buildable)> BiomeDefinitions { get; }
 
         public string Root { get; }
 
@@ -427,17 +553,22 @@ public class BuildingTests
                 format = "spm-region-tiles",
                 version = TileFormat.Version,
                 generatedUtc = "2026-01-01T00:00:00+00:00",
-                body = new { key = BodyKey, displayName = "Test Body", radiusKm = 1737.4 },
+                body = new { key = BodyKey, displayName = BodyKey, radiusKm = RadiusKm },
                 fineResolution = FineResolution,
                 regionResolution = RegionResolution,
                 recordBytes = TileFormat.RecordBytes,
                 tileHeaderBytes = TileFormat.HeaderBytes,
                 tilesFile = "fine.bin",
-                biomes = new object[]
-                {
-                    new { code = 0, id = "test.buildable", displayName = "Buildable", elevationRank = 1, buildable = true },
-                    new { code = 1, id = "test.nonbuildable", displayName = "NonBuildable", elevationRank = 2, buildable = false },
-                },
+                biomes = BiomeDefinitions
+                    .Select((biome, code) => new
+                    {
+                        code,
+                        id = biome.Id,
+                        displayName = biome.DisplayName,
+                        elevationRank = biome.ElevationRank,
+                        buildable = biome.Buildable,
+                    })
+                    .ToArray(),
                 sources = new Dictionary<string, string>(),
                 regions = new object[]
                 {

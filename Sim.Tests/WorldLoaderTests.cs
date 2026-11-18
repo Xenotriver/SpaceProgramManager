@@ -14,8 +14,8 @@ namespace Sim.Tests;
 /// Tests for the baked region-tile loader (<see cref="BodyWorld"/>).
 ///
 /// Most tests build a tiny synthetic bake in a temp directory so they always run.
-/// The <c>RealBake_*</c> tests additionally read <c>data/moon</c> when it exists and
-/// are no-ops otherwise (the bake is gitignored).
+/// The <c>RealBake_*</c> tests additionally read <c>data/moon</c> and
+/// <c>data/mars</c> when they exist and are no-ops otherwise (bakes are gitignored).
 /// </summary>
 public class WorldLoaderTests
 {
@@ -250,13 +250,79 @@ public class WorldLoaderTests
         }
     }
 
-    private static string? TryFindRealDataRoot()
+    [Fact]
+    public void RealBake_Mars_ManifestIsSelfConsistent()
+    {
+        var root = TryFindRealDataRoot("mars");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("mars", root);
+
+        Assert.Equal("mars", world.BodyKey);
+        Assert.Equal(41_162, world.Regions.Count);
+        Assert.Equal(7, world.Biomes.Count);
+        Assert.Equal(6, world.FineResolution);
+        Assert.Equal(3, world.RegionResolution);
+
+        Assert.Equal(
+            new[]
+            {
+                "mars.lowlands", "mars.midlands", "mars.highlands", "mars.pole_north",
+                "mars.pole_south", "mars.volcanic", "mars.canyon",
+            },
+            world.Biomes.All.Select(biome => biome.Id));
+        Assert.Equal(7, world.Biomes.All.Select(biome => biome.Id).Distinct().Count());
+        Assert.All(world.Biomes.All, biome => Assert.InRange(biome.ElevationRank, 0, 3));
+
+        Assert.Equal(12, world.Regions.Count(region => region.HexCount == 286));
+        Assert.All(world.Regions, region =>
+        {
+            Assert.Contains(region.HexCount, new[] { 286, 343 });
+            Assert.InRange(region.DominantBiomeCode, (byte)0, (byte)6);
+            Assert.Equal(TileFormat.HeaderBytes + region.HexCount * TileFormat.RecordBytes, region.Length);
+        });
+
+        Assert.Contains("MOLA", world.Manifest.Sources["dem"]);
+        Assert.Contains("USGS Mars", world.Manifest.Sources["geology"]);
+        Assert.Contains("Robbins", world.Manifest.Sources["craters"]);
+    }
+
+    [Fact]
+    public void RealBake_Mars_ReadsSampleRegions()
+    {
+        var root = TryFindRealDataRoot("mars");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("mars", root);
+
+        var ordinals = Enumerable.Range(0, world.Regions.Count).Where(i => i % 4096 == 0).Append(world.Regions.Count - 1);
+
+        foreach (var ordinal in ordinals)
+        {
+            var tile = world.GetRegionAt(ordinal);
+
+            Assert.Equal(world.Regions[ordinal].HexCount, tile.HexCount);
+            Assert.Equal(world.Regions[ordinal].DominantBiomeCode, tile.DominantBiomeCode);
+
+            for (var i = 0; i < tile.HexCount; i++)
+            {
+                var record = tile[i];
+                Assert.InRange(record.BiomeCode, (byte)0, (byte)6);
+                Assert.InRange(record.ElevationM, (short)-8177, (short)21171);
+                Assert.True(Enum.IsDefined(record.Crater));
+            }
+        }
+    }
+
+    private static string? TryFindRealDataRoot(string bodyKey = "moon")
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "data", "moon", "manifest.json")))
+            if (File.Exists(Path.Combine(directory.FullName, "data", bodyKey, "manifest.json")))
                 return Path.Combine(directory.FullName, "data");
 
             directory = directory.Parent;
@@ -264,7 +330,8 @@ public class WorldLoaderTests
 
         // Local/CI opt-in: fail instead of silently skipping when the bake is required.
         if (Environment.GetEnvironmentVariable("SPM_REQUIRE_DATA") == "1")
-            throw new DirectoryNotFoundException("SPM_REQUIRE_DATA=1 but data/moon/manifest.json was not found.");
+            throw new DirectoryNotFoundException(
+                $"SPM_REQUIRE_DATA=1 but data/{bodyKey}/manifest.json was not found.");
 
         return null;
     }

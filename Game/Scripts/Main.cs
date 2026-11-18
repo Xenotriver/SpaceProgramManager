@@ -130,7 +130,7 @@ public partial class Main : Node2D
         _regionView.ViewModeChanged += OnViewModeChanged;
         _regionView.BaseSpeedKmh = FloatArgument("--speed", 10f);
 
-        _registry = new BuildingRegistry(MoonBuildings.All);
+        _registry = BuildingCatalogue.RegistryFor(_world.BodyKey);
 
         _managementView = new ManagementView { Visible = false };
         _worldLayer.AddChild(_managementView);
