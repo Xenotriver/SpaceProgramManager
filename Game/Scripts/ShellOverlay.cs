@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Sim.Campaign;
+using Sim.World;
 
 /// <summary>Actions the shell asks <see cref="Main"/> to perform.</summary>
 public enum ShellCommand
@@ -21,6 +22,7 @@ public enum ShellCommand
     Speed1,
     Speed2,
     Speed4,
+    SwitchBody,
 }
 
 /// <summary>
@@ -39,6 +41,7 @@ public partial class ShellOverlay : Node2D
         Pause,
         ConfirmDelete,
         Search,
+        SystemMap,
     }
 
     private const float RowHeight = 46f;
@@ -60,6 +63,38 @@ public partial class ShellOverlay : Node2D
     private static readonly Color ErrorColor = new(0.96f, 0.45f, 0.42f);
     private static readonly Color InfoColor = new(0.55f, 0.85f, 1f);
     private static readonly Color WarmColor = new(0.98f, 0.72f, 0.35f);
+    private static readonly Color ReadyColor = new(0.35f, 1f, 0.62f);
+
+    /// <summary>
+    /// Schematic map: one entry per visible body. Orbits and angles are fixed for
+    /// readability rather than astronomical accuracy; only ready bodies are openable.
+    /// </summary>
+    private static readonly MapBody[] MapBodies =
+    {
+        new("mercury", "Mercury", new Color(0.62f, 0.60f, 0.57f), 0.08f, 210f, 4f, Vector2.Zero),
+        new("venus", "Venus", new Color(0.92f, 0.76f, 0.42f), 0.14f, 135f, 6f, Vector2.Zero),
+        new("earth", "Earth", new Color(0.32f, 0.62f, 1f), 0.20f, 80f, 7f, Vector2.Zero),
+        new("moon", "Moon", new Color(0.82f, 0.84f, 0.86f), 0.20f, 80f, 3f, new Vector2(16f, -12f)),
+        new("mars", "Mars", new Color(0.94f, 0.38f, 0.24f), 0.26f, 25f, 6f, Vector2.Zero),
+        new("phobos", "Phobos", new Color(0.58f, 0.50f, 0.44f), 0.26f, 25f, 2f, new Vector2(14f, -10f)),
+        new("deimos", "Deimos", new Color(0.60f, 0.54f, 0.48f), 0.26f, 25f, 2f, new Vector2(20f, 8f)),
+        new("jupiter", "Jupiter", new Color(0.86f, 0.70f, 0.52f), 0.33f, 330f, 14f, Vector2.Zero),
+        new("io", "Io", new Color(0.96f, 0.86f, 0.38f), 0.33f, 330f, 3f, new Vector2(-18f, -16f)),
+        new("europa", "Europa", new Color(0.86f, 0.88f, 0.92f), 0.33f, 330f, 3f, new Vector2(-4f, -20f)),
+        new("ganymede", "Ganymede", new Color(0.70f, 0.62f, 0.52f), 0.33f, 330f, 4f, new Vector2(14f, -19f)),
+        new("callisto", "Callisto", new Color(0.52f, 0.46f, 0.42f), 0.33f, 330f, 3.5f, new Vector2(28f, -14f)),
+        new("saturn", "Saturn", new Color(0.90f, 0.80f, 0.55f), 0.39f, 285f, 12f, Vector2.Zero),
+        new("titan", "Titan", new Color(0.90f, 0.66f, 0.30f), 0.39f, 285f, 3f, new Vector2(16f, -15f)),
+        new("enceladus", "Enceladus", new Color(0.92f, 0.94f, 0.96f), 0.39f, 285f, 2.5f, new Vector2(-16f, -14f)),
+        new("uranus", "Uranus", new Color(0.48f, 0.88f, 0.92f), 0.44f, 235f, 9f, Vector2.Zero),
+        new("titania", "Titania", new Color(0.68f, 0.78f, 0.80f), 0.44f, 235f, 3f, new Vector2(16f, -11f)),
+        new("neptune", "Neptune", new Color(0.30f, 0.44f, 0.96f), 0.47f, 190f, 9f, Vector2.Zero),
+        new("triton", "Triton", new Color(0.70f, 0.80f, 0.94f), 0.47f, 190f, 3f, new Vector2(16f, -10f)),
+        new("pluto", "Pluto", new Color(0.76f, 0.70f, 0.64f), 0.49f, 160f, 3.5f, Vector2.Zero),
+        new("charon", "Charon", new Color(0.66f, 0.64f, 0.62f), 0.49f, 160f, 2f, new Vector2(12f, 8f)),
+    };
+
+    private static readonly float[] MapOrbits = { 0.08f, 0.14f, 0.20f, 0.26f, 0.33f, 0.39f, 0.44f, 0.47f, 0.49f };
 
     private readonly List<Toast> _toasts = new();
 
@@ -82,6 +117,9 @@ public partial class ShellOverlay : Node2D
 
     /// <summary>Active body shown in the menu subtitle.</summary>
     public string BodyLabel { get; set; } = "Moon";
+
+    /// <summary>Canonical key of the active body, highlighted on the system map.</summary>
+    public string BodyKey { get; set; } = KnownBodies.Moon;
 
     /// <summary>True while a menu/pause screen is open.</summary>
     public bool IsOpen => _screen != Screen.Closed;
@@ -133,6 +171,22 @@ public partial class ShellOverlay : Node2D
         _screen = Screen.Search;
         _search = string.Empty;
         _selected = 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the schematic Solar System Map, or closes it if already open.</summary>
+    public void ToggleSystemMap()
+    {
+        if (_screen == Screen.SystemMap)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.SystemMap;
+        var current = Array.FindIndex(MapBodies, body => body.Key == BodyKey);
+        _selected = current >= 0 ? current : 0;
         QueueRedraw();
     }
 
@@ -215,48 +269,55 @@ public partial class ShellOverlay : Node2D
             DrawString(_font, new Vector2(layout.Panel.Position.X + 28f, layout.Panel.Position.Y + 68f), layout.Subtitle!,
                 HorizontalAlignment.Left, -1, 12, MutedText);
 
-        for (var i = 0; i < layout.Rows.Count; i++)
+        if (_screen == Screen.SystemMap)
         {
-            var row = layout.Rows[i];
-            var hovered = row.Enabled && row.Rect.HasPoint(_mouse);
-            var active = i == _selected && row.Enabled;
-
-            if (hovered || active)
-                DrawRect(row.Rect, HoverColor);
-            else if (row.Enabled)
-                DrawRect(row.Rect, RowColor);
-
-            if (row.Accent is { } accent)
-                DrawRect(new Rect2(row.Rect.Position, new Vector2(3f, row.Rect.Size.Y)), accent);
-
-            var textX = row.Rect.Position.X + 16f;
-            var labelY = row.Detail is null ? row.Rect.Position.Y + 27f : row.Rect.Position.Y + 21f;
-            var labelColor = row.Enabled ? AccentText : DisabledText;
-
-            DrawString(_font, new Vector2(textX, labelY), row.Label,
-                HorizontalAlignment.Left, -1, 16, labelColor);
-
-            if (row.Detail is not null)
-                DrawString(_font, new Vector2(textX, row.Rect.Position.Y + 37f), row.Detail,
-                    HorizontalAlignment.Left, -1, 12, row.Enabled ? MutedText : DisabledText);
-
-            if (row.Right is not null)
-                DrawRight(row.Right, row.Rect.End.X - 18f, row.Rect.Position.Y + 27f, 12,
-                    row.Enabled ? MutedText : DisabledText);
-
-            if (row.DeleteRect is { } delete)
-            {
-                DrawRect(delete, new Color(0.55f, 0.16f, 0.16f, 0.75f));
-                DrawString(_font, new Vector2(delete.Position.X + 7f, delete.Position.Y + 19f), "×",
-                    HorizontalAlignment.Left, -1, 16, AccentText);
-            }
+            DrawSystemMap(layout.Panel, layout.Rows);
         }
+        else
+        {
+            for (var i = 0; i < layout.Rows.Count; i++)
+            {
+                var row = layout.Rows[i];
+                var hovered = row.Enabled && row.Rect.HasPoint(_mouse);
+                var active = i == _selected && row.Enabled;
 
-        if (_screen == Screen.Pause)
-            DrawTimeControls(layout.Panel);
+                if (hovered || active)
+                    DrawRect(row.Rect, HoverColor);
+                else if (row.Enabled)
+                    DrawRect(row.Rect, RowColor);
 
-        if (_screen == Screen.Search)
-            DrawSearchBox(layout.Panel);
+                if (row.Accent is { } accent)
+                    DrawRect(new Rect2(row.Rect.Position, new Vector2(3f, row.Rect.Size.Y)), accent);
+
+                var textX = row.Rect.Position.X + 16f;
+                var labelY = row.Detail is null ? row.Rect.Position.Y + 27f : row.Rect.Position.Y + 21f;
+                var labelColor = row.Enabled ? AccentText : DisabledText;
+
+                DrawString(_font, new Vector2(textX, labelY), row.Label,
+                    HorizontalAlignment.Left, -1, 16, labelColor);
+
+                if (row.Detail is not null)
+                    DrawString(_font, new Vector2(textX, row.Rect.Position.Y + 37f), row.Detail,
+                        HorizontalAlignment.Left, -1, 12, row.Enabled ? MutedText : DisabledText);
+
+                if (row.Right is not null)
+                    DrawRight(row.Right, row.Rect.End.X - 18f, row.Rect.Position.Y + 27f, 12,
+                        row.Enabled ? MutedText : DisabledText);
+
+                if (row.DeleteRect is { } delete)
+                {
+                    DrawRect(delete, new Color(0.55f, 0.16f, 0.16f, 0.75f));
+                    DrawString(_font, new Vector2(delete.Position.X + 7f, delete.Position.Y + 19f), "×",
+                        HorizontalAlignment.Left, -1, 16, AccentText);
+                }
+            }
+
+            if (_screen == Screen.Pause)
+                DrawTimeControls(layout.Panel);
+
+            if (_screen == Screen.Search)
+                DrawSearchBox(layout.Panel);
+        }
 
         DrawString(_font, new Vector2(layout.Panel.Position.X + 28f, layout.Panel.End.Y - 22f), layout.Hint,
             HorizontalAlignment.Left, -1, 12, MutedText);
@@ -268,6 +329,97 @@ public partial class ShellOverlay : Node2D
     {
         var width = _font.GetStringSize(text, HorizontalAlignment.Left, -1, size).X;
         DrawString(_font, new Vector2(rightX - width, y), text, HorizontalAlignment.Left, -1, size, color);
+    }
+
+    private void DrawCentered(string text, float centerX, float y, int size, Color color)
+    {
+        var width = _font.GetStringSize(text, HorizontalAlignment.Left, -1, size).X;
+        DrawString(_font, new Vector2(centerX - width * 0.5f, y), text, HorizontalAlignment.Left, -1, size, color);
+    }
+
+    private static Rect2 SystemMapArea(Rect2 panel)
+        => new(
+            panel.Position.X + 24f,
+            panel.Position.Y + 92f,
+            Mathf.Max(80f, panel.Size.X - 48f),
+            Mathf.Max(80f, panel.Size.Y - 160f));
+
+    private static Vector2 SystemMapCenter(Rect2 area)
+        => new(area.Position.X + area.Size.X * 0.5f, area.Position.Y + area.Size.Y * 0.56f);
+
+    private static float MapScale(Rect2 area)
+        => Mathf.Clamp(area.Size.X / 720f, 0.75f, 1.1f);
+
+    private static Vector2 MapBodyPosition(MapBody body, Rect2 area)
+    {
+        var angle = Mathf.DegToRad(body.AngleDegrees);
+        var orbit = new Vector2(
+            Mathf.Cos(angle) * area.Size.X * body.Orbit,
+            Mathf.Sin(angle) * area.Size.Y * body.Orbit * 0.55f);
+        return SystemMapCenter(area) + orbit + body.Offset * MapScale(area);
+    }
+
+    private static Rect2 MapBodyRect(MapBody body, Rect2 area)
+    {
+        var position = MapBodyPosition(body, area);
+        var size = Mathf.Max(body.Radius * 2f + 12f, 20f) * MapScale(area);
+        return new Rect2(position.X - size * 0.5f, position.Y - size * 0.5f, size, size);
+    }
+
+    private void DrawSystemMap(Rect2 panel, IReadOnlyList<Row> rows)
+    {
+        var area = SystemMapArea(panel);
+        DrawRect(area, new Color(0.025f, 0.035f, 0.055f, 0.95f));
+        DrawRect(area, new Color(0.38f, 0.52f, 0.68f, 0.5f), filled: false, width: 1f);
+
+        var center = SystemMapCenter(area);
+        var scale = MapScale(area);
+        var ringColor = new Color(0.52f, 0.66f, 0.82f, 0.14f);
+
+        foreach (var orbit in MapOrbits)
+        {
+            var points = new Vector2[97];
+            for (var i = 0; i < points.Length; i++)
+            {
+                var angle = i / (float)(points.Length - 1) * Mathf.Tau;
+                points[i] = center + new Vector2(
+                    Mathf.Cos(angle) * area.Size.X * orbit,
+                    Mathf.Sin(angle) * area.Size.Y * orbit * 0.55f);
+            }
+            DrawPolyline(points, ringColor, 1f, true);
+        }
+
+        DrawCircle(center, 18f * scale, new Color(1f, 0.72f, 0.25f, 0.16f));
+        DrawCircle(center, 12f * scale, WarmColor);
+        DrawCentered("Sun", center.X, center.Y - 28f * scale, 12, WarmColor);
+
+        for (var i = 0; i < Math.Min(rows.Count, MapBodies.Length); i++)
+        {
+            var body = MapBodies[i];
+            var row = rows[i];
+            var position = MapBodyPosition(body, area);
+            var radius = body.Radius * scale;
+            var fill = body.Ready
+                ? body.Tint
+                : new Color(body.Tint.R, body.Tint.G, body.Tint.B, 0.28f);
+
+            if (row.Enabled && i == _selected)
+                DrawCircle(position, radius + 6f * scale, InfoColor);
+            else if (row.Enabled && row.Rect.HasPoint(_mouse))
+                DrawCircle(position, radius + 4f * scale, WarmColor);
+
+            DrawCircle(position, radius + 1.5f * scale, new Color(0f, 0f, 0f, 0.8f));
+            DrawCircle(position, radius, fill);
+
+            var isCurrent = string.Equals(body.Key, BodyKey, StringComparison.OrdinalIgnoreCase);
+            var label = isCurrent && body.Ready ? $"{body.Name} · current" : body.Name;
+            var labelColor = !body.Ready ? DisabledText : isCurrent ? WarmColor : AccentText;
+            DrawCentered(label, position.X, position.Y - radius - 14f * scale,
+                body.Ready ? 11 : 10, labelColor);
+
+            if (body.Ready)
+                DrawCentered("READY", position.X, position.Y + radius + 13f * scale, 9, ReadyColor);
+        }
     }
 
     public override void _Input(InputEvent @event)
@@ -343,12 +495,16 @@ public partial class ShellOverlay : Node2D
                 Back();
                 return;
 
-            case Key.Up or Key.W:
+            case Key.Up or Key.W or Key.Left:
                 MoveSelection(-1);
                 return;
 
-            case Key.Down or Key.S:
+            case Key.Down or Key.S or Key.Right:
                 MoveSelection(1);
+                return;
+
+            case Key.M when _screen == Screen.SystemMap:
+                Close();
                 return;
 
             case Key.Enter or Key.KpEnter or Key.Space:
@@ -447,6 +603,7 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.OpenSaveFolder:
             case ShellCommand.MainMenu:
             case ShellCommand.Quit:
+            case ShellCommand.SwitchBody:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -559,6 +716,7 @@ public partial class ShellOverlay : Node2D
         string? subtitle;
         string hint;
         var extraHeight = 0f;
+        float? fixedHeight = null;
 
         switch (_screen)
         {
@@ -618,7 +776,7 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · Home active region · M colony · Tab overlay", null,
+                    "F5 save · Esc pause/back · / search · M system map · G colony · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -656,6 +814,25 @@ public partial class ShellOverlay : Node2D
                 hint = "Enter jump · Esc cancel";
                 break;
 
+            case Screen.SystemMap:
+                title = "SOLAR SYSTEM MAP";
+                subtitle = $"Current: {BodyLabel} · ready bakes: Moon, Mars";
+                hint = "←→ select · Enter travel · M/Esc close · click a body";
+                fixedHeight = 680f;
+                foreach (var body in MapBodies)
+                {
+                    specs.Add(new RowSpec(
+                        body.Name,
+                        null,
+                        body.Ready ? "ready" : "not baked",
+                        body.Ready,
+                        ShellCommand.SwitchBody,
+                        body.Key,
+                        false,
+                        $"{body.Name} has no baked terrain yet"));
+                }
+                break;
+
             default:
                 title = string.Empty;
                 subtitle = null;
@@ -663,7 +840,7 @@ public partial class ShellOverlay : Node2D
                 break;
         }
 
-        var height = 92f + specs.Count * RowHeight + FooterHeight + extraHeight;
+        var height = fixedHeight ?? 92f + specs.Count * RowHeight + FooterHeight + extraHeight;
         height = Mathf.Min(height, size.Y - 60f);
         var panel = new Rect2(
             Mathf.Round((size.X - width) * 0.5f),
@@ -674,9 +851,12 @@ public partial class ShellOverlay : Node2D
         var rows = new List<Row>(specs.Count);
         var y = panel.Position.Y + 86f;
 
-        foreach (var spec in specs)
+        for (var i = 0; i < specs.Count; i++)
         {
-            var rect = new Rect2(panel.Position.X + 24f, y, panel.Size.X - 48f, RowHeight - 6f);
+            var spec = specs[i];
+            var rect = _screen == Screen.SystemMap
+                ? MapBodyRect(MapBodies[i], panel)
+                : new Rect2(panel.Position.X + 24f, y, panel.Size.X - 48f, RowHeight - 6f);
             Rect2? delete = null;
 
             if (spec.ShowDelete)
@@ -831,6 +1011,18 @@ public partial class ShellOverlay : Node2D
     private static double Now() => Time.GetTicksMsec() / 1000.0;
 
     private sealed record Toast(string Message, bool Error, double Expires);
+
+    private sealed record MapBody(
+        string Key,
+        string Name,
+        Color Tint,
+        float Orbit,
+        float AngleDegrees,
+        float Radius,
+        Vector2 Offset)
+    {
+        public bool Ready => KnownBodies.IsReady(Key);
+    }
 
     private sealed record Layout(Rect2 Panel, string Title, string? Subtitle, string Hint, List<Row> Rows);
 

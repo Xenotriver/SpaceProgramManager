@@ -25,13 +25,14 @@ public partial class Main : Node2D
     private const float PanelWidth = 300f;
     private const double AutosaveSeconds = 5.0;
 
-    private const string GlobeStatus = "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · Esc pause";
+    private const string GlobeStatus =
+        "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · M map · Esc pause";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · Enter site · M colony · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · Enter site · G colony · M map · Esc back";
     private const string ManagementStatus =
-        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Enter site · Esc back";
+        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Enter site · M map · Esc back";
     private const string SiteStatus =
-        "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · Esc back";
+        "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -161,6 +162,7 @@ public partial class Main : Node2D
         {
             SaveRootLabel = _settings.SaveRoot,
             BodyLabel = KnownBodies.DisplayName(_world.BodyKey),
+            BodyKey = _world.BodyKey,
         };
         AddChild(_shell);
         _shell.Command += OnShellCommand;
@@ -206,6 +208,9 @@ public partial class Main : Node2D
 
         if (!skipCli)
             ApplyCommandLine();
+
+        if (HasArgument("--map"))
+            _shell.ToggleSystemMap();
 
         var shotPath = FindShotPath();
         if (shotPath is not null)
@@ -404,6 +409,10 @@ public partial class Main : Node2D
 
             case ShellCommand.Search:
                 GoToRegion(payload);
+                return;
+
+            case ShellCommand.SwitchBody:
+                SwitchBody(payload ?? KnownBodies.Moon);
                 return;
 
             case ShellCommand.OpenSaveFolder:
@@ -844,7 +853,11 @@ public partial class Main : Node2D
                 RotateCamera(1);
                 break;
 
-            case Key.M when _mode == Mode.Region:
+            case Key.M:
+                _shell.ToggleSystemMap();
+                break;
+
+            case Key.G when _mode == Mode.Region:
                 ShowManagement();
                 break;
 
