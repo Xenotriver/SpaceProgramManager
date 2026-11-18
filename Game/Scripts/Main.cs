@@ -25,6 +25,11 @@ public partial class Main : Node2D
     private const float PanelWidth = 300f;
     private const double AutosaveSeconds = 5.0;
 
+    private const int BenchmarkWarmupFrames = 12;
+    private const int DefaultBenchmarkFrames = 180;
+    private const int MinimumBenchmarkFrames = 30;
+    private const int MaximumBenchmarkFrames = 3600;
+
     private const string GlobeStatus =
         "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · M map · Esc pause";
     private const string RegionStatus =
@@ -90,6 +95,12 @@ public partial class Main : Node2D
     private bool _benchRedraw;
     private int _frameCounter;
     private double _frameSeconds;
+
+    private bool _frameBudgetEnabled;
+    private double _frameBudgetMs;
+    private int _frameBudgetFrames;
+    private int _frameBudgetCounter;
+    private readonly List<double> _frameSamples = new();
 
     private readonly SimulationClock _clock = new();
     private double _autosaveElapsed;
@@ -172,6 +183,29 @@ public partial class Main : Node2D
         _globe.Spin = HasArgument("--spin");
         _reportFps = HasArgument("--fps") || _settings.ShowFps;
         _benchRedraw = HasArgument("--redraw");
+
+        var frameBudget = ArgumentValue("--frame-budget");
+        if (frameBudget is not null)
+        {
+            if (double.TryParse(frameBudget, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var budgetMs)
+                && budgetMs > 0.0)
+            {
+                _frameBudgetMs = budgetMs;
+                _frameBudgetFrames = Math.Clamp(
+                    IntArgument("--frames", DefaultBenchmarkFrames),
+                    MinimumBenchmarkFrames,
+                    MaximumBenchmarkFrames);
+                _frameBudgetEnabled = true;
+                _benchRedraw = true;
+                _reportFps = false;
+            }
+            else
+            {
+                GD.PushWarning(
+                    $"invalid --frame-budget='{frameBudget}'; expected a positive number of milliseconds");
+            }
+        }
 
         var reloadSlot = _pendingSlot;
         var forceMenu = _forceMenu;
@@ -718,6 +752,23 @@ public partial class Main : Node2D
         if (!_started)
             return;
 
+        if (_frameBudgetEnabled)
+        {
+            QueueActiveViewRedraw();
+
+            // Warm up shaders/caches, then judge a fixed number of frames so the
+            // gate is repeatable rather than dependent on how long a run lasts.
+            if (++_frameBudgetCounter <= BenchmarkWarmupFrames)
+                return;
+
+            _frameSamples.Add(delta * 1000.0);
+            if (_frameSamples.Count < _frameBudgetFrames)
+                return;
+
+            ReportFrameBudget();
+            return;
+        }
+
         if (!_shell.IsOpen && !_clock.IsPaused)
         {
             var steps = _clock.Advance(delta);
@@ -743,12 +794,8 @@ public partial class Main : Node2D
             }
         }
 
-        if (_benchRedraw && _mode == Mode.Region)
-            _regionView.QueueRedraw();
-        else if (_benchRedraw && _mode == Mode.Management)
-            _managementView.QueueRedraw();
-        else if (_benchRedraw && _mode == Mode.Site)
-            _siteView.QueueRedraw();
+        if (_benchRedraw)
+            QueueActiveViewRedraw();
 
         if (!_reportFps)
             return;
@@ -773,6 +820,43 @@ public partial class Main : Node2D
         _regionView.ResetDrawStats();
         _managementView.ResetDrawStats();
         _siteView.ResetDrawStats();
+    }
+
+    private void QueueActiveViewRedraw()
+    {
+        switch (_mode)
+        {
+            case Mode.Region:
+                _regionView.QueueRedraw();
+                break;
+            case Mode.Management:
+                _managementView.QueueRedraw();
+                break;
+            case Mode.Site:
+                _siteView.QueueRedraw();
+                break;
+            default:
+                _globe.QueueRedraw();
+                break;
+        }
+    }
+
+    private void ReportFrameBudget()
+    {
+        _frameBudgetEnabled = false;
+
+        var sorted = _frameSamples.OrderBy(sample => sample).ToArray();
+        var average = _frameSamples.Average();
+        var percentileIndex = Math.Clamp(
+            (int)Math.Ceiling(sorted.Length * 0.95) - 1, 0, sorted.Length - 1);
+        var p95 = sorted[percentileIndex];
+        var passed = p95 <= _frameBudgetMs;
+
+        GD.Print($"frame budget: {KnownBodies.DisplayName(_world.BodyKey)} {_mode} · " +
+                 $"{sorted.Length} frames + {BenchmarkWarmupFrames} warmup · " +
+                 $"avg {average:F2} ms · p95 {p95:F2} ms · " +
+                 $"limit {_frameBudgetMs:F2} ms · {(passed ? "PASS" : "FAIL")}");
+        GetTree().Quit(passed ? 0 : 1);
     }
 
     public override void _Draw()
