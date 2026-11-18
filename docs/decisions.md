@@ -534,7 +534,9 @@ the chosen view under forced redraw rather than interactive idle time.
 synthetic Moon and Mars fixtures into `SPM_DATA`, sets `SPM_REQUIRE_DATA=1`,
 builds/tests, then downloads the official Godot 4.7.2 mono Linux zip pinned to
 SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`.
-Five headless view runs use `--frame-budget=20 --frames=30`; `--shot` is excluded.
+Five headless view runs initially used `--frame-budget=20 --frames=30`; M4.5
+extends the same job to eleven runs covering imagery and biome fallback. `--shot`
+is excluded.
 
 **Why.** `godotengine/setup-godot` does not exist in GitHub's API, and a pinned
 archive is reproducible. Generated fixtures keep `data/` out of the repository
@@ -546,6 +548,73 @@ this automation path, so the frame-gate run doubles as the smoke.
 
 ---
 
+## D30 — Surface colour is an optional presentation sidecar
+
+**Commit:** M4.5, 2026-11-18 · **Status:** active
+
+**Decision.** Imagery lives in `data/<body>/color.bin` (three RGB bytes per fine
+hex in `fine.bin` child order) plus `imagery.json` for provenance and validation.
+`SurfaceImagery` in `Game/Scripts/` checks body key, resolutions, hex count, byte
+length and SHA-256. Any missing, short, wrong-body, wrong-resolution or corrupt
+input logs a warning and falls back to biome colours without blocking load.
+`manifest.json`, the tile format, save schema, `bodyKey` and `BakeFingerprint` are
+unchanged; `Sim` never sees imagery.
+
+**Why.** The existing bake and saves must stay valid for both bodies, and a
+presentation experiment must never be able to corrupt authoritative data. A
+sidecar also lets CI use deterministic synthetic colour without touching science
+sources.
+
+**Cost.** Each body adds a 42 MB optional file read at startup and a SHA-256 pass.
+Players without the sidecar keep the previous schematic look.
+
+---
+
+## D31 — Pinned public-domain imagery with one alignment rule
+
+**Commit:** M4.5, 2026-11-18 · **Status:** active
+
+**Decision.** The Moon uses NASA SVS CGI Moon Kit `lroc_color_poles_2k.tif`
+(SHA-256 `13B79742…2C4A`); Mars uses USGS Viking MDIM 2.1 colorized
+`mars_viking_mdim21_clrmosaic_1km.jpg` (SHA-256 `FDFCD335…ECB2`). Both are
+north-up −180..180 mosaics, so the sampler applies only
+`np.roll(rgb, -width // 2, axis=1)` with no vertical flip. Sources are sampled at
+16 ppd, averaged per fine hex, and their exact URLs, licences and credits are
+copied into `imagery.json`.
+
+**Why.** Explicit products, checksums and alignment prevent a visually plausible
+but mirrored or offset overlay. Public-domain/non-copyright US government imagery
+keeps the repository free of licensed assets (`data/` remains gitignored anyway).
+
+**Cost.** The Mars source is 228 MP and needs a verified checksum before Pillow's
+decompression-bomb limit is relaxed for that one decode. The images are aesthetic
+global mosaics, not scientific multispectral products.
+
+---
+
+## D32 — True colour is the default; biome stays one key away
+
+**Commit:** M4.5, 2026-11-18 · **Status:** active
+
+**Decision.** When a valid sidecar is present, globe, region and colony views
+default to real surface colour for every slot. `Tab` toggles globe imagery/biome;
+`Tab` and `1`–`5` cycle region/colony overlays. `--overlay=color` (with
+`colour`/`imagery`/`surface` aliases) works in all three views and
+`--overlay=biome` restores the analytical palette. An explicit CLI overlay wins;
+saved `slot.json` overlay text is used only when imagery is unavailable. The
+globe uses one precomputed mean colour per region and re-uploads only instance
+colours on toggle.
+
+**Why.** The locked M4.5 intent is that bodies look like themselves immediately,
+while analytical biomes remain reachable for scoring and comparison. Reusing the
+existing UI string keeps the save schema at v3 with no migration.
+
+**Cost.** A player who prefers biome colours must select them each session unless
+they pass `--overlay=biome`; without imagery, the previous per-view defaults
+remain (biome for globe/region, terrain for colony).
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
@@ -553,4 +622,4 @@ bake-change save migration, and 3D building assets/presentation. Multi-installat
 hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
-choices are settled by D23–D29.
+choices are settled by D23–D29; M4.5 imagery choices are settled by D30–D32.

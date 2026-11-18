@@ -9,6 +9,8 @@ All sources are public-domain / freely redistributable (design doc §5.1):
 * **USGS Mars 15M Geologic Map GIS Renovation** - USGS Astrogeology.
 * **Robbins & Hynek (2012) global Mars crater catalogue** - MIT-licensed
   mirror of the published catalogue.
+* **NASA SVS CGI Moon Kit colour** and **USGS Viking MDIM 2.1 colorized
+  Mars mosaic** - optional presentation-only imagery sidecars.
 
 Nothing here is committed; everything lands in ``pipeline/.cache``.
 """
@@ -101,6 +103,23 @@ SOURCES: dict[str, Source] = {
         "craters.csv",
         # GitHub serves this with gzip when the client asks for it; the
         # decompressed CSV is ~97 MB, so do not pin a cache size here.
+    ),
+    # Optional presentation-only colour sidecars.  SHA-256 is verified by
+    # spm.imagery after the download; sizes are pinned here for the cache.
+    "moon_color": Source(
+        "moon_color",
+        "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_2k.tif",
+        "lroc_color_poles_2k.tif",
+        3339438,
+    ),
+    "mars_color": Source(
+        "mars_color",
+        "https://astrogeology.usgs.gov/ckan/dataset/"
+        "7131d503-cdc9-45a5-8f83-5126c0fd397e/resource/"
+        "5ea881c6-01b3-41fa-a7af-42d2131b54f1/download/"
+        "mars_viking_mdim21_clrmosaic_1km.jpg",
+        "mars_viking_mdim21_clrmosaic_1km.jpg",
+        36708552,
     ),
 }
 

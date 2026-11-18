@@ -52,6 +52,7 @@ public partial class ManagementView : Node2D
 
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
+    private SurfaceImagery? _imagery;
     private CampaignState? _campaign;
     private Font _font = null!;
 
@@ -64,6 +65,7 @@ public partial class ManagementView : Node2D
     private float[] _heights = Array.Empty<float>();
     private Color[] _biomeFills = Array.Empty<Color>();
     private Color[] _terrainFills = Array.Empty<Color>();
+    private Color[] _imageryFills = Array.Empty<Color>();
     private Color[] _siteFills = Array.Empty<Color>();
     private Color[] _buildingFills = Array.Empty<Color>();
     private Color[] _fills = Array.Empty<Color>();
@@ -154,6 +156,12 @@ public partial class ManagementView : Node2D
     /// <summary>Colour overlay shown on the prisms.</summary>
     public RegionViewMode Overlay { get; private set; } = RegionViewMode.Terrain;
 
+    /// <summary>True when the loaded region has valid imagery colours.</summary>
+    public bool HasImagery => _imagery is not null && _imageryFills.Length == _corners.Length;
+
+    /// <summary>Binds the optional surface-colour sidecar before a region is loaded.</summary>
+    public void SetImagery(SurfaceImagery? imagery) => _imagery = imagery;
+
     /// <summary>User multiplier on the automatic relief exaggeration.</summary>
     public float ReliefScale { get; set; } = 1f;
 
@@ -209,6 +217,14 @@ public partial class ManagementView : Node2D
         _heights = new float[count];
         _biomeFills = new Color[count];
         _terrainFills = new Color[count];
+        _imageryFills = Array.Empty<Color>();
+        if (_imagery is not null)
+        {
+            var imageryFills = new Color[count];
+            if (_imagery.TryCopyRegion(regionIndex, count, imageryFills))
+                _imageryFills = imageryFills;
+        }
+
         _buildingFills = new Color[count];
         _siteFills = Array.Empty<Color>();
         _siteScores = null;
@@ -300,6 +316,10 @@ public partial class ManagementView : Node2D
     /// <summary>Switches the colour overlay; site scores are computed on first use.</summary>
     public void SetOverlay(RegionViewMode mode)
     {
+        // Never show a labelled imagery overlay over biome fallback colours.
+        if (mode == RegionViewMode.Imagery && !HasImagery)
+            mode = RegionViewMode.Biome;
+
         if (Overlay == mode)
             return;
 
@@ -314,8 +334,20 @@ public partial class ManagementView : Node2D
         QueueRedraw();
     }
 
-    /// <summary>Advances to the next overlay (wraps).</summary>
-    public void CycleOverlay() => SetOverlay((RegionViewMode)(((int)Overlay + 1) % 4));
+    /// <summary>Advances to the next available overlay (wraps).</summary>
+    public void CycleOverlay()
+    {
+        var next = (int)Overlay + 1;
+        for (var attempt = 0; attempt < 5; attempt++, next++)
+        {
+            var mode = (RegionViewMode)(next % 5);
+            if (mode == RegionViewMode.Imagery && !HasImagery)
+                continue;
+
+            SetOverlay(mode);
+            return;
+        }
+    }
 
     /// <summary>Orbits the camera by whole 60° steps (positive is clockwise).</summary>
     public void Rotate(int steps) => SetRotation(_yawSteps + steps);
@@ -546,6 +578,7 @@ public partial class ManagementView : Node2D
         _fills = Overlay switch
         {
             RegionViewMode.Biome => _biomeFills,
+            RegionViewMode.Imagery when HasImagery => _imageryFills,
             RegionViewMode.SiteScore => _siteFills.Length == _biomeFills.Length ? _siteFills : _biomeFills,
             RegionViewMode.Buildings => _buildingFills,
             _ => _terrainFills,

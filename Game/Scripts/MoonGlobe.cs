@@ -28,7 +28,8 @@ public partial class MoonGlobe : Node2D
     private struct RegionShape
     {
         public Vector3 Centroid;
-        public Color Color;
+        public Color BiomeColor;
+        public Color ImageryColor;
         public ulong Index;
         public int HexCount;
         public byte BiomeCode;
@@ -43,6 +44,8 @@ public partial class MoonGlobe : Node2D
 
     private BodyWorld _world = null!;
     private RegionShape[] _regions = Array.Empty<RegionShape>();
+    private SurfaceImagery? _imagery;
+    private bool _imageryEnabled;
     private MultiMesh _multimesh = null!;
     private MultiMeshInstance2D _instances = null!;
     private float _hexRadiusRadians;
@@ -121,6 +124,43 @@ public partial class MoonGlobe : Node2D
     }
 
     public int RegionCount => _regions.Length;
+
+    /// <summary>True when the globe is currently showing per-region imagery means.</summary>
+    public bool UsesImagery => _imagery is not null && _imageryEnabled;
+
+    /// <summary>
+    /// Binds optional imagery and precomputes one mean colour per region. The
+    /// colours are uploaded once; toggling only swaps the MultiMesh instance
+    /// colour buffer and never rebuilds geometry.
+    /// </summary>
+    public void SetImagery(SurfaceImagery? imagery, bool enabled)
+    {
+        _imagery = imagery;
+        _imageryEnabled = enabled && imagery is not null;
+
+        for (var i = 0; i < _regions.Length; i++)
+        {
+            var entry = _world.Regions[i];
+            _regions[i].ImageryColor = imagery is null
+                ? _regions[i].BiomeColor
+                : imagery.MeanFor(entry.Index);
+        }
+
+        ApplyInstanceColors();
+        QueueRedraw();
+    }
+
+    /// <summary>Switches between surface imagery and analytical biome colours.</summary>
+    public void SetImageryOverlay(bool enabled)
+    {
+        var next = enabled && _imagery is not null;
+        if (next == _imageryEnabled)
+            return;
+
+        _imageryEnabled = next;
+        ApplyInstanceColors();
+        QueueRedraw();
+    }
 
     public void Initialize(BodyWorld world)
     {
@@ -488,7 +528,8 @@ public partial class MoonGlobe : Node2D
             {
                 Boundary = vectors,
                 Centroid = sum.Normalized(),
-                Color = BiomePalette.For(_world.Biomes[entry.DominantBiomeCode].Id),
+                BiomeColor = BiomePalette.For(_world.Biomes[entry.DominantBiomeCode].Id),
+                ImageryColor = BiomePalette.For(_world.Biomes[entry.DominantBiomeCode].Id),
                 Index = entry.Index,
                 HexCount = entry.HexCount,
                 BiomeCode = entry.DominantBiomeCode,
@@ -520,9 +561,9 @@ public partial class MoonGlobe : Node2D
             InstanceCount = _regions.Length,
         };
 
-        // Colours never change: upload them once. Transforms follow the camera.
-        for (var i = 0; i < _regions.Length; i++)
-            _multimesh.SetInstanceColor(i, _regions[i].Color);
+        // Colours only change when the player toggles the overlay. Transforms
+        // follow the camera and are updated separately.
+        ApplyInstanceColors();
 
         _instances = new MultiMeshInstance2D
         {
@@ -532,6 +573,18 @@ public partial class MoonGlobe : Node2D
 
         AddChild(_instances);
         UpdateInstances();
+    }
+
+    private void ApplyInstanceColors()
+    {
+        if (_multimesh is null)
+            return;
+
+        for (var i = 0; i < _regions.Length; i++)
+        {
+            _multimesh.SetInstanceColor(
+                i, UsesImagery ? _regions[i].ImageryColor : _regions[i].BiomeColor);
+        }
     }
 
     private static ArrayMesh BuildHexMesh()

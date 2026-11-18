@@ -132,7 +132,7 @@ from `campaign.json` and `regions/*.json`.
 | `lastPlayedUtc` | Drives last-played ordering and Continue |
 | `buildingCount`, `visitedRegionCount` | Counts used by the slot list |
 | `bodyKey`, `credits` | List details |
-| `view` | Camera/mode snapshot restored by Continue; `selectedHexOrdinal` is the fine hex whose site was open, or null outside site view |
+| `view` | Camera/mode snapshot restored by Continue; `selectedHexOrdinal` is the fine hex whose site was open, or null outside site view; `overlay` may be `color` after M4.5 but is UI-only |
 
 **Trust rule.** `slot.json` is used as-is only while its `updatedUtc` equals the
 one in `campaign.json`. Otherwise the store recounts the region shards and
@@ -141,7 +141,14 @@ rewrites it. A corrupt or missing summary never blocks opening a slot.
 The summary is not part of the campaign schema: `campaign.json` is v3 (v1/v2 saves
 are migrated on load), an older runtime ignores `slot.json`, and a newer runtime
 rebuilds it from the campaign. Its own `spm-slot` version stays `1`; site
-selection is an optional UI field.
+selection is an optional UI field. The M4.5 `color` overlay value is likewise
+additive UI state: when a valid imagery sidecar exists the game defaults to true
+colour for every slot, so saved overlay strings do not gate or migrate imagery.
+
+`data/<body>/color.bin` and `imagery.json` are **not** part of any slot or bake
+contract. They are presentation-only sidecars validated independently of
+`BakeFingerprint`; a missing or invalid sidecar never changes a save and never
+makes a save incompatible.
 
 ## `regions/<h3>.json`
 

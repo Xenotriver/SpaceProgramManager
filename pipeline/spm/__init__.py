@@ -11,6 +11,7 @@ The pipeline is split into the stages described in the development plan
     crater.py     Robbins crater catalogue -> per-hex crater overlay
     hexify.py     H3 aggregation, dominant-biome + tie-break
     export.py     write region tiles + body manifest
+    imagery.py    optional colour.bin sidecar + provenance
 """
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "crater",
     "hexify",
     "export",
+    "imagery",
 ]

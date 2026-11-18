@@ -31,11 +31,11 @@ public partial class Main : Node2D
     private const int MaximumBenchmarkFrames = 3600;
 
     private const string GlobeStatus =
-        "Drag to rotate · wheel zoom · right-drag pan · click a region · / search · M map · Esc pause";
+        "Drag to rotate · wheel zoom · right-drag pan · Tab surface/biome · click a region · / search · M map · Esc pause";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-4 mode · click hex · Enter site · G colony · M map · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-5 mode · click hex · Enter site · G colony · M map · Esc back";
     private const string ManagementStatus =
-        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-4 overlay · Tab cycle · [ ] relief · Enter site · M map · Esc back";
+        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-5 overlay · Tab cycle · [ ] relief · Enter site · M map · Esc back";
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · Esc back";
 
@@ -52,6 +52,7 @@ public partial class Main : Node2D
     }
 
     private BodyWorld _world = null!;
+    private SurfaceImagery? _imagery;
     private BuildingRegistry _registry = null!;
     private CampaignState _campaign = null!;
     private CampaignService _campaignService = null!;
@@ -74,6 +75,7 @@ public partial class Main : Node2D
     private bool _started;
 
     private Mode _mode = Mode.Globe;
+    private RegionViewMode _activeOverlay = RegionViewMode.Biome;
     private string _status = GlobeStatus;
 
     private ulong _hoverRegion;
@@ -132,6 +134,12 @@ public partial class Main : Node2D
             bodyKey = KnownBodies.Moon;
         }
         _world = OpenBody(bodyKey);
+        _imagery = SurfaceImagery.TryLoad(_world);
+        if (_imagery is not null)
+        {
+            GD.Print($"surface imagery: {_imagery.SourceName} " +
+                     $"({(_imagery.Synthetic ? "synthetic CI fixture" : "public-data source")})");
+        }
 
         // World view sits below the HUD so the panel is never covered.
         _worldLayer = new CanvasLayer { Layer = -1 };
@@ -140,10 +148,12 @@ public partial class Main : Node2D
         _globe = new MoonGlobe();
         _worldLayer.AddChild(_globe);
         _globe.Initialize(_world);
+        _globe.SetImagery(_imagery, _imagery is not null);
         _globe.RegionHovered += OnRegionHovered;
         _globe.RegionSelected += OnRegionSelected;
 
         _regionView = new RegionView { Visible = false };
+        _regionView.SetImagery(_imagery);
         _worldLayer.AddChild(_regionView);
         _regionView.HexHovered += OnHexHovered;
         _regionView.HexSelected += OnHexSelected;
@@ -155,6 +165,7 @@ public partial class Main : Node2D
         _registry = BuildingCatalogue.RegistryFor(_world.BodyKey);
 
         _managementView = new ManagementView { Visible = false };
+        _managementView.SetImagery(_imagery);
         _worldLayer.AddChild(_managementView);
         _managementView.HexHovered += OnHexHovered;
         _managementView.HexSelected += OnHexSelected;
@@ -342,7 +353,17 @@ public partial class Main : Node2D
         }
 
         _managementView.SetRotation(view.ColonyRotationSteps);
-        SetOverlay(ParseOverlay(view.Overlay));
+
+        // With a valid sidecar, true colour is the default for every slot. An
+        // explicit --overlay always wins; saved UI state is used only when the
+        // sidecar is absent. No schema change is needed for this preference.
+        var overlayArgument = ArgumentValue("--overlay");
+        var requestedOverlay = overlayArgument is not null
+            ? ParseOverlay(overlayArgument)
+            : _imagery is not null
+                ? RegionViewMode.Imagery
+                : ParseOverlay(view.Overlay);
+        SetOverlay(requestedOverlay);
 
         _clock.Reset(_campaign.Meta.GameTimeHours);
         _autosaveElapsed = 0.0;
@@ -689,9 +710,12 @@ public partial class Main : Node2D
         GlobePitchDegrees = _globe.PitchDegrees,
         GlobeZoom = _globe.Zoom,
         ColonyRotationSteps = _managementView.RotationSteps,
-        Overlay = _mode == Mode.Management
-            ? OverlayName(_managementView.Overlay)
-            : OverlayName(_regionView.ViewMode),
+        Overlay = _mode switch
+        {
+            Mode.Management => OverlayName(_managementView.Overlay),
+            Mode.Globe => OverlayName(_globe.UsesImagery ? RegionViewMode.Imagery : RegionViewMode.Biome),
+            _ => OverlayName(_regionView.ViewMode),
+        },
     };
 
     private void RefreshMarkers()
@@ -710,6 +734,7 @@ public partial class Main : Node2D
         RegionViewMode.Terrain => "terrain",
         RegionViewMode.SiteScore => "siteScore",
         RegionViewMode.Buildings => "buildings",
+        RegionViewMode.Imagery => "color",
         _ => "biome",
     };
 
@@ -921,6 +946,19 @@ public partial class Main : Node2D
                 SetOverlay(RegionViewMode.Buildings);
                 break;
 
+            case Key.Key5 when _mode is Mode.Region or Mode.Management:
+                SetOverlay(RegionViewMode.Imagery);
+                break;
+
+            case Key.Tab when _mode == Mode.Globe && _imagery is not null:
+                _globe.SetImageryOverlay(!_globe.UsesImagery);
+                _activeOverlay = _globe.UsesImagery ? RegionViewMode.Imagery : RegionViewMode.Biome;
+                _status = _globe.UsesImagery
+                    ? $"surface imagery · {_imagery.SourceName} · Tab for biome"
+                    : "biome map · Tab for surface imagery";
+                QueueRedraw();
+                break;
+
             case Key.Tab when _mode == Mode.Region:
                 _regionView.CycleViewMode();
                 break;
@@ -995,6 +1033,7 @@ public partial class Main : Node2D
         _campaignService.EnsureRegionLoaded(regionIndex);
 
         _regionView.Load(_world, regionIndex);
+        _regionView.SetViewMode(_activeOverlay);
         _regionView.Visible = true;
         _managementView.Visible = false;
         _siteView.Visible = false;
@@ -1015,6 +1054,7 @@ public partial class Main : Node2D
 
         _mode = Mode.Management;
         _managementView.Load(_world, _regionView.RegionIndex);
+        _managementView.SetOverlay(_activeOverlay);
         _managementView.Visible = true;
         _regionView.Visible = false;
         _siteView.Visible = false;
@@ -1064,6 +1104,7 @@ public partial class Main : Node2D
         _managementView.Visible = false;
         _siteView.Visible = false;
         _globe.Visible = true;
+        _globe.SetImageryOverlay(_activeOverlay == RegionViewMode.Imagery);
         _mode = Mode.Globe;
         _status = GlobeStatus;
         _campaignService.SetActiveRegion(null);
@@ -1156,6 +1197,7 @@ public partial class Main : Node2D
     private void OnViewModeChanged(int mode)
     {
         var overlay = (RegionViewMode)mode;
+        _activeOverlay = overlay;
 
         _status = _mode == Mode.Management
             ? overlay switch
@@ -1163,13 +1205,15 @@ public partial class Main : Node2D
                 RegionViewMode.Terrain => "colony · terrain relief · Q/E rotate · [ ] exaggeration · Tab cycle",
                 RegionViewMode.SiteScore => "colony · site-score relief · Q/E rotate · Tab cycle",
                 RegionViewMode.Buildings => "colony · sites overlay · Q/E rotate · Enter opens site",
+                RegionViewMode.Imagery => $"colony · {_imagery?.SourceName ?? "surface imagery"} · Q/E rotate · [ ] relief",
                 _ => ManagementStatus,
             }
             : overlay switch
             {
-                RegionViewMode.Terrain => "terrain overlay · Tab to cycle · 1-4 mode",
+                RegionViewMode.Terrain => "terrain overlay · Tab to cycle · 1-5 mode",
                 RegionViewMode.SiteScore => "site-score heatmap (7-hex footprint) · Tab to cycle",
-                RegionViewMode.Buildings => "sites overlay · Enter opens selected site · 1-4 mode",
+                RegionViewMode.Buildings => "sites overlay · Enter opens selected site · 1-5 mode",
+                RegionViewMode.Imagery => $"surface imagery · {_imagery?.SourceName ?? "unavailable"} · Tab to cycle",
                 _ => RegionStatus,
             };
 
@@ -1197,10 +1241,25 @@ public partial class Main : Node2D
 
     private void SetOverlay(RegionViewMode mode)
     {
-        if (_mode == Mode.Management)
+        // If the optional sidecar is absent, an imagery request is an explicit
+        // request for the analytical biome view rather than a blank overlay.
+        if (mode == RegionViewMode.Imagery && _imagery is null)
+            mode = RegionViewMode.Biome;
+
+        _activeOverlay = mode;
+
+        if (_mode == Mode.Globe)
+        {
+            _globe.SetImageryOverlay(mode == RegionViewMode.Imagery);
+        }
+        else if (_mode == Mode.Management)
+        {
             _managementView.SetOverlay(mode);
+        }
         else
+        {
             _regionView.SetViewMode(mode);
+        }
     }
 
     private void RotateCamera(int steps)
@@ -1242,7 +1301,9 @@ public partial class Main : Node2D
     private void DrawGlobePanel()
     {
         var biomes = _world.Biomes.All;
-        var height = 56f + biomes.Count * LegendRowHeight;
+        var useImagery = _globe.UsesImagery && _imagery is not null;
+        var legendRows = useImagery ? 3 : biomes.Count;
+        var height = 56f + legendRows * LegendRowHeight;
         var panel = new Rect2(PanelLeft, PanelTop, PanelWidth, height);
 
         DrawRect(panel, PanelColor);
@@ -1254,16 +1315,23 @@ public partial class Main : Node2D
             $"{_world.Regions.Count:N0} regions · res {_world.RegionResolution} · {_world.Biomes.Count} biomes",
             HorizontalAlignment.Left, -1, 12, MutedText);
 
-        for (var i = 0; i < biomes.Count; i++)
+        if (useImagery)
         {
-            var biome = biomes[i];
-            var y = PanelTop + 66 + i * LegendRowHeight;
-            var color = BiomePalette.For(biome.Id);
+            DrawImageryLegend(PanelTop + 66);
+        }
+        else
+        {
+            for (var i = 0; i < biomes.Count; i++)
+            {
+                var biome = biomes[i];
+                var y = PanelTop + 66 + i * LegendRowHeight;
+                var color = BiomePalette.For(biome.Id);
 
-            DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
-            DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
-            DrawString(_font, new Vector2(PanelLeft + 38, y + 11), biome.DisplayName,
-                HorizontalAlignment.Left, -1, 13, AccentText);
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
+                DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
+                DrawString(_font, new Vector2(PanelLeft + 38, y + 11), biome.DisplayName,
+                    HorizontalAlignment.Left, -1, 13, AccentText);
+            }
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height + 18),
@@ -1278,6 +1346,7 @@ public partial class Main : Node2D
         {
             RegionViewMode.Biome => Math.Max(1, biomes.Count),
             RegionViewMode.Buildings => 3,
+            RegionViewMode.Imagery => 3,
             _ => 1,
         };
 
@@ -1295,7 +1364,7 @@ public partial class Main : Node2D
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 70),
             $"H3 {new H3Index(_regionView.RegionIndex)}", HorizontalAlignment.Left, -1, 11, MutedText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 92),
-            $"overlay: {ModeName(mode)} · Tab / 1-4", HorizontalAlignment.Left, -1, 12,
+            $"overlay: {ModeName(mode)} · Tab / 1-5", HorizontalAlignment.Left, -1, 12,
             new Color(0.55f, 0.85f, 1f));
 
         if (_selectedHex >= 0)
@@ -1369,6 +1438,10 @@ public partial class Main : Node2D
 
             case RegionViewMode.Buildings:
                 DrawSiteLegend(y);
+                break;
+
+            case RegionViewMode.Imagery:
+                DrawImageryLegend(y);
                 break;
         }
 
@@ -1485,6 +1558,7 @@ public partial class Main : Node2D
             RegionViewMode.Buildings => colony is null || colony.Count == 0
                 ? 1
                 : Math.Min(colony.Count, MaxColonyRows) + 1,
+            RegionViewMode.Imagery => 3,
             _ => 1,
         };
 
@@ -1502,7 +1576,7 @@ public partial class Main : Node2D
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 70),
             $"H3 {new H3Index(_managementView.RegionIndex)}", HorizontalAlignment.Left, -1, 11, MutedText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 92),
-            $"overlay: {ModeName(overlay)} · Tab / 1-4", HorizontalAlignment.Left, -1, 12,
+            $"overlay: {ModeName(overlay)} · Tab / 1-5", HorizontalAlignment.Left, -1, 12,
             new Color(0.95f, 0.8f, 0.55f));
 
         if (_selectedHex >= 0)
@@ -1558,6 +1632,10 @@ public partial class Main : Node2D
                 DrawRamp(t => SiteScorePalette.For(t, true), y);
                 break;
 
+            case RegionViewMode.Imagery:
+                DrawImageryLegend(y);
+                break;
+
             default:
                 if (_campaign is not null && _managementView.Tile is not null)
                     DrawColonyPanel(y, _managementView.Tile.Entry.Index, PanelTop + height - 26f);
@@ -1582,6 +1660,7 @@ public partial class Main : Node2D
                 $"elevation · {_managementView.TerrainMinM:N0} – {_managementView.TerrainMaxM:N0} m",
             RegionViewMode.SiteScore =>
                 $"site score · {_managementView.SiteScoreMin:P0} – {_managementView.SiteScoreMax:P0} · {_managementView.SiteScoreMs:F1} ms",
+            RegionViewMode.Imagery => "surface imagery · per-hex colour",
             _ => $"sites · {_managementView.SiteCount} occupied hexes",
         };
     }
@@ -1593,8 +1672,30 @@ public partial class Main : Node2D
             $"elevation · {_regionView.TerrainMinM:N0} – {_regionView.TerrainMaxM:N0} m",
         RegionViewMode.SiteScore =>
             $"site score · {_regionView.SiteScoreMin:P0} – {_regionView.SiteScoreMax:P0} · {_regionView.SiteScoreMs:F1} ms",
+        RegionViewMode.Imagery => "surface imagery · per-hex colour",
         _ => $"sites · {_regionView.SiteCount} occupied hexes",
     };
+
+    private void DrawImageryLegend(float y)
+    {
+        if (_imagery is null)
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, y + 11), "imagery unavailable",
+                HorizontalAlignment.Left, -1, 12, MutedText);
+            return;
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, y + 11), FitText(_imagery.SourceName, 46),
+            HorizontalAlignment.Left, -1, 12, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, y + 31), FitText(_imagery.SourceCredit, 46),
+            HorizontalAlignment.Left, -1, 10, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, y + 51),
+            _imagery.Synthetic ? "synthetic CI colour fixture" : FitText(_imagery.SourceLicense, 46),
+            HorizontalAlignment.Left, -1, 10, MutedText);
+    }
+
+    private static string FitText(string text, int maxChars)
+        => text.Length <= maxChars ? text : text[..(maxChars - 1)] + "…";
 
     private void DrawSiteLegend(float y)
     {
@@ -1789,6 +1890,7 @@ public partial class Main : Node2D
         RegionViewMode.Terrain => "TERRAIN",
         RegionViewMode.SiteScore => "SITE SCORE",
         RegionViewMode.Buildings => "SITES",
+        RegionViewMode.Imagery => "COLOR",
         _ => "BIOME",
     };
 
@@ -1797,6 +1899,7 @@ public partial class Main : Node2D
         "terrain" => RegionViewMode.Terrain,
         "score" or "sitescore" => RegionViewMode.SiteScore,
         "buildings" or "building" or "sites" or "site" => RegionViewMode.Buildings,
+        "color" or "colour" or "imagery" or "surface" => RegionViewMode.Imagery,
         _ => RegionViewMode.Biome,
     };
 

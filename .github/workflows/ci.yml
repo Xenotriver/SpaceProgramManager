@@ -46,6 +46,15 @@ jobs:
           mkdir -p "$SPM_DATA"
           python pipeline/bake_moon.py --synthetic --out "$SPM_DATA/moon"
           python pipeline/bake_mars.py --synthetic --out "$SPM_DATA/mars"
+          python pipeline/bake_imagery.py --body=moon --synthetic --out "$SPM_DATA/moon"
+          python pipeline/bake_imagery.py --body=mars --synthetic --out "$SPM_DATA/mars"
+          test -s "$SPM_DATA/moon/color.bin"
+          test -s "$SPM_DATA/moon/imagery.json"
+          test -s "$SPM_DATA/mars/color.bin"
+          test -s "$SPM_DATA/mars/imagery.json"
+
+      - name: Imagery pipeline tests
+        run: python -m unittest discover -s pipeline/tests -p 'test_imagery.py' -v
 
       - name: Build
         run: dotnet build SpaceProgramManager.slnx
@@ -84,8 +93,17 @@ jobs:
               "$@" --frame-budget=20 --frames=30
           }
 
-          run_smoke moon moon-globe --view=globe
-          run_smoke moon moon-region --view=region --region=589971619905011711
-          run_smoke moon moon-management --view=management --region=589971619905011711
+          # True-colour coverage on every M4.5 view for both bodies.
+          run_smoke moon moon-globe-color --view=globe --overlay=color
+          run_smoke moon moon-region-color --view=region --region=589971619905011711 --overlay=color
+          run_smoke moon moon-management-color --view=management --region=589971619905011711 --overlay=color
+          run_smoke mars mars-globe-color --view=globe --overlay=color
+          run_smoke mars mars-region-color --view=region --region=589971619905011711 --overlay=color
+          run_smoke mars mars-management-color --view=management --region=589971619905011711 --overlay=color
+
+          # Analytical fallback and unchanged site/grid coverage.
+          run_smoke moon moon-globe-biome --view=globe --overlay=biome
+          run_smoke moon moon-region-biome --view=region --region=589971619905011711 --overlay=biome
           run_smoke moon moon-site --view=site --region=589971619905011711 --hex=0
-          run_smoke mars mars-globe --view=globe
+          run_smoke mars mars-globe-biome --view=globe --overlay=biome
+          run_smoke mars mars-region-biome --view=region --region=589971619905011711 --overlay=biome

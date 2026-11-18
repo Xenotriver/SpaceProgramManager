@@ -34,10 +34,11 @@ see [`save-format.md`](save-format.md).
                                 │ reads
 ┌───────────────────────────────▼──────────────────────────────┐
 │ data/<body>/manifest.json + fine.bin                         │
+│ optional color.bin + imagery.json (presentation only)        │
 └───────────────────────────────▲──────────────────────────────┘
                                 │ writes
 ┌───────────────────────────────┴──────────────────────────────┐
-│ pipeline/ (Python 3.13: h3, rasterio, numpy, geopandas)      │
+│ pipeline/ (Python 3.13: h3, rasterio, numpy, Pillow)         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,8 +78,9 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 | Class | Role |
 |---|---|
 | `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Region` / `Management` / `Site`), HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
-| `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan (class name predates Mars) |
-| `RegionView` | One region's 343 hexes in a gnomonic tangent plane; four overlays, hover/select, rover route, aggregate site markers (read-only) |
+| `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
+| `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
+| `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), hover/select, rover route, aggregate site markers (read-only) |
 | `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief, overlays, pan/zoom/pick, 60° orbit, aggregate site markers (read-only) |
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
@@ -93,6 +95,7 @@ launch
   → GameSettings.Load()                 # user://settings.json, per-body last slots
   → bodyKey = --body / pending body / "moon"
   → BodyWorld.Open(bodyKey)
+  → SurfaceImagery.TryLoad(world)          # optional; warns and falls back
   → no user args (or --menu)  → ShellOverlay main menu
       Continue / Play slot    → store pending slot, ReloadCurrentScene
       System Map travel       → validate target bake, store pending slot + body, reload
@@ -147,6 +150,16 @@ ManagementView.Load(world, regionIndex)
 SiteView.Load(world, tile, hexOrdinal, campaign, registry)  # site mode only
 ```
 
+Imagery follows a parallel, presentation-only path that never enters the campaign
+or fingerprint gate:
+
+```
+data/<body>/imagery.json + color.bin
+  → SurfaceImagery.TryLoad(world)      # body/resolution/hex-count/length/hash checks
+  → RegionView/ManagementView per-hex fills
+  → MoonGlobe precomputed per-region means
+```
+
 ## 6. Coordinate systems
 
 ### H3
@@ -194,15 +207,15 @@ projected cell centre within a radius, not polygon containment.
 ## 7. Rendering and performance
 
 - **Globe** — one `MultiMesh` instance per region, plus a boundary polyline for the
-  hovered/selected region. 41k instances are uploaded once; pan/rotate updates the
-  instance transforms.
+  hovered/selected region. 41k transforms follow the camera; toggling
+  imagery/biome only re-uploads instance colours, never rebuilding geometry.
 - **Region view** — fills are batched into an `ArrayMesh` (rebuilt when the overlay
-  changes); outlines, site markers and route are drawn per frame. Site scores are
-  computed once per load and cached.
+  changes); outlines, site markers and route are drawn per frame. Imagery colours
+  are copied per region at load; site scores are computed once and cached.
 - **Colony view** — the entire terrain is a single `ArrayMesh` with painter-sorted
   triangles, so the region costs one mesh draw; overlays only swap vertex colours
-  (mesh rebuild). Orbit rebuilds geometry arrays once per step. Aggregate site
-  markers are drawn on top.
+  (mesh rebuild). Imagery, relief shading and aggregate site markers stay on the
+  same mesh/marker path. Orbit rebuilds geometry arrays once per step.
 - **Site view** — 37 local tiles in one small `ArrayMesh` with painter-sorted
   tops/walls; installation markers, hover/selection outlines and the footprint
   ghost are drawn per frame using `IsoProjection`.
@@ -210,14 +223,15 @@ projected cell centre within a radius, not polygon containment.
   `AverageDrawMs`), and `--redraw` forces continuous redraws for benchmarking.
 - `--frame-budget=<ms>` forces redraws, compares p95 frame time with the 20.00 ms
   limit and exits 0/1; `--frames` selects the measured-frame count (30–3600). CI
-  runs this across Moon globe/region/management/site and Mars globe.
+  runs 11 smokes covering colour and biome across both bodies.
 
 ## 8. Extension points
 
 | Change | Where to start |
 |---|---|
 | New body | `pipeline/spm/bodies.py`, `KnownBodies`, `BuildingCatalogue`, the Solar System Map entry, then bake and launch with `--body=<key>` |
-| New overlay | `RegionViewMode`, palette in `RegionPalettes`, fill computation in `RegionView`/`ManagementView` |
+| New overlay | `RegionViewMode`, palette in `RegionPalettes`, fill computation in `RegionView`/`ManagementView`, globe routing in `Main.SetOverlay` |
+| New imagery source | `pipeline/spm/imagery.py` `SOURCES` + `pipeline/spm/fetch.py`; keep the sidecar format and validation rules unchanged |
 | New building | Add a `BuildingDef` to `MoonBuildings`, keep `MoonBuildings_AreConsistent` green |
 | Simulation tick | `Sim/Time/SimulationClock.cs` + `CampaignState.Tick(hours)`; already driven from `Main._Process` |
 | Site grid size | `Sim/Site/LocalGrid.cs`; footprint validation in `CampaignState.Preview` |
@@ -240,5 +254,6 @@ projected cell centre within a radius, not polygon containment.
 - `Main.cs` owns world HUD/input, simulation clock, mode wiring and startup;
   `ShellOverlay` owns the menu/pause/time/settings screens since M2. Further
   screen splitting remains deferred.
-- CI covers build, tests, synthetic bakes and headless frame-gate smoke. Analyzers
-  and automated screenshot regression are still absent.
+- CI covers build, C# and imagery tests, synthetic tile/imagery bakes and 11
+  headless frame-gate smokes. Analyzers and automated screenshot regression are
+  still absent.

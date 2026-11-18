@@ -27,6 +27,9 @@ public enum RegionViewMode
 
     /// <summary>Dimmed base map with one aggregate marker per site (inspector overlay).</summary>
     Buildings = 3,
+
+    /// <summary>Optional true-colour imagery from the body's sidecar.</summary>
+    Imagery = 4,
 }
 
 /// <summary>
@@ -71,12 +74,14 @@ public partial class RegionView : Node2D
 
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
+    private SurfaceImagery? _imagery;
 
     private Vector2[] _centers = Array.Empty<Vector2>();
     private Vector3[] _unitCenters = Array.Empty<Vector3>();
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private Color[] _biomeFills = Array.Empty<Color>();
     private Color[] _terrainFills = Array.Empty<Color>();
+    private Color[] _imageryFills = Array.Empty<Color>();
     private Color[] _siteFills = Array.Empty<Color>();
     private Color[] _buildingFills = Array.Empty<Color>();
     private Color[] _activeFills = Array.Empty<Color>();
@@ -153,6 +158,12 @@ public partial class RegionView : Node2D
     /// <summary>Current colour overlay.</summary>
     public RegionViewMode ViewMode { get; private set; } = RegionViewMode.Biome;
 
+    /// <summary>True when the loaded region has valid imagery colours.</summary>
+    public bool HasImagery => _imagery is not null && _imageryFills.Length == _corners.Length;
+
+    /// <summary>Binds the optional surface-colour sidecar before a region is loaded.</summary>
+    public void SetImagery(SurfaceImagery? imagery) => _imagery = imagery;
+
     /// <summary>Site-scoring configuration used by the heatmap and placement validation.</summary>
     public SiteScorerConfig SiteConfig { get; set; } = new() { BodyRadiusKm = 1737.4 };
 
@@ -210,6 +221,14 @@ public partial class RegionView : Node2D
         _corners = new Vector2[count][];
         _biomeFills = new Color[count];
         _terrainFills = new Color[count];
+        _imageryFills = Array.Empty<Color>();
+        if (_imagery is not null)
+        {
+            var imageryFills = new Color[count];
+            if (_imagery.TryCopyRegion(regionIndex, count, imageryFills))
+                _imageryFills = imageryFills;
+        }
+
         _buildingFills = new Color[count];
         _siteFills = Array.Empty<Color>();
         _siteScores = null;
@@ -694,6 +713,10 @@ public partial class RegionView : Node2D
     /// <summary>Switches the colour overlay. Site scores are computed on first use.</summary>
     public void SetViewMode(RegionViewMode mode)
     {
+        // Never show a labelled imagery overlay over biome fallback colours.
+        if (mode == RegionViewMode.Imagery && !HasImagery)
+            mode = RegionViewMode.Biome;
+
         if (ViewMode == mode)
             return;
 
@@ -707,9 +730,20 @@ public partial class RegionView : Node2D
         QueueRedraw();
     }
 
-    /// <summary>Advances to the next overlay mode (wraps).</summary>
+    /// <summary>Advances to the next available overlay mode (wraps).</summary>
     public void CycleViewMode()
-        => SetViewMode((RegionViewMode)(((int)ViewMode + 1) % 4));
+    {
+        var next = (int)ViewMode + 1;
+        for (var attempt = 0; attempt < 5; attempt++, next++)
+        {
+            var mode = (RegionViewMode)(next % 5);
+            if (mode == RegionViewMode.Imagery && !HasImagery)
+                continue;
+
+            SetViewMode(mode);
+            return;
+        }
+    }
 
     private void EnsureSiteScores()
     {
@@ -776,6 +810,7 @@ public partial class RegionView : Node2D
         _activeFills = ViewMode switch
         {
             RegionViewMode.Terrain => _terrainFills,
+            RegionViewMode.Imagery when HasImagery => _imageryFills,
             RegionViewMode.SiteScore => _siteFills,
             RegionViewMode.Buildings => _buildingFills,
             _ => _biomeFills,

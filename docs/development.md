@@ -108,7 +108,7 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--region=<h3>` | Open a region by H3 index. Without it the last active region is restored. |
 | `--view=globe\|region\|management\|site` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
-| `--overlay=biome\|terrain\|score\|buildings\|sites` | Overlay for region/colony views. |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
@@ -147,6 +147,9 @@ Notes:
   effective `camera: <n>°` afterwards. That is expected.
 - `M` toggles the Solar System Map from any view; `G` enters the colony view only
   from the region view.
+- `Tab` toggles surface imagery/biome on the globe and cycles overlays in region
+  and colony views; `1`–`5` select an overlay directly. With a valid sidecar,
+  true colour is the default for every slot unless `--overlay` is passed.
 - Screenshot and save scratch space for this repo:
   `C:\Users\xenot\AppData\Local\Temp\opencode\spm`.
 - `F12` writes `user://moon_overview.png`.
@@ -165,7 +168,8 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-Moon globe/region/management/site plus Mars globe so the gate stays cheap.
+11 smokes: colour and biome for globe/region, colour for colony on both bodies,
+plus both globes and the unchanged Moon site view.
 
 ## 5. Data pipeline
 
@@ -192,6 +196,12 @@ pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16 --jobs 4
 # deterministic no-download fixtures for CI / local smoke tests
 pipeline/.venv/Scripts/python pipeline/bake_moon.py --synthetic --out _ci/moon
 pipeline/.venv/Scripts/python pipeline/bake_mars.py --synthetic --out _ci/mars
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon --synthetic --out _ci/moon
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars --synthetic --out _ci/mars
+
+# optional real colour sidecars after the tile bake exists
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon --ppd=16
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars --ppd=16
 
 # optional equirectangular previews
 pipeline/.venv/Scripts/python pipeline/preview_moon.py
@@ -217,12 +227,24 @@ Output (one tree per body, same layout):
 data/moon/            # or data/mars/
 ├─ manifest.json      # 4.2 MB: body, biomes, sources, every region entry
 ├─ fine.bin           # 54.6 MB: 4-byte record per fine hex, region tiles concatenated
+├─ color.bin          # optional 42.4 MB: 3 RGB bytes per fine hex, same child order
+├─ imagery.json       # optional provenance + validation metadata
 └─ preview_*.png      # optional equirectangular previews
 ```
 
+`bake_imagery.py` accepts `--body`, `--out`, `--synthetic`, `--force`, `--ppd`
+(`4`, `16` or `64`, default `16`), `--jobs` and `--block-rows`. It reads the
+existing manifest, refuses a body/resolution/region-count mismatch and never
+writes `manifest.json` or `fine.bin`. The runtime validates the body key,
+resolutions, hex count, file length and `colorSha256`; any failure logs a warning
+and falls back to biome colours.
+
 Sources are cached per body under `pipeline/.cache/<body>/`: Moon uses LDEM
 16/64, USGS geology and the Robbins 2019 CSV + zip; Mars uses MOLA MEGDR 16 ppd,
-the USGS 15M geologic map and the Robbins & Hynek 2012 catalogue. Both `data/`
+the USGS 15M geologic map and the Robbins & Hynek 2012 catalogue. Colour sidecars
+use NASA SVS CGI Moon Kit `lroc_color_poles_2k.tif` and USGS Viking MDIM 2.1
+`mars_viking_mdim21_clrmosaic_1km.jpg`; exact URLs, SHA-256 pins and attribution
+are in `pipeline/spm/imagery.py` and the generated `imagery.json`. Both `data/`
 and `pipeline/.cache/` are gitignored. The Moon bake is deliberately unchanged
 (`generatedUtc=2026-11-11T21:48:07+00:00`) so old Moon saves stay valid; the
 current Mars bake was regenerated after the empty-hex elevation fix
@@ -237,13 +259,14 @@ not the library version. Bump both together.
 
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests. It sets
 `SPM_DATA` to a temporary root and `SPM_REQUIRE_DATA=1`, bakes synthetic Moon and
-Mars fixtures, builds and tests .NET, then downloads the pinned Godot 4.7.2 mono
-Linux archive (SHA-256
-`129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`). The Godot
-step runs the five `--frame-budget=20 --frames=30` smokes from the frame-gate
-section. Headless `--shot` is deliberately not used because it hangs in
-automation; the frame-gate run is the smoke and exit-code check. No `data/` is
-committed.
+Mars tile fixtures plus imagery sidecars, runs the Python imagery unit tests,
+builds and tests .NET, then downloads the pinned Godot 4.7.2 mono Linux archive
+(SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`).
+The Godot step runs eleven `--frame-budget=20 --frames=30` smokes: colour and
+biome coverage for globe/region, colour for colony on both bodies, plus the
+unchanged Moon site view. Headless `--shot` is deliberately not used because it
+hangs in automation; the frame-gate run is the smoke and exit-code check. No
+`data/` is committed.
 
 ## 7. Repository conventions
 
@@ -264,6 +287,7 @@ committed.
 | `Could not find '<body>/manifest.json'` | No bake for the selected body, or wrong working directory | Run the matching bake, or set `SPM_DATA` to the folder containing `moon/` and `mars/` |
 | `Manifest ... describes body ...` | `--body` / directory mismatch | Match the folder name to the manifest's `body.key` |
 | `Tile file for body ... not found` | `fine.bin` missing but manifest present | Re-run the bake |
+| `surface imagery unavailable: ... using biome colours` | Missing/short/wrong-body/wrong-resolution/corrupt `color.bin` or `imagery.json` | Re-run `bake_imagery.py` for this body, or ignore: the game remains playable with biome colours |
 | Save status `save · disabled · incompatible` | Version, format, or fingerprint mismatch | Keep the save; re-bake with the same inputs or start a new slot with `--fresh` |
 | `.corrupt` files appear in `regions/` | Unreadable shard was quarantined | Inspect the JSON; the live region was installed empty |
 | `InvalidDataException` on load | Manifest/tile header validation failed | Check `TileFormat.Version` matches `pipeline/spm/config.py` |

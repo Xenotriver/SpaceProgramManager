@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-18**, M4 multi-body, **148 tests passing**.
+Anchor: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -19,18 +19,23 @@ Anchor: **2026-11-18**, M4 multi-body, **148 tests passing**.
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v3 with v1/v2 migration |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
-| CI and performance gate | **Done (M4)** | `.github/workflows/ci.yml`; synthetic bakes, headless Godot smoke, `--frame-budget=20` p95 gate |
+| Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
+| CI and performance gate | **Done (M4, extended M4.5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 11 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
 
 The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
-an H3 index, open a region, inspect hexes across four overlays, plan a rover route,
+an H3 index, open a region, inspect hexes across five overlays, plan a rover route,
 press `Enter` to open a fine hex as a site, place several installations on its
 37-cell local grid, and have all of it persist across launches against a
 fingerprinted bake. The player can start on Moon or Mars directly with `--body`
 or travel between them with the `M` Solar System Map.
+
+With a valid imagery sidecar the player sees real Moon or Mars colour by default in
+the globe, region and colony views; `Tab` (or `--overlay=biome`) switches to the
+analytical biome map. Missing or corrupt imagery only produces a warning.
 
 The player can also pass time with pause/1×/2×/4×, watch installations finish
 construction, earn/spend credits and stockpile resources, see power or life-support
@@ -245,6 +250,49 @@ Implemented:
 - [x] CI workflow YAML, embedded shell blocks and the exact five-run smoke script
   were verified locally with synthetic fixtures.
 
+### M4.5 — True-color surface overlay (done)
+
+**Outcome:** globe, region and colony views can show real public-domain surface
+imagery instead of schematic biome colours. Biome colours stay available as an
+analytical overlay.
+
+**Status:** shipped 2026-11-18 · **148 C# tests + 5 pipeline tests passing** ·
+decisions D30–D32. This is a presentation-only cross-cutting milestone after M4 C7.
+
+Implemented:
+
+1. **P0 sources** — NASA SVS CGI Moon Kit 2019 LROC WAC colour
+   (`lroc_color_poles_2k.tif`, SHA-256 `13B79742…2C4A`) and USGS Viking MDIM 2.1
+   colorized Mars mosaic (`mars_viking_mdim21_clrmosaic_1km.jpg`, SHA-256
+   `FDFCD335…ECB2`). Both are north-up −180..180 mosaics; the pipeline applies
+   `np.roll(-width // 2)` and no vertical flip.
+2. **P1 sidecar bake** — `pipeline/spm/imagery.py` and `pipeline/bake_imagery.py`
+   validate the existing manifest/tile index, sample at 16 ppd, average RGB per
+   fine hex and write `color.bin` + `imagery.json` without touching `manifest.json`
+   or `fine.bin`. `--synthetic` generates deterministic CI fixtures.
+3. **P2/P3 runtime** — `Game/Scripts/SurfaceImagery.cs` validates provenance,
+   resolutions, hex count, byte length and SHA-256, then precomputes per-region
+   means. `RegionView` and `ManagementView` gain per-hex imagery fills and overlay
+   mode `4`; `MoonGlobe` swaps one `MultiMesh` instance-colour buffer, never
+   rebuilding geometry. `Tab` toggles globe imagery/biome; `1`–`5` and `Tab` work
+   in the 2D views; `--overlay=color` (aliases `colour`/`imagery`/`surface`) works
+   in all three views.
+4. **P4 coverage** — CI bakes synthetic imagery sidecars, runs the 5 Python
+   imagery tests, and runs 11 headless Godot frame-gate smokes covering colour and
+   biome fallback on all three views for both bodies. `--shot` remains outside CI.
+
+**Acceptance criteria** — verified on 2026-11-18:
+
+- [x] Real Moon and Mars sidecars load; globe, region and colony views show body
+  colour, with per-region means used on the globe.
+- [x] `--overlay=biome` restores the analytical view; without a sidecar the
+  previous per-view defaults remain (biome for globe/region, terrain for colony).
+- [x] Missing, short and corrupted sidecars warn and fall back without blocking
+  load; save schema, `bodyKey`, `BakeFingerprint` and the manifest are unchanged.
+- [x] Eight local Godot smokes plus the expanded CI matrix pass at `--frame-budget=20`;
+  Moon manifest SHA-256 and Mars `generatedUtc` remain unchanged.
+- [x] Build clean with 0 warnings; 148/148 C# tests and 5/5 Python imagery tests.
+
 ### M5 — Content
 
 **Outcome:** a first playable mission loop.
@@ -267,7 +315,7 @@ Not tied to a milestone; pull in when they start hurting.
 | Screenshot regression harness | `--shot` already works; wire it to reference images |
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
 | Globe performance budget | **Done in M4** — 20 ms p95 gate; keep it before adding more bodies |
-| Real-life surface overlay | **Scheduled for M4.5**, after M4 C7 — optional `color.bin` sidecar, no save/fingerprint change |
+| Real-life surface overlay | **Done in M4.5 (D30–D32)** — optional `color.bin` sidecar, real Moon/Mars imagery, biome fallback, no save/fingerprint change |
 | Replay/determinism harness | M1 covers same-seed ticks; extend it to longer event sequences |
 | `.editorconfig` + analyzers | Current tree is consistent by convention only |
 | Localization, audio, LICENSE, changelog | Release hygiene |

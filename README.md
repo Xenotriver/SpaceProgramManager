@@ -8,7 +8,7 @@ state is engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-18**, M4 multi-body, **148 tests passing**.
+Snapshot: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline tests passing**.
 
 | Area | State |
 |---|---|
@@ -20,7 +20,8 @@ Snapshot: **2026-11-18**, M4 multi-body, **148 tests passing**.
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
-| CI and performance gate | **Done (M4)** — synthetic bakes, headless Godot smoke, 20 ms p95 frame budget |
+| Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
+| CI and performance gate | **Done (M4, extended M4.5)** — synthetic tile + imagery bakes, 11 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -33,7 +34,7 @@ mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
 | `Sim.Tests/` | xUnit tests for the simulation core. |
 | `Game/` | Godot 4.7.2 project (C#). References `Sim`. |
 | `pipeline/` | Python 3.13 offline data pipeline (H3, rasterio, geopandas). |
-| `data/` | Generated tiles (gitignored). The game uses `data/moon/` and `data/mars/`; CI generates synthetic fixtures. |
+| `data/` | Generated tiles and optional colour sidecars (gitignored). The game uses `data/moon/` and `data/mars/`; CI generates synthetic fixtures. |
 | `docs/` | Architecture, save format, roadmap, development notes, decisions. |
 
 ## Requirements
@@ -58,9 +59,11 @@ godot --path Game
 ```
 
 The game expects `data/<body>/manifest.json` + `data/<body>/fine.bin` for the
-selected body (`moon` by default, or `mars`). It searches upward from the
-executable and honours the `SPM_DATA` environment variable (pointing at the folder
-that contains `moon/` and `mars/`).
+selected body (`moon` by default, or `mars`). Optional `data/<body>/color.bin`
+and `imagery.json` add true-colour surface imagery; if either is missing or
+invalid the game warns and uses biome colours. Data root resolution searches
+upward from the executable and honours the `SPM_DATA` environment variable
+(pointing at the folder that contains `moon/` and `mars/`).
 
 ### Controls
 
@@ -88,6 +91,7 @@ mouse for the same actions.
 | Wheel | Zoom |
 | Right drag | Pan |
 | Left click | Open the region under the cursor |
+| `Tab` | Toggle surface imagery / biome colours (when a sidecar is available) |
 | `/` | Jump to an H3 index |
 | `Home` | Focus the active region |
 | `Space` | Pause / resume time (resumes at 1×) |
@@ -101,7 +105,7 @@ mouse for the same actions.
 |---|---|
 | Wheel / right drag | Zoom / pan |
 | Left click | Select hex; a second click plans a rover route |
-| `1` `2` `3` `4` / Tab | Biome / terrain / site score / sites overlay |
+| `1`–`5` / Tab | Biome / terrain / site score / sites / surface imagery overlay |
 | `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
 | `G` | Enter the colony view |
 | `M` | Open the Solar System Map |
@@ -115,7 +119,7 @@ mouse for the same actions.
 | Left click | Select hex |
 | `Q` / `E` | Orbit the camera by 60° |
 | `[` / `]` | Decrease / increase relief exaggeration |
-| `1`–`4` / Tab | Overlay |
+| `1`–`5` / Tab | Overlay (biome / terrain / site score / sites / surface imagery) |
 | `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
 | `M` | Open the Solar System Map |
 | Esc | Back to the region view |
@@ -161,9 +165,9 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 |---|---|
 | `--body=<moon\|mars>` | Select the baked body to load (default `moon`) |
 | `--region=<h3>` | Open a region by H3 index (restores the last active region when omitted) |
-| `--view=region\|management\|site` | Select the active view; `--iso` aliases `management` |
+| `--view=globe\|region\|management\|site` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
-| `--overlay=biome\|terrain\|score\|buildings\|sites` | Select the overlay for region/colony views |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Select the overlay; `color`, `colour`, `imagery` and `surface` are aliases, and globe accepts `color`/`biome` |
 | `--rot=<degrees>` | Colony camera angle, quantised to the nearest 60° |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`) |
 | `--active=<defId>` | Select the building definition to place; site view only |
@@ -186,8 +190,10 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--fps` / `--redraw` / `--spin` | Print FPS + draw timings / force redraws / spin the globe |
 
 Any user argument except `--menu` skips the menu and starts the selected slot, so
-pre-M2 automation is unchanged. Cross-body slots are listed as incompatible and
-refused; they are never overwritten.
+pre-M2 automation is unchanged. With a valid imagery sidecar, true colour is the
+default in globe/region/colony views; `--overlay=biome` or `Tab` selects the
+analytical view. Without imagery, the previous per-view defaults remain. Cross-body
+slots are listed as incompatible and refused; they are never overwritten.
 
 ## Saving
 
@@ -225,6 +231,12 @@ pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16
 # deterministic no-download fixtures (used by CI)
 pipeline/.venv/Scripts/python pipeline/bake_moon.py --synthetic --out _ci/moon
 pipeline/.venv/Scripts/python pipeline/bake_mars.py --synthetic --out _ci/mars
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon --synthetic --out _ci/moon
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars --synthetic --out _ci/mars
+
+# optional real colour sidecars after the tile bake exists
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars
 
 # optional equirectangular previews
 pipeline/.venv/Scripts/python pipeline/preview_moon.py
@@ -232,7 +244,29 @@ pipeline/.venv/Scripts/python pipeline/preview_moon.py
 
 Sources: LOLA LDEM, USGS Unified Geologic Map of the Moon 2020 and Robbins (2019)
 lunar craters; MOLA MEGDR 16 ppd, USGS Mars 15M Geologic Map and Robbins & Hynek
-(2012) Mars craters. See [`docs/development.md`](docs/development.md).
+(2012) Mars craters. Colour sidecars use NASA SVS CGI Moon Kit LROC WAC and the
+USGS Viking MDIM 2.1 colorized Mars mosaic; both are public-domain/non-copyright
+US government imagery with attribution recorded in `imagery.json`. Sidecars are
+presentation-only and never change `manifest.json`, `fine.bin` or a save. See
+[`docs/development.md`](docs/development.md).
+
+## Surface imagery
+
+`bake_imagery.py` writes two optional files beside an existing tile bake:
+
+```
+data/<body>/
+├─ manifest.json   # unchanged by the imagery bake
+├─ fine.bin        # unchanged by the imagery bake
+├─ color.bin       # 3 bytes per fine hex, in fine.bin child order
+└─ imagery.json    # provenance, resolutions, hex count and colour SHA-256
+```
+
+The runtime validates the body key, resolutions, hex count, file length and hash.
+A missing, short, wrong-body, wrong-resolution or corrupt sidecar prints a warning
+and falls back to biome colours without blocking the load. The globe uses one mean
+colour per region; region and colony views use per-hex colours. The local site grid
+and all placement rules are unchanged.
 
 ## Design notes
 
