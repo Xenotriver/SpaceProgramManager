@@ -24,3 +24,10 @@ mono_crash.*.json
 
 # Godot import cache
 .import/
+.studio/
+node_modules
+.git.studio-backup
+dist/
+output/
+.playwright-cli/
+Game/.godot/
