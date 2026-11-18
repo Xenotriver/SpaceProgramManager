@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-smoke:
+    name: Build, tests, synthetic bake, Godot smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      SPM_DATA: ${{ runner.temp }}/spm-data
+      SPM_REQUIRE_DATA: 1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+
+      - name: Install pipeline dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r pipeline/requirements.txt
+
+      - name: Bake synthetic Moon and Mars fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$SPM_DATA"
+          python pipeline/bake_moon.py --synthetic --out "$SPM_DATA/moon"
+          python pipeline/bake_mars.py --synthetic --out "$SPM_DATA/mars"
+
+      - name: Build
+        run: dotnet build SpaceProgramManager.slnx
+
+      - name: Test
+        run: dotnet test Sim.Tests/Sim.Tests.csproj --no-build
+
+      - name: Install Godot 4.7.2 mono
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/Godot_v4.7.2-stable_mono_linux_x86_64.zip"
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_mono_linux_x86_64.zip" \
+            -o "$archive"
+          echo "129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247  $archive" \
+            | sha256sum --check
+          unzip -q "$archive" -d "$RUNNER_TEMP/godot"
+          godot_bin="$(find "$RUNNER_TEMP/godot" -maxdepth 1 -type f -name 'Godot_*mono_linux*' -print -quit)"
+          test -n "$godot_bin"
+          chmod +x "$godot_bin"
+          echo "GODOT_BIN=$godot_bin" >> "$GITHUB_ENV"
+
+      - name: Godot headless smoke and frame budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --version
+          run_smoke() {
+            local body="$1"
+            local label="$2"
+            shift 2
+            local slot="$RUNNER_TEMP/spm-ci-$label"
+            mkdir -p "$slot"
+            "$GODOT_BIN" --headless --path Game -- \
+              "--body=$body" "--save=$slot" --nosave --fresh \
+              "$@" --frame-budget=20 --frames=30
+          }
+
+          run_smoke moon moon-globe --view=globe
+          run_smoke moon moon-region --view=region --region=589971619905011711
+          run_smoke moon moon-management --view=management --region=589971619905011711
+          run_smoke moon moon-site --view=site --region=589971619905011711 --hex=0
+          run_smoke mars mars-globe --view=globe
