@@ -62,6 +62,27 @@ public class CampaignStoreTests : IDisposable
     }
 
     [Fact]
+    public void Meta_RejectsCrossBodyFingerprintWithoutWritingShard()
+    {
+        var store = new CampaignStore(_root);
+        store.SaveMeta(new CampaignMeta(), Fingerprint);
+        var before = File.ReadAllBytes(store.MetaPath);
+
+        var marsBake = Fingerprint with
+        {
+            BodyKey = "mars",
+            GeneratedUtc = "2026-11-18T19:35:34+00:00",
+        };
+        var error = Assert.Throws<InvalidDataException>(() => store.LoadMeta(marsBake));
+
+        Assert.Contains("moon", error.Message);
+        Assert.Contains("mars", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(store.MetaPath));
+        Assert.Empty(store.ListRegionIndices());
+        Assert.False(Directory.Exists(Path.Combine(store.RootDirectory, "regions")));
+    }
+
+    [Fact]
     public void Meta_RejectsUnsupportedVersion()
     {
         var store = new CampaignStore(_root);

@@ -140,6 +140,25 @@ public class CampaignSlotTests : IDisposable
     }
 
     [Fact]
+    public void List_MarksCrossBodySlotIncompatibleAndKeepsFiles()
+    {
+        var store = new CampaignStore(Path.Combine(_root, "moon-slot"));
+        store.SaveMeta(new CampaignMeta(), Fingerprint);
+
+        var marsBake = Fingerprint with
+        {
+            BodyKey = "mars",
+            GeneratedUtc = "2026-11-18T19:35:34+00:00",
+        };
+        var slot = Assert.Single(new CampaignSlotStore(_root).List(marsBake));
+
+        Assert.Equal(SlotState.Incompatible, slot.State);
+        Assert.Equal("moon", slot.BodyKey);
+        Assert.Contains("mars", slot.Problem);
+        Assert.True(File.Exists(store.MetaPath));
+    }
+
+    [Fact]
     public void List_MarksCorruptMetaUnreadableAndKeepsIt()
     {
         var directory = Path.Combine(_root, "slot-a");
