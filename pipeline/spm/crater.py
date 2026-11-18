@@ -1,4 +1,4 @@
-"""Robbins (2019) lunar crater catalogue -> per-hex crater overlay.
+"""Robbins-style crater catalogues (Moon, Mars) -> per-hex crater overlay.
 
 The overlay is an H3 per-hex attribute (design doc §2.3), **not** an elevation
 rank and **not** a biome:
@@ -55,8 +55,12 @@ def hex_edge_km(body: BodyDef, resolution: int) -> float:
     return float(earth_edge) * (body.radius_km / EARTH_RADIUS_KM)
 
 
-def load_robbins(csv_path: str | Path, *, min_diameter_km: float) -> pd.DataFrame:
-    """Read the Robbins catalogue, keeping only lat/lon/diameter columns."""
+def load_catalogue(csv_path: str | Path, *, min_diameter_km: float) -> pd.DataFrame:
+    """Read a Robbins-style catalogue, keeping lat/lon/diameter columns.
+
+    The lunar (Robbins 2019) and Martian (Robbins & Hynek 2012) catalogues
+    share these column names, so one loader serves both bodies.
+    """
     df = pd.read_csv(
         csv_path,
         usecols=["LAT_CIRC_IMG", "LON_CIRC_IMG", "DIAM_CIRC_IMG"],
@@ -72,6 +76,10 @@ def load_robbins(csv_path: str | Path, *, min_diameter_km: float) -> pd.DataFram
     # Catalogue longitudes run 0..360; H3 wants -180..180.
     df["lon"] = ((df["lon"] + 180.0) % 360.0) - 180.0
     return df.reset_index(drop=True)
+
+
+#: Backwards-compatible name used by early pipeline scripts.
+load_robbins = load_catalogue
 
 
 def build_overlay(

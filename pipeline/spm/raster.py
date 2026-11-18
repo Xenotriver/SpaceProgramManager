@@ -1,17 +1,20 @@
 """Raster I/O and geographic grid helpers.
 
-Two source layouts are used for the Moon:
+Source layouts:
 
-* **LOLA GDR DEM** - PDS3 ``IMG``: a bare little-endian ``int16`` array
+* **LOLA GDR DEM** (Moon) - PDS3 ``IMG``: a bare little-endian ``int16`` array
   (no header) described by a sibling ``LBL``.  Simple-cylindrical,
   longitude ``0..360`` (east positive), pixel registered.
-* **USGS Unified Geologic Map raster** - a GeoTIFF, single ``int8`` band of
-  geologic-unit DN codes.  Simple-cylindrical, longitude ``-180..180``.
+* **MOLA MEGDR DEM** (Mars) - PDS4 ``IMG``: a bare big-endian ``int16`` array
+  described by a sibling ``XML`` label.  Same grid convention as LOLA.
+* **USGS Unified Geologic Map raster** (Moon) - a GeoTIFF, single ``int8`` band
+  of geologic-unit DN codes.  Simple-cylindrical, longitude ``-180..180``.
 """
 
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -68,6 +71,68 @@ def read_lola_img(
         )
     dn = dn.reshape(lines, samples)
     return dn.astype(np.float32) * float(scaling_factor)
+
+
+# ---------------------------------------------------------------------------
+# MOLA PDS4 IMG (Mars)
+# ---------------------------------------------------------------------------
+
+
+def _local_name(tag: str) -> str:
+    """Strip an XML namespace from an ElementTree tag."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def parse_mola_label(label_path: str | Path) -> tuple[int, int]:
+    """Return ``(lines, samples)`` from a MOLA PDS4 product label."""
+    root = ET.parse(label_path).getroot()
+    dims: dict[str, int] = {}
+    data_type: str | None = None
+
+    for element in root.iter():
+        name = _local_name(element.tag)
+        if name == "Axis_Array":
+            axis: str | None = None
+            count: int | None = None
+            for child in element:
+                child_name = _local_name(child.tag)
+                if child_name == "axis_name":
+                    axis = (child.text or "").strip().lower()
+                elif child_name == "elements":
+                    count = int(child.text)
+            if axis and count is not None:
+                dims[axis] = count
+        elif name == "data_type" and data_type is None:
+            data_type = (element.text or "").strip()
+
+    lines = dims.get("line")
+    samples = dims.get("sample")
+    if not lines or not samples:
+        raise ValueError(f"{label_path}: missing Line/Sample axis dimensions")
+    if data_type not in (None, "SignedMSB2"):
+        raise ValueError(f"{label_path}: unsupported data type {data_type!r}")
+    return lines, samples
+
+
+def read_mola_img(
+    img_path: str | Path,
+    label_path: str | Path,
+) -> np.ndarray:
+    """Read a MOLA MEGDR ``IMG`` into elevation metres (float32).
+
+    MOLA products are big-endian signed 16-bit metres with no header and no
+    scale/offset; the PDS4 label supplies only the grid dimensions.
+    """
+    img_path = Path(img_path)
+    lines, samples = parse_mola_label(label_path)
+    expected = lines * samples * 2
+    actual = img_path.stat().st_size
+    if actual != expected:
+        raise ValueError(
+            f"{img_path.name}: expected {expected} bytes for {lines}x{samples} "
+            f"SignedMSB2 image, found {actual}"
+        )
+    return np.fromfile(img_path, dtype=">i2").reshape(lines, samples).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------

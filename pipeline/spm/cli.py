@@ -80,8 +80,20 @@ def _read_real_inputs(
         }
         return elevation, geology, sources, paths
 
-    # fetch.ensure_inputs() already rejects unconfigured profiles; keep this
-    # guard so a future profile cannot silently fall back to Moon readers.
+    if body.source_profile == "mars":
+        _log("reading MOLA MEGDR DEM")
+        elevation = raster.read_mola_img(paths["dem"], paths["dem_label"])
+        _log("rasterizing USGS geologic units")
+        geology = classify.read_mars_geology(paths["geology"], elevation.shape)
+        sources = {
+            "dem": "MOLA MEGDR 16 ppd (NASA PDS, public domain)",
+            "geology": "USGS Mars 15M Geologic Map GIS Renovation, derived from SIM 3292",
+            "craters": "Robbins & Hynek (2012) global Mars crater catalogue",
+        }
+        return elevation, geology, sources, paths
+
+    # fetch.ensure_inputs() already rejects unknown profiles; keep this guard so
+    # a future profile cannot silently fall back to Moon readers.
     raise RuntimeError(f"no real raster reader for source profile {body.source_profile!r}")
 
 
@@ -211,7 +223,10 @@ def run(args: argparse.Namespace) -> Path:
     )
 
     _log("classifying surface")
-    biome = classify.classify_surface(body, geology, elevation, lat)
+    if body.source_profile == "mars":
+        biome = classify.classify_mars_surface(body, geology, elevation, lat)
+    else:
+        biome = classify.classify_surface(body, geology, elevation, lat)
 
     _log("enumerating H3 grid")
     grid = hexify.enumerate_grid(region_res, fine_res)
@@ -231,8 +246,9 @@ def run(args: argparse.Namespace) -> Path:
     crater_kinds = np.zeros(grid.total, dtype=np.uint8)
 
     if not args.skip_craters and body.has_crater_source:
-        _log("building crater overlay (Robbins 2019)")
-        craters = crater.load_robbins(paths["craters"], min_diameter_km=args.min_crater_km)
+        catalogue = "Robbins & Hynek 2012" if body.source_profile == "mars" else "Robbins 2019"
+        _log(f"building crater overlay ({catalogue})")
+        craters = crater.load_catalogue(paths["craters"], min_diameter_km=args.min_crater_km)
         _log(f"  {len(craters)} craters >= {args.min_crater_km} km")
         overlay = crater.build_overlay(
             body, craters, resolution=fine_res, rim_rings=args.rim_rings
@@ -268,7 +284,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=16,
         choices=[4, 16, 64],
-        help="LOLA GDR resolution in pixels/degree (default: 16; ignored with --synthetic)",
+        help="LOLA GDR resolution in pixels/degree (Moon; Mars real bakes use 16 only; "
+        "ignored with --synthetic)",
     )
     parser.add_argument("--fine-res", type=int, default=None, help="override fine H3 resolution")
     parser.add_argument("--region-res", type=int, default=None, help="override region H3 resolution")

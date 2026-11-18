@@ -72,6 +72,9 @@ class BodyDef:
         "luna.pole_south_midlands",
         "luna.pole_south_highlands",
     )
+    #: Optional geology-derived biome overrides used by Mars.
+    volcanic_biome_id: str | None = None
+    canyon_biome_id: str | None = None
 
     # --- source availability ---------------------------------------------
 
@@ -153,21 +156,23 @@ MARS = BodyDef(
     fine_resolution=6,
     region_resolution=3,
     biomes=MARS_BIOMES,
-    # MOLA MEGDR is elevation only for now: no mare-equivalent unit raster and
-    # no configured crater catalogue, so the classifier must tolerate missing
-    # geology and the crater overlay is skipped.
+    # MOLA supplies elevation, the USGS 15M geologic map supplies the
+    # volcanic/canyon/polar province overrides, and the Robbins & Hynek
+    # catalogue supplies the crater overlay.
     mare_biome_id=None,
     lowlands_biome_id="mars.lowlands",
     midlands_biome_id="mars.midlands",
     highlands_biome_id="mars.highlands",
     pole_north_biome_ids=("mars.pole_north",) * 3,
     pole_south_biome_ids=("mars.pole_south",) * 3,
+    volcanic_biome_id="mars.volcanic",
+    canyon_biome_id="mars.canyon",
     pole_latitude_deg=80.0,
     lowlands_max_m=-2000.0,
     midlands_max_m=1000.0,
     source_profile="mars",
-    has_geology_source=False,
-    has_crater_source=False,
+    has_geology_source=True,
+    has_crater_source=True,
 )
 
 BODIES: dict[str, BodyDef] = {MOON.key: MOON, MARS.key: MARS}

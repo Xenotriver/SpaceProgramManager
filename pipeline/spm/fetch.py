@@ -5,6 +5,10 @@ All sources are public-domain / freely redistributable (design doc §5.1):
 * **LOLA GDR DEM** - NASA PDS (public domain).
 * **USGS Unified Geologic Map of the Moon, 2020** - USGS, CC0.
 * **Robbins (2019) lunar crater catalogue** - USGS Astrogeology, PDS.
+* **MOLA MEGDR 16 ppd DEM** - NASA PDS (public domain).
+* **USGS Mars 15M Geologic Map GIS Renovation** - USGS Astrogeology.
+* **Robbins & Hynek (2012) global Mars crater catalogue** - MIT-licensed
+  mirror of the published catalogue.
 
 Nothing here is committed; everything lands in ``pipeline/.cache``.
 """
@@ -15,6 +19,8 @@ import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+import requests
 
 from . import config
 from .bodies import BodyDef
@@ -66,6 +72,36 @@ SOURCES: dict[str, Source] = {
         "lunar_crater_database_robbins_2018",
         "robbins_2018.zip",
     ),
+    "mola_16_img": Source(
+        "mola_16_img",
+        "https://pds-geosciences.wustl.edu/mgs/"
+        "urn-nasa-pds-mgs_mola_topography_derived/meg016/megt90n000eb.img",
+        "megt90n000eb.img",
+        33177600,
+    ),
+    "mola_16_lbl": Source(
+        "mola_16_lbl",
+        "https://pds-geosciences.wustl.edu/mgs/"
+        "urn-nasa-pds-mgs_mola_topography_derived/meg016/megt90n000eb.xml",
+        "megt90n000eb.xml",
+        15528,
+    ),
+    "mars_geology": Source(
+        "mars_geology",
+        "https://astrogeology.usgs.gov/ckan/dataset/"
+        "a1c6ca2e-c18c-4059-80cc-9a75ae0bf807/resource/"
+        "16558096-90a2-46c5-8a99-d5aa868a7ec4/download/"
+        "mars15mgeologicgisrenovation.zip",
+        "mars15mgeologicgisrenovation.zip",
+        15435129,
+    ),
+    "mars_craters": Source(
+        "mars_craters",
+        "https://raw.githubusercontent.com/acbuie/craterz/main/data/craterz.csv",
+        "craters.csv",
+        # GitHub serves this with gzip when the client asks for it; the
+        # decompressed CSV is ~97 MB, so do not pin a cache size here.
+    ),
 }
 
 
@@ -79,10 +115,9 @@ def fetch(name: str, *, force: bool = False, body_key: str = "moon") -> Path:
     """Download ``name`` into ``body_key``'s cache and return its path.
 
     ``body_key`` defaults to ``moon`` so the existing Moon bake keeps using the
-    same cache directory it always has.
+    same cache directory it always has.  Requests supplies the bundled CA
+    certificates that some PDS hosts need on Windows.
     """
-    import urllib.request
-
     source = SOURCES[name]
     dest = cache_dir(body_key) / source.filename
     if dest.exists() and not force:
@@ -92,19 +127,21 @@ def fetch(name: str, *, force: bool = False, body_key: str = "moon") -> Path:
 
     print(f"  downloading {source.name} -> {dest.name}")
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(source.url) as response, open(tmp, "wb") as fh:
-        total = int(response.headers.get("Content-Length", 0))
-        done = 0
-        while True:
-            chunk = response.read(1 << 20)
-            if not chunk:
-                break
-            fh.write(chunk)
-            done += len(chunk)
-            if total:
-                pct = 100.0 * done / total
-                sys.stdout.write(f"\r    {pct:5.1f}%  {done >> 20} MiB")
-                sys.stdout.flush()
+    headers = {"User-Agent": "spm-pipeline/1.0", "Accept-Encoding": "identity"}
+    with requests.get(source.url, stream=True, timeout=120, headers=headers) as response:
+        response.raise_for_status()
+        with open(tmp, "wb") as fh:
+            total = int(response.headers.get("Content-Length", 0))
+            done = 0
+            for chunk in response.iter_content(1 << 20):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                done += len(chunk)
+                if total:
+                    pct = 100.0 * done / total
+                    sys.stdout.write(f"\r    {pct:5.1f}%  {done >> 20} MiB")
+                    sys.stdout.flush()
     sys.stdout.write("\n")
     tmp.replace(dest)
     return dest
@@ -157,6 +194,31 @@ def ensure_moon_inputs(dem_ppd: int, *, force: bool = False) -> dict[str, Path]:
     return paths
 
 
+def ensure_mars_inputs(dem_ppd: int, *, force: bool = False) -> dict[str, Path]:
+    """Ensure every Mars input exists and return a name -> path mapping."""
+    if dem_ppd != 16:
+        raise ValueError("Mars uses MOLA MEGDR 16 ppd only; pass --dem 16")
+
+    paths: dict[str, Path] = {}
+    paths["dem"] = fetch("mola_16_img", body_key="mars", force=force)
+    paths["dem_label"] = fetch("mola_16_lbl", body_key="mars", force=force)
+
+    geology_zip = fetch("mars_geology", body_key="mars", force=force)
+    geology = _extract(
+        geology_zip,
+        {
+            "geo_units_oc_dd.shp": "geology.shp",
+            "geo_units_oc_dd.shx": "geology.shx",
+            "geo_units_oc_dd.dbf": "geology.dbf",
+            "geo_units_oc_dd.prj": "geology.prj",
+        },
+    )
+    paths["geology"] = geology["geology.shp"]
+
+    paths["craters"] = fetch("mars_craters", body_key="mars", force=force)
+    return paths
+
+
 def ensure_inputs(
     body: BodyDef,
     dem_ppd: int,
@@ -166,17 +228,13 @@ def ensure_inputs(
     """Ensure every real input for ``body`` exists.
 
     Dispatch is by :attr:`BodyDef.source_profile`.  The Moon profile keeps the
-    exact legacy download/extract path.  Mars has no configured public raster
-    or crater catalogue yet, so its profile fails early with an actionable
-    message; the synthetic bake path bypasses fetching entirely.
+    exact legacy download/extract path; Mars uses MOLA, the USGS 15M geologic
+    map and the Robbins & Hynek crater catalogue.
     """
     if body.source_profile == "moon":
         return ensure_moon_inputs(dem_ppd, force=force)
 
     if body.source_profile == "mars":
-        raise RuntimeError(
-            "real Mars sources are not configured yet; run with --synthetic "
-            "until a MOLA MEGDR URL and optional geology/crater catalogues are verified"
-        )
+        return ensure_mars_inputs(dem_ppd, force=force)
 
     raise ValueError(f"unknown source profile {body.source_profile!r} for {body.key!r}")
