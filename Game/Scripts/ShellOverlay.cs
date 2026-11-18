@@ -80,6 +80,9 @@ public partial class ShellOverlay : Node2D
     /// <summary>Save root shown in settings.</summary>
     public string SaveRootLabel { get; set; } = "user://saves";
 
+    /// <summary>Active body shown in the menu subtitle.</summary>
+    public string BodyLabel { get; set; } = "Moon";
+
     /// <summary>True while a menu/pause screen is open.</summary>
     public bool IsOpen => _screen != Screen.Closed;
 
@@ -561,7 +564,7 @@ public partial class ShellOverlay : Node2D
         {
             case Screen.Main:
                 title = "SPACE PROGRAM MANAGER";
-                subtitle = "Moon campaign · construction shell";
+                subtitle = $"{BodyLabel} campaign · construction shell";
                 hint = "↑↓ select · Enter choose · Esc close";
                 var last = FindLastSlot();
                 var canContinue = last is { State: SlotState.Ok };

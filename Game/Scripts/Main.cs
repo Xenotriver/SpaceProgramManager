@@ -60,8 +60,10 @@ public partial class Main : Node2D
     private Font _font = null!;
 
     private static string? _pendingSlot;
+    private static string? _pendingBody;
     private static bool _forceMenu;
     private static bool _skipCliView;
+    private static bool _bodySwitch;
 
     private bool _started;
 
@@ -109,7 +111,15 @@ public partial class Main : Node2D
         _font = ThemeDB.FallbackFont;
         _settings = GameSettings.Load();
         _catalogue = new CampaignSlotStore(_settings.SaveRoot);
-        _world = OpenMoon();
+
+        var requestedBody = _pendingBody ?? ArgumentValue("--body") ?? KnownBodies.Moon;
+        var bodyKey = KnownBodies.TryNormalize(requestedBody);
+        if (bodyKey is null)
+        {
+            GD.PushWarning($"unknown body '{requestedBody}'; loading {KnownBodies.Moon}");
+            bodyKey = KnownBodies.Moon;
+        }
+        _world = OpenBody(bodyKey);
 
         // World view sits below the HUD so the panel is never covered.
         _worldLayer = new CanvasLayer { Layer = -1 };
@@ -147,11 +157,15 @@ public partial class Main : Node2D
         _siteView.BuildingsChanged += OnBuildingsChanged;
         _siteView.PlacementFeedback += OnPlacementFeedback;
 
-        _shell = new ShellOverlay { SaveRootLabel = _settings.SaveRoot };
+        _shell = new ShellOverlay
+        {
+            SaveRootLabel = _settings.SaveRoot,
+            BodyLabel = KnownBodies.DisplayName(_world.BodyKey),
+        };
         AddChild(_shell);
         _shell.Command += OnShellCommand;
 
-        GD.Print($"Moon loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
+        GD.Print($"{KnownBodies.DisplayName(_world.BodyKey)} loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
         _globe.Spin = HasArgument("--spin");
         _reportFps = HasArgument("--fps") || _settings.ShowFps;
@@ -160,9 +174,12 @@ public partial class Main : Node2D
         var reloadSlot = _pendingSlot;
         var forceMenu = _forceMenu;
         var skipCli = _skipCliView;
+        var bodySwitch = _bodySwitch;
         _pendingSlot = null;
+        _pendingBody = null;
         _forceMenu = false;
         _skipCliView = false;
+        _bodySwitch = false;
 
         var autoStart = !forceMenu
                         && (reloadSlot is not null
@@ -183,7 +200,9 @@ public partial class Main : Node2D
 
         StartCampaign(
             reloadSlot ?? ResolveStartupSlot(),
-            fresh: HasArgument("--fresh"));
+            fresh: HasArgument("--fresh"),
+            ignoreCliSave: bodySwitch,
+            skipCliView: skipCli);
 
         if (!skipCli)
             ApplyCommandLine();
@@ -199,16 +218,22 @@ public partial class Main : Node2D
         if (!string.IsNullOrWhiteSpace(explicitSlot))
             return explicitSlot;
 
-        return _settings.LastSlotId ?? CampaignSlotStore.DefaultSlotId;
+        return _settings.LastSlotFor(_world.BodyKey) ?? CampaignSlotStore.DefaultSlotId;
     }
 
-    private void StartCampaign(string slotId, bool fresh)
+    private void StartCampaign(
+        string slotId,
+        bool fresh,
+        bool ignoreCliSave = false,
+        bool skipCliView = false)
     {
         var fingerprint = BakeFingerprint.From(_world.Manifest);
         string slotDirectory;
         string slotName;
 
-        var saveOverride = ArgumentValue("--save");
+        // A UI body switch must never inherit --save from the original launch:
+        // that directory belongs to the previous body's fingerprint.
+        var saveOverride = ignoreCliSave ? null : ArgumentValue("--save");
         if (!string.IsNullOrWhiteSpace(saveOverride))
         {
             slotDirectory = Path.GetFullPath(saveOverride);
@@ -245,14 +270,13 @@ public partial class Main : Node2D
 
         if (string.IsNullOrWhiteSpace(saveOverride))
         {
-            _settings.LastSlotId = _campaignService.SlotId;
-            _settings.Save();
+            _settings.SetLastSlot(_world.BodyKey, _campaignService.SlotId);
         }
 
         var view = _campaignService.ViewState;
         _globe.SetView(view.GlobeYawDegrees, view.GlobePitchDegrees, view.GlobeZoom);
 
-        var region = UlongArgument("--region");
+        var region = skipCliView ? 0UL : UlongArgument("--region");
         if (region == 0 && _campaign.Meta.ActiveRegionIndex is { } restored)
             region = restored;
 
@@ -308,7 +332,7 @@ public partial class Main : Node2D
         _siteView.Visible = false;
 
         var fingerprint = BakeFingerprint.From(_world.Manifest);
-        _shell.OpenMenu(_catalogue.List(fingerprint), _settings.LastSlotId);
+        _shell.OpenMenu(_catalogue.List(fingerprint), _settings.LastSlotFor(_world.BodyKey));
         QueueRedraw();
     }
 
@@ -324,16 +348,14 @@ public partial class Main : Node2D
                     return;
                 }
 
-                _settings.LastSlotId = payload;
-                _settings.Save();
+                _settings.SetLastSlot(_world.BodyKey, payload);
                 ReloadInto(payload);
                 return;
 
             case ShellCommand.NewCampaign:
                 var fingerprint = BakeFingerprint.From(_world.Manifest);
                 var id = _catalogue.Create(NextCampaignName(), new CampaignMeta(), fingerprint);
-                _settings.LastSlotId = id;
-                _settings.Save();
+                _settings.SetLastSlot(_world.BodyKey, id);
                 ReloadInto(id);
                 return;
 
@@ -351,13 +373,12 @@ public partial class Main : Node2D
                     _shell.PushToast($"delete failed: {ex.Message}", error: true);
                 }
 
-                if (string.Equals(_settings.LastSlotId, payload, StringComparison.Ordinal))
-                {
-                    _settings.LastSlotId = null;
-                    _settings.Save();
-                }
+                if (string.Equals(_settings.LastSlotFor(_world.BodyKey), payload, StringComparison.Ordinal))
+                    _settings.SetLastSlot(_world.BodyKey, null);
 
-                _shell.SetSlots(_catalogue.List(BakeFingerprint.From(_world.Manifest)), _settings.LastSlotId);
+                _shell.SetSlots(
+                    _catalogue.List(BakeFingerprint.From(_world.Manifest)),
+                    _settings.LastSlotFor(_world.BodyKey));
                 _shell.ShowSlots();
                 return;
 
@@ -414,8 +435,67 @@ public partial class Main : Node2D
         GetTree().ReloadCurrentScene();
     }
 
+    /// <summary>
+    /// Saves the current campaign and reloads into a compatible slot for another
+    /// body. A missing or incompatible slot is replaced by a fresh one; existing
+    /// saves are never opened against the wrong fingerprint.
+    /// </summary>
+    private void SwitchBody(string bodyKey)
+    {
+        var target = KnownBodies.TryNormalize(bodyKey);
+        if (target is null)
+        {
+            _shell.PushToast($"unknown body '{bodyKey}'", error: true);
+            return;
+        }
+
+        if (string.Equals(target, _world.BodyKey, StringComparison.OrdinalIgnoreCase))
+        {
+            _shell.Close();
+            return;
+        }
+
+        if (_campaignService is not null)
+        {
+            _campaignService.SetViewState(CaptureView());
+            _campaignService.SaveSimulation();
+        }
+
+        try
+        {
+            using var targetWorld = OpenBody(target);
+            var fingerprint = BakeFingerprint.From(targetWorld.Manifest);
+            var slotId = _settings.LastSlotFor(target);
+            var slot = slotId is null ? null : _catalogue.TryGet(slotId, fingerprint);
+
+            if (slot is null || slot.State != SlotState.Ok)
+            {
+                slotId = _catalogue.Create(
+                    $"{KnownBodies.DisplayName(target)} Campaign {NextCampaignNumber(fingerprint)}",
+                    new CampaignMeta(),
+                    fingerprint);
+            }
+
+            _settings.SetLastSlot(target, slotId);
+            _pendingBody = target;
+            _pendingSlot = slotId;
+            _bodySwitch = true;
+            _skipCliView = true;
+            _forceMenu = false;
+            GetTree().ReloadCurrentScene();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                      or InvalidDataException or ArgumentException)
+        {
+            _shell.PushToast($"could not switch to {KnownBodies.DisplayName(target)}: {ex.Message}", error: true);
+        }
+    }
+
     private string NextCampaignName()
-        => $"Campaign {_catalogue.List(BakeFingerprint.From(_world.Manifest)).Count + 1}";
+        => $"Campaign {NextCampaignNumber(BakeFingerprint.From(_world.Manifest))}";
+
+    private int NextCampaignNumber(BakeFingerprint fingerprint)
+        => _catalogue.List(fingerprint).Count + 1;
 
     private void ApplyCommandLine()
     {
@@ -810,7 +890,7 @@ public partial class Main : Node2D
     {
         if (!_world.TryGetRegionEntry(regionIndex, out _))
         {
-            GD.PushWarning($"Region {regionIndex} is not in the Moon bake.");
+            GD.PushWarning($"Region {regionIndex} is not in the {KnownBodies.DisplayName(_world.BodyKey)} bake.");
             return;
         }
 
@@ -1626,17 +1706,19 @@ public partial class Main : Node2D
     private static int FootprintHexes(BuildingDef def)
         => 3 * def.FootprintRadius * (def.FootprintRadius + 1) + 1;
 
-    private static BodyWorld OpenMoon()
+    private static BodyWorld OpenBody(string bodyKey)
     {
+        var key = KnownBodies.TryNormalize(bodyKey) ?? KnownBodies.Moon;
+
         try
         {
-            return BodyWorld.Open("moon");
+            return BodyWorld.Open(key);
         }
         catch (DirectoryNotFoundException)
         {
             // Running from the Godot project folder: data lives one level up.
             var fallback = ProjectSettings.GlobalizePath("res://../data");
-            return BodyWorld.Open("moon", fallback);
+            return BodyWorld.Open(key, fallback);
         }
     }
 
