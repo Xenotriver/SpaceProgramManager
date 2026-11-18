@@ -326,6 +326,16 @@ public class CampaignStoreTests : IDisposable
     }
 
     [Fact]
+    public void DeleteRegion_MissingShardAndBackupIsNoOp()
+    {
+        var store = new CampaignStore(Path.Combine(_root, "fresh"));
+
+        store.DeleteRegion(123);
+
+        Assert.False(Directory.Exists(Path.Combine(store.RootDirectory, "regions")));
+    }
+
+    [Fact]
     public void DeleteRegion_RemovesShardAndBackup()
     {
         var store = new CampaignStore(_root);

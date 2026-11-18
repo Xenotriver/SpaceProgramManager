@@ -593,8 +593,16 @@ public sealed class CampaignStore
     public void DeleteRegion(ulong regionIndex)
     {
         var path = RegionPath(regionIndex);
+        var backup = path + ".bak";
+
+        // A fresh slot has no regions/ directory yet. Deleting a never-written
+        // shard must be a no-op, otherwise the first autosave of an empty region
+        // fails with DirectoryNotFoundException.
+        if (!File.Exists(path) && !File.Exists(backup))
+            return;
+
         File.Delete(path);
-        File.Delete(path + ".bak");
+        File.Delete(backup);
     }
 
     /// <summary>
