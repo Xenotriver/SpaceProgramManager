@@ -416,10 +416,141 @@ remain important.
 
 ---
 
+## D23 — Mars is the second body
+
+**Commits:** M4 C1, 2026-11-18 (`933f192`, `451cc6c`) · **Status:** active
+
+**Decision.** Mars, not Earth, is the second playable body. Its bake keeps craters
+and has no oceans; the Moon pipeline is generalized around a `source_profile` so
+the existing Moon fetch path is unchanged.
+
+**Why.** Mars is the closest analogue to the Moon's data stack: global elevation,
+geology and crater catalogues are public, and the existing movement/site scoring
+rules need no ocean or atmosphere concepts.
+
+**Cost.** Real Mars inputs are larger and use a different longitude convention
+(MOLA's 0..360 grid), so geology is rasterized at 1° and rolled before
+upsampling. Synthetic fixtures cover layout in CI, not science fidelity.
+
+---
+
+## D24 — Shared H3 resolutions, unchanged Moon bake
+
+**Commit:** M4 C1, 2026-11-18 (`451cc6c`) · **Status:** active
+
+**Decision.** Mars uses fine=6 / region=3, the same 41,162 regions and 343 fine
+hexes per region as the Moon; only the ground area per cell changes. The Moon bake
+is reused unchanged, with manifest SHA-256
+`12893B7A74D6709B565519F98113E6D3F676A25E253DAEF9DF146B6224B2471A`.
+
+**Why.** Keeping the resolutions identical means one tile format, one child-order
+test and one set of save fields across bodies. Not re-baking the Moon preserves
+its `generatedUtc` fingerprint and every existing Moon save.
+
+**Cost.** A Mars region is physically larger than a Moon region, so gameplay
+distances are body-specific even though indices match. The Mars bake was later
+regenerated for the elevation fix, which deliberately invalidated its old test
+save.
+
+---
+
+## D25 — Body-independent building IDs
+
+**Commit:** M4 C2, 2026-11-18 (`4be9469`) · **Status:** active
+
+**Decision.** `BuildingCatalogue.RegistryFor(bodyKey)` returns the canonical 17
+building IDs for the Moon and clones of them for Mars with translated biome
+restrictions (mare/lowlands, midlands/highlands and polar tiers). IDs never change
+between bodies.
+
+**Why.** Save shards store definition IDs. Translating allowed biomes at runtime
+lets a Mars campaign use the same buildings and schema with no migration path.
+
+**Cost.** The translation table must be kept aligned with both biome registries.
+Volcanic and canyon biomes stay excluded from the translated allowed lists.
+
+---
+
+## D26 — Body choice is shell state, not campaign inheritance
+
+**Commits:** M4 C3, 2026-11-18 (`3fc052c`, `0c3f1b0`) · **Status:** active
+
+**Decision.** `--body=<key>` defaults to Moon; `GameSettings` stores the last slot
+per body, with the legacy value migrated into the Moon entry. `SwitchBody()` saves
+the current campaign, validates the target bake, and reloads through a fresh or
+existing target slot. The `M` Solar System Map offers schematic travel; `G` keeps
+its colony-view meaning from the region view.
+
+**Why.** Continue must never jump from a Moon campaign into a Mars slot. A map
+gives a discoverable body switch without adding a second menu hierarchy.
+
+**Cost.** Body switching reloads the scene. The map is deliberately schematic:
+fixed orbits and angles, not astronomical positions.
+
+---
+
+## D27 — Cross-body saves are refused, not migrated
+
+**Commits:** M4 post-C3 and C4, 2026-11-18 (`76b94aa`, `eb17f2f`) · **Status:** active
+
+**Decision.** `bodyKey` remains in `campaign.json` and is compared with the rest of
+`BakeFingerprint`. `CampaignSlotStore.List` marks cross-body slots `Incompatible`;
+`CampaignService.Load()` refuses them before writing anything. The old Mars test
+save created before the elevation re-bake is intentionally incompatible, with no
+migration or archive.
+
+**Why.** H3 indices alone do not make two bodies interchangeable, and guessing a
+remap could corrupt a campaign. Refusing is observable and keeps every original
+file intact.
+
+**Cost.** Players must start a fresh slot when a body's bake fingerprint changes.
+A future compatible re-bake migration is still an open question.
+
+---
+
+## D28 — Frame gate at a measured 20 ms
+
+**Commit:** M4 C5, 2026-11-18 (`ec6bffa`) · **Status:** active
+
+**Decision.** `--frame-budget=<ms>` forces redraws, skips 12 warmup frames and
+compares p95 over 180 measured frames by default; `--frames` allows 30–3600. The
+limit is 20.00 ms, derived from Moon globe p95 runs of `16.82 / 16.67 / 16.67 ms`
+rather than chosen arbitrarily. PASS exits 0, FAIL exits 1.
+
+**Why.** The globe holds 41,162 region instances, and a regression must be
+catchable in automation before more bodies or imagery are added.
+
+**Cost.** CI shortens the run to 30 frames, so it is a smoke rather than a
+precision benchmark. Results still vary with runner GPU/CPU, so the gate measures
+the chosen view under forced redraw rather than interactive idle time.
+
+---
+
+## D29 — CI uses synthetic fixtures and a pinned mono Godot
+
+**Commit:** M4 C6, 2026-11-18 (`15e96df`) · **Status:** active
+
+**Decision.** `.github/workflows/ci.yml` installs .NET 8 and Python 3.13, bakes
+synthetic Moon and Mars fixtures into `SPM_DATA`, sets `SPM_REQUIRE_DATA=1`,
+builds/tests, then downloads the official Godot 4.7.2 mono Linux zip pinned to
+SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`.
+Five headless view runs use `--frame-budget=20 --frames=30`; `--shot` is excluded.
+
+**Why.** `godotengine/setup-godot` does not exist in GitHub's API, and a pinned
+archive is reproducible. Generated fixtures keep `data/` out of the repository
+while `SPM_REQUIRE_DATA=1` stops real-bake tests from silently skipping.
+
+**Cost.** Each run downloads a ~100 MB archive and uses synthetic terrain, so CI
+does not validate real science sources or screenshots. Headless `--shot` hangs in
+this automation path, so the frame-gate run doubles as the smoke.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
 bake-change save migration, and 3D building assets/presentation. Multi-installation
 hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
-layout is settled by D15.
+layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
+choices are settled by D23–D29.

@@ -1,8 +1,9 @@
 # Architecture
 
 How the pipeline, the simulation core, the Godot runtime, and persistence fit
-together. For *what is planned next*, see [`roadmap.md`](roadmap.md); for the
-save contract, see [`save-format.md`](save-format.md).
+together. The runtime currently bakes and plays two bodies, Moon and Mars. For
+*what is planned next*, see [`roadmap.md`](roadmap.md); for the save contract,
+see [`save-format.md`](save-format.md).
 
 ## 1. Principles
 
@@ -13,8 +14,9 @@ save contract, see [`save-format.md`](save-format.md).
 3. **Campaign state has one owner.** `CampaignState` is the single source of truth
    for installations. `SiteView` is the only view that routes placement/removal
    mutations into it; `RegionView` and `ManagementView` are read-only inspectors.
-4. **Saves are guarded.** A campaign is tied to the exact bake it was created
-   against, written atomically, and never silently overwritten when unreadable.
+4. **Saves are guarded.** A campaign is tied to the exact body and bake it was
+   created against (`bodyKey` plus fingerprint), written atomically, and never
+   silently overwritten when unreadable or cross-body.
 
 ## 2. Layers and dependencies
 
@@ -48,18 +50,20 @@ Projects: `SpaceProgramManager.slnx` → `Sim`, `Sim.Tests`, `Game`.
 | `Sim/Hex` | `HexGrid`: H3 index ↔ lat/long, neighbours, parent/children, distance |
 | `Sim/Biomes` | `Biome`, `DominantBiomeResolver` (area share → neighbour majority → distance → priority) |
 | `Sim/Movement` | `MovementModel` (uphill ×0.8, downhill ×1.15, crater penalty, no stacking), `RoutePlanner` (cheapest-time path) |
-| `Sim/World` | `BodyManifest`, `BodyWorld`, `RegionTile`, `HexRecord`, `TileFormat`, `BiomeRegistry` |
+| `Sim/World` | `BodyManifest`, `BodyWorld`, `KnownBodies`, `RegionTile`, `HexRecord`, `TileFormat`, `BiomeRegistry` |
 | `Sim/Site` | `LocalGrid` (37-cell axial disk), `SiteScore`, `SiteFactors`, `SiteScorerConfig`, `RegionTileScoring` (sunlight, comms, terrain, resources, crater clearance) |
-| `Sim/Buildings` | `BuildingDef` (17 definitions in `MoonBuildings`), `BuildingRegistry`, `BuildingInstance` (`ParentHex` + `LocalCenter`), `BuildingStatus`, local placement validation |
+| `Sim/Buildings` | `BuildingDef` (17 body-independent IDs), `BuildingCatalogue`, `BuildingRegistry`, `BuildingInstance` (`ParentHex` + `LocalCenter`), `BuildingStatus`, per-body biome restrictions and local placement validation |
 | `Sim/Campaign` | `CampaignState`, `RegionState`, `SiteState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint` |
 
 ### World loading
 
-`BodyWorld.Open(bodyKey, dataRoot)` finds the data root (explicit path, `SPM_DATA`,
-or upward search), loads `manifest.json`, validates it, and keeps `fine.bin` open
-via a `RandomAccess` handle. `GetRegion(index)` slices the region's bytes and
-builds a `RegionTile` on demand. Only one region tile is held at a time by the
-runtime.
+`BodyWorld.Open(bodyKey, dataRoot)` resolves `bodyKey` through `KnownBodies`,
+finds the data root (explicit path, `SPM_DATA`, or upward search), loads
+`data/<bodyKey>/manifest.json`, validates it, and keeps `fine.bin` open via a
+`RandomAccess` handle. `GetRegion(index)` slices the region's bytes and builds a
+`RegionTile` on demand. Only one region tile is held at a time by the runtime.
+The manifest's `bodyKey`, resolutions, region count and `generatedUtc` form the
+bake fingerprint used by the save gate.
 
 ### Tile format (v1)
 
@@ -72,36 +76,41 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 
 | Class | Role |
 |---|---|
-| `Main` | Mode state machine (`Globe` / `Region` / `Management` / `Site`), HUD, input dispatch, CLI parsing, owns `BuildingRegistry`, `CampaignState`, `CampaignService` |
-| `MoonGlobe` | Renders all 41,162 region polygons as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan |
+| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Region` / `Management` / `Site`), HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
+| `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan (class name predates Mars) |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; four overlays, hover/select, rover route, aggregate site markers (read-only) |
 | `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief, overlays, pan/zoom/pick, 60° orbit, aggregate site markers (read-only) |
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
 | `GameSettings` | `user://settings.json`: save root, last slot, relief default, FPS flag. Never inside a slot |
-| `ShellOverlay` | Immediate-mode front end: main menu, slot list, pause, settings, search and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
+| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
 | `IsoProjection` | Pure helpers for the isometric projection, inverse projection, painter depth and plane rotation |
 
 ### Startup and slot flow
 
 ```
 launch
-  → GameSettings.Load()                 # user://settings.json
-  → BodyWorld.Open("moon")
+  → GameSettings.Load()                 # user://settings.json, per-body last slots
+  → bodyKey = --body / pending body / "moon"
+  → BodyWorld.Open(bodyKey)
   → no user args (or --menu)  → ShellOverlay main menu
       Continue / Play slot    → store pending slot, ReloadCurrentScene
+      System Map travel       → validate target bake, store pending slot + body, reload
   → any other user arg        → StartCampaign(slot) directly (automation)
 StartCampaign(slotId)
-  → CampaignService.Load()              # campaign.json through the fingerprint gate
+  → CampaignService.Load()              # campaign.json through bodyKey + fingerprint gate
   → slot.json view snapshot            # restore mode, region, camera, selected site hex
   → RegionView / ManagementView load the region on demand
   → SiteView loads the selected fine hex when mode is "site"
 ```
 
-Slot switching, returning to the main menu and starting a new campaign all use
-`SceneTree.ReloadCurrentScene()`. `_ExitTree` flushes the current slot and writes
-its view snapshot; static pending-slot flags are read by the new scene. One
-campaign service therefore lives per scene, and no half-swapped state exists.
+Cross-body slots are listed as `Incompatible` and refused by `Load()` before any
+file is written; map travel creates a fresh slot when the target body has none.
+Slot switching, body switching, returning to the main menu and starting a new
+campaign all use `SceneTree.ReloadCurrentScene()`. `_ExitTree` flushes the current
+slot and writes its view snapshot; static pending-slot/body flags are read by the
+new scene. One campaign service therefore lives per scene, and no half-swapped
+state exists.
 
 ## 5. Data flow
 
@@ -142,8 +151,10 @@ SiteView.Load(world, tile, hexOrdinal, campaign, registry)  # site mode only
 
 ### H3
 
-- Region: resolution 3 (~60 km across), 41,162 on the Moon.
-- Fine hex: resolution 6 (~0.9 km edge), 343 per region (286 on pentagons).
+- Region: resolution 3, 41,162 per body (roughly 60 km on the Moon; ground area
+  differs on Mars).
+- Fine hex: resolution 6, 343 per region (286 on pentagons); ~0.9 km edge on the
+  Moon. Mars deliberately keeps the same resolutions.
 - `RegionTile.Cells` is in H3 child order, matching the Python pipeline; the
   order is covered by `ChildOrderTests`.
 
@@ -197,12 +208,15 @@ projected cell centre within a radius, not polygon containment.
   ghost are drawn per frame using `IsoProjection`.
 - `--fps` prints frame time plus per-view draw timings (`LastDrawMs`,
   `AverageDrawMs`), and `--redraw` forces continuous redraws for benchmarking.
+- `--frame-budget=<ms>` forces redraws, compares p95 frame time with the 20.00 ms
+  limit and exits 0/1; `--frames` selects the measured-frame count (30–3600). CI
+  runs this across Moon globe/region/management/site and Mars globe.
 
 ## 8. Extension points
 
 | Change | Where to start |
 |---|---|
-| New body | `pipeline/spm/bodies.py`, bake, then `BodyWorld.Open`; `Main.OpenMoon()` is currently hardcoded |
+| New body | `pipeline/spm/bodies.py`, `KnownBodies`, `BuildingCatalogue`, the Solar System Map entry, then bake and launch with `--body=<key>` |
 | New overlay | `RegionViewMode`, palette in `RegionPalettes`, fill computation in `RegionView`/`ManagementView` |
 | New building | Add a `BuildingDef` to `MoonBuildings`, keep `MoonBuildings_AreConsistent` green |
 | Simulation tick | `Sim/Time/SimulationClock.cs` + `CampaignState.Tick(hours)`; already driven from `Main._Process` |
@@ -212,8 +226,10 @@ projected cell centre within a radius, not polygon containment.
 
 ## 9. Known constraints
 
-- Single body and one open region; the clock now runs, but `CampaignState.Tick`
-  only simulates regions installed in memory so the globe stays cheap.
+- Two bodies (Moon and Mars) and one open region; the clock now runs, but
+  `CampaignState.Tick` only simulates regions installed in memory so the globe
+  stays cheap. The pre-elevation-fix Mars test save is intentionally
+  incompatible; no migration or archive exists.
 - Installations may share a fine hex only if their local footprints are disjoint
   inside its 37-cell site grid (plan §2.5, resolved in M3). H3-scale footprints
   are no longer used for placement.
@@ -224,4 +240,5 @@ projected cell centre within a radius, not polygon containment.
 - `Main.cs` owns world HUD/input, simulation clock, mode wiring and startup;
   `ShellOverlay` owns the menu/pause/time/settings screens since M2. Further
   screen splitting remains deferred.
-- No CI, analyzers, or automated screenshot regression yet.
+- CI covers build, tests, synthetic bakes and headless frame-gate smoke. Analyzers
+  and automated screenshot regression are still absent.

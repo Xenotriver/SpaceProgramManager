@@ -7,41 +7,44 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-17**, M3 site view, **132 tests passing**.
+Anchor: **2026-11-18**, M4 multi-body, **148 tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
-| Moon data pipeline | **Done** | `data/moon`: 41,162 regions, 14,117,882 fine hexes, 343 hexes/region, 10 biomes, `fine.bin` 54.6 MB |
-| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, buildings, local grid, sites, campaign, save store, slot catalogue |
-| Godot runtime | **Done** | Globe, region/colony inspectors, per-hex site view with local placement, save/load, CLI automation |
-| Campaign shell | **Done (M2)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause scaffold, search, settings |
+| Moon data pipeline | **Done** | `data/moon`: 41,162 regions, 14,117,882 fine hexes, 343 hexes/region, 10 biomes, `fine.bin` 54.6 MB; bake fingerprint unchanged |
+| Mars data pipeline | **Done (M4)** | `data/mars`: 41,162 regions, 7 biomes, MOLA elevation, USGS geology and Robbins & Hynek craters; `generatedUtc=2026-11-18T19:35:34+00:00` |
+| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, per-body building catalogues, local grid, sites, campaign, save store, slot catalogue |
+| Godot runtime | **Done** | Globe, region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
+| Campaign shell | **Done (M2, extended in M4)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause, search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v3 with v1/v2 migration |
-| Multi-body | **Planned (M4)** | `Main.OpenMoon()` is hardcoded |
+| Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
+| CI and performance gate | **Done (M4)** | `.github/workflows/ci.yml`; synthetic bakes, headless Godot smoke, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
 
 The player can: start or continue a named campaign from the main menu, keep
-several isolated save slots, save manually, rotate the Moon globe, search an H3
-index, open a region, inspect hexes across four overlays, plan a rover route,
+several isolated save slots, save manually, rotate the active body's globe, search
+an H3 index, open a region, inspect hexes across four overlays, plan a rover route,
 press `Enter` to open a fine hex as a site, place several installations on its
 37-cell local grid, and have all of it persist across launches against a
-fingerprinted bake.
+fingerprinted bake. The player can start on Moon or Mars directly with `--body`
+or travel between them with the `M` Solar System Map.
 
 The player can also pass time with pause/1×/2×/4×, watch installations finish
 construction, earn/spend credits and stockpile resources, see power or life-support
 shortfalls called out in the HUD, and find occupied hexes as aggregate markers in
 every region and colony overlay.
 
-The player cannot: pick a tech in the UI, rename a campaign, or play a second
-body yet.
+The player cannot: pick a tech in the UI, rename a campaign, or play Earth or
+another body yet.
 
 ### Naming (locked)
 
 - **Colony view** — the region-scale isometric management view that exists today
-  (`ManagementView`, `--view=management`, `M` from the region view). It shows all
-  343 hexes of one region as prisms.
+  (`ManagementView`, `--view=management`, `G` from the region view). It shows all
+  343 hexes of one region as prisms. `M` is now the Solar System Map.
 - **Site view** — the per-hex local build grid from plan §2.6, shipped in **M3**
   (`SiteView`, `--view=site`, `Enter` from region/colony). It is a different scale,
   not a rename, and is the only place where installations are placed.
@@ -196,16 +199,51 @@ Implemented:
 > §2.5 ("multiple installations per hex") is now reconciled with the no-overlap
 > rule: footprints only have to be disjoint **inside one site grid**.
 
-### M4 — Multi-body
+### M4 — Multi-body (done)
 
-**Outcome:** a second body (Earth or Mars) bakes and plays.
+**Outcome:** a second body (Mars) bakes and plays alongside the unchanged Moon
+bake.
 
-Scope: pipeline generalization (`bodies.py`), body selection in the shell,
-per-body biome/building tables, campaign scoped per body, data-root layout for
-multiple bodies. Replace the hardcoded `Main.OpenMoon()`.
+**Status:** shipped 2026-11-18 · **148 tests passing** · decisions D23–D29.
+Checkpoints: pipeline `451cc6c`, catalogues `4be9469`, shell `3fc052c` +
+`0c3f1b0`, two Mars fixes `300dafc` + `76b94aa`, save isolation `eb17f2f`, frame
+gate `ec6bffa`, CI `15e96df`.
 
-**Acceptance criteria:** two bodies in `data/`; a campaign stores its `bodyKey`;
-switching bodies does not mix saves.
+Implemented:
+
+1. **Pipeline** — `pipeline/spm/bodies.py` registers Moon and Mars; `bake_mars.py`
+   uses MOLA MEGDR 16 ppd, the USGS 15M geologic map and the Robbins & Hynek 2012
+   crater catalogue. Mars keeps fine=6 / region=3 (41,162 regions, 7 biomes);
+   `--synthetic` generates the full tile layout without downloads for CI. The
+   Moon manifest SHA-256 remains
+   `12893B7A74D6709B565519F98113E6D3F676A25E253DAEF9DF146B6224B2471A`.
+2. **Per-body buildings** — `BuildingCatalogue` clones the 17 canonical Moon
+   definitions for Mars with translated biome restrictions; building IDs stay
+   stable across bodies, so no save migration is needed.
+3. **Body selection and travel** — `--body=<key>`, per-body last-slot settings,
+   `KnownBodies`, `SwitchBody()` and the `M` Solar System Map. Moon and Mars are
+   READY; unmapped bodies are dim and refuse travel. `G` enters the colony view
+   from the region view.
+4. **Save safety** — no schema change: `bodyKey` is part of the bake fingerprint.
+   Cross-body slots are listed `Incompatible`, refused before any file is
+   written, and never overwritten. Fresh Mars slots autosave cleanly; empty H3
+   hexes inherit MOLA elevation instead of reading 0 m.
+5. **Gate and CI** — `--frame-budget=<ms>` / `--frames=<n>` measure p95 frame time
+   against a measured 20.00 ms limit. `.github/workflows/ci.yml` builds/tests,
+   bakes synthetic Moon + Mars fixtures, and runs five headless Godot smokes with
+   the pinned 4.7.2 mono archive. No `data/` is committed.
+
+**Acceptance criteria** — verified on 2026-11-18:
+
+- [x] `data/moon` and `data/mars` both load; each campaign stores `bodyKey`.
+- [x] A Moon save is `Incompatible` under the Mars fingerprint and stays byte-for-byte
+  untouched after a refused load; no `regions/` directory is created.
+- [x] `--body=mars` creates a fresh slot, and map travel keeps per-body last slots
+  separate; the old Mars test save is intentionally incompatible (D27).
+- [x] Moon globe p95 was `16.82 / 16.67 / 16.67 ms`; the 20 ms gate passes and a
+  1 ms limit fails with exit 1. Build clean, 0 warnings; 148/148 tests.
+- [x] CI workflow YAML, embedded shell blocks and the exact five-run smoke script
+  were verified locally with synthetic fixtures.
 
 ### M5 — Content
 
@@ -225,10 +263,11 @@ Not tied to a milestone; pull in when they start hurting.
 
 | Item | Why |
 |---|---|
-| CI (build + tests + headless smoke shot) | 132 tests only run when someone remembers |
+| CI (build + tests + headless smoke) | **Done in M4** — `.github/workflows/ci.yml` with synthetic bakes and frame-gate smoke |
 | Screenshot regression harness | `--shot` already works; wire it to reference images |
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
-| Globe performance budget | 41,162 instances today; add a frame-time gate before Earth |
+| Globe performance budget | **Done in M4** — 20 ms p95 gate; keep it before adding more bodies |
+| Real-life surface overlay | **Scheduled for M4.5**, after M4 C7 — optional `color.bin` sidecar, no save/fingerprint change |
 | Replay/determinism harness | M1 covers same-seed ticks; extend it to longer event sequences |
 | `.editorconfig` + analyzers | Current tree is consistent by convention only |
 | Localization, audio, LICENSE, changelog | Release hygiene |

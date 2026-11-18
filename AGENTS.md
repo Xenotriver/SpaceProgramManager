@@ -7,13 +7,13 @@ first, then the document relevant to your task.
 
 A space-agency management game: a Python pipeline bakes real Solar System data
 into H3 tiles, an engine-free C# simulation core (`Sim`) owns game state, and a
-Godot 4.7 .NET project (`Game`) renders it. Moon is the only body so far.
+Godot 4.7 .NET project (`Game`) renders it. Moon and Mars are baked and playable.
 
 ## Commands
 
 ```powershell
 dotnet build SpaceProgramManager.slnx
-dotnet test Sim.Tests/Sim.Tests.csproj     # expect 132 passing
+dotnet test Sim.Tests/Sim.Tests.csproj     # expect 148 passing
 ```
 
 Godot (machine-specific path):
@@ -28,6 +28,8 @@ User arguments go **after `--`**:
 & $godot --path Game -- --region=589971619905011711 --view=management --shot=C:\tmp\shot.png
 ```
 
+Select a baked body with `--body=moon|mars`. Headless CI uses
+`--frame-budget=<ms> --frames=<n>`; the gate prints p95 and exits 1 on failure.
 See `docs/development.md` for the full automation workflow.
 
 ## Hard rules

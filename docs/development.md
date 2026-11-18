@@ -26,10 +26,10 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 132` — 132 passed, 0 failed, 0 skipped on a machine with
-`data/moon` present. Tests that need the real bake **skip** when it is absent — do
-not make them fail. Set `SPM_REQUIRE_DATA=1` to turn that skip into a failure
-(intended for CI).
+Expected: `powodzenie: 148` — 148 passed, 0 failed, 0 skipped on a machine with
+`data/moon` and `data/mars` present. Tests that need a real bake **skip** when it
+is absent — do not make them fail. Set `SPM_REQUIRE_DATA=1` to turn those skips
+into failures (intended for CI).
 
 `dotnet build` builds `Sim`, `Sim.Tests`, and `Game`. Building `Game` requires the
 Godot .NET SDK (`Godot.NET.Sdk/4.7.2`) to be resolvable, which the mono editor
@@ -39,19 +39,20 @@ installs.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `BuildingTests.cs` | 15 | Registry consistency, placement rejection paths, footprint shape, tech filtering, real-bake biome ids |
-| `CampaignStoreTests.cs` | 21 | Meta/shard round-trip, v1 meta + v1/v2 → v3 shard migration, v3 two-installation sites, fingerprint + version + format rejection, backups, corrupt quarantine, unknown ids, state value filtering, site view state |
-| `CampaignSlotTests.cs` | 15 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/unreadable states, delete safety, view-state round-trip |
+| `BuildingTests.cs` | 20 | Registry consistency, placement rejection paths, footprint shape, tech filtering, per-body catalogues, Mars biome restrictions, real-bake biome ids |
+| `CampaignStoreTests.cs` | 26 | Meta/shard round-trip, v1 meta + v1/v2 → v3 shard migration, v3 two-installation sites, fingerprint + cross-body + version + format rejection, backups, corrupt quarantine, missing-shard delete, unknown ids, state value filtering, site view state |
+| `CampaignSlotTests.cs` | 16 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/cross-body/unreadable states, delete safety, view-state round-trip |
 | `CampaignTests.cs` | 16 | Site-scoped place/remove/clear, local preview footprint, two installations in one hex, independent sites, local overlap/clipping, install-from-save validation, visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
 | `DominantBiomeResolverTests.cs` | 7 | Area share, neighbour majority, distance fallback, priority order |
 | `HexGridTests.cs` | 5 | H3 index ↔ lat/long round-trip, 6 neighbours on a normal cell, region parent/children, canonical H3 example |
+| `KnownBodiesTests.cs` | 5 | Ready bodies are Moon + Mars; case-insensitive normalization rejects unknown keys |
 | `LocalGridTests.cs` | 7 | 37-cell disk, centre-first order, boundary rejection, axial distance, local footprint sizes and ring-3 clipping |
 | `MovementModelTests.cs` | 6 | Uphill/downhill multipliers, crater penalties, non-stacking rule |
 | `RoutePlannerTests.cs` | 6 | Cheapest-time path, crater on destination, unreachable goal, empty route, leg totals |
 | `SimulationTests.cs` | 8 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, deterministic replay, 5-neighbour pentagon |
 | `SiteScoringTests.cs` | 6 | Composite factors, viability threshold, weight presets, resource deposit, config defaults |
-| `WorldLoaderTests.cs` | 15 | Data-root resolution, manifest + tile-header validation, synthetic bake (343 + 286), real Moon bake |
+| `WorldLoaderTests.cs` | 18 | Data-root resolution, manifest + tile-header validation, synthetic bake (343 + 286), real Moon and Mars bakes, sampled Mars empty-hex elevation |
 
 ## 3. Run the game
 
@@ -65,12 +66,16 @@ installs.
 & $godot --path Game -- --region=589971619905011711 --view=management
 ```
 
-The runtime needs `data/moon/manifest.json` and `data/moon/fine.bin`. Data root
-resolution order (`BodyWorld.FindDataRoot`):
+The runtime needs `data/<body>/manifest.json` and `data/<body>/fine.bin` for the
+selected body. Data root resolution order (`BodyWorld.FindDataRoot`):
 
 1. explicit path passed to `BodyWorld.Open`,
-2. `SPM_DATA` environment variable (must contain `moon/manifest.json`),
+2. `SPM_DATA` environment variable (must contain `<body>/manifest.json`),
 3. walk up from `AppContext.BaseDirectory` and the current directory.
+
+`--body=moon|mars` selects the body; unknown keys fall back to Moon with a
+warning. `M` opens the schematic Solar System Map, where only baked bodies are
+travellable. Per-body last-slot settings keep Continue on the same body.
 
 Saves default to the slot root `user://saves/`, which on this machine resolves to
 `C:\Users\xenot\AppData\Roaming\Godot\app_userdata\Space Program Manager\saves`.
@@ -99,8 +104,9 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 
 | Flag | Meaning |
 |---|---|
+| `--body=<moon\|mars>` | Select the baked body (default `moon`). |
 | `--region=<h3>` | Open a region by H3 index. Without it the last active region is restored. |
-| `--view=region\|management\|site` | Select the active view; `--iso` aliases `management`. |
+| `--view=globe\|region\|management\|site` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
 | `--overlay=biome\|terrain\|score\|buildings\|sites` | Overlay for region/colony views. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
@@ -113,12 +119,15 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
 | `--continue` | Open the last-played slot directly. |
 | `--menu` | Force the main menu even with other arguments (useful with `--shot`). |
+| `--map` | Open the Solar System Map after startup. |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign. |
 | `--nosave` | Disable persistence for this run. |
 | `--time=<0\|1\|2\|4>` | Starting clock speed (default `1×`; `0` pauses). |
 | `--advance=<hours>` | Tick loaded regions immediately, save, then continue (e.g. finish a 24 h build). |
 | `--shot=<png>` | Wait a few frames, save a screenshot, quit. |
+| `--frame-budget=<ms>` | Run the p95 frame-time gate; exits 1 on failure. |
+| `--frames=<n>` | Measured frames for the gate, clamped to 30–3600 (default 180). |
 | `--fps` | Print FPS plus per-view draw timings. |
 | `--redraw` | Force a redraw every frame (benchmarking). |
 | `--spin` | Spin the globe. |
@@ -136,6 +145,8 @@ Notes:
   `--place` places several installations in the same site in command order.
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
+- `M` toggles the Solar System Map from any view; `G` enters the colony view only
+  from the region view.
 - Screenshot and save scratch space for this repo:
   `C:\Users\xenot\AppData\Local\Temp\opencode\spm`.
 - `F12` writes `user://moon_overview.png`.
@@ -143,12 +154,18 @@ Notes:
 ### Performance checks
 
 ```powershell
+# Exploratory timing: frame time plus per-view draw timings.
 & $godot --path Game -- --region=589971619905011711 --view=management --fps --redraw
+
+# Automated gate: 12 warmup + 180 measured frames by default.
+& $godot --path Game -- --view=globe --frame-budget=20 --frames=180
 ```
 
 `--fps` prints frame time and `LastDrawMs` / `AverageDrawMs` for the active view.
-Use it before and after renderer changes; there is no automated budget yet (see
-the roadmap's cross-cutting backlog).
+`--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
+or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
+p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
+Moon globe/region/management/site plus Mars globe so the gate stays cheap.
 
 ## 5. Data pipeline
 
@@ -168,6 +185,14 @@ pipeline/.venv/Scripts/python pipeline/bake_moon.py --dem 16
 # full-fidelity bake (64 ppd, ~41k regions)
 pipeline/.venv/Scripts/python pipeline/bake_moon.py --dem 64 --jobs 4
 
+# Mars uses MOLA + USGS geology + Robbins & Hynek craters at the same H3 resolutions
+pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16
+pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16 --jobs 4
+
+# deterministic no-download fixtures for CI / local smoke tests
+pipeline/.venv/Scripts/python pipeline/bake_moon.py --synthetic --out _ci/moon
+pipeline/.venv/Scripts/python pipeline/bake_mars.py --synthetic --out _ci/mars
+
 # optional equirectangular previews
 pipeline/.venv/Scripts/python pipeline/preview_moon.py
 ```
@@ -182,26 +207,45 @@ pipeline/.venv/Scripts/python pipeline/preview_moon.py
 | `--jobs` | `1` | Parallel workers for pixel → hex. |
 | `--block-rows` | `512` | Raster rows per aggregation block. |
 | `--skip-craters` | off | Skip the crater overlay. |
+| `--synthetic` | off | Generate deterministic in-memory terrain instead of downloading sources; full tile layout, no real imagery or science fidelity. |
 | `--out` | `data/<body>` | Output directory. |
 | `--force` | off | Re-download cached sources. |
 
-Output:
+Output (one tree per body, same layout):
 
 ```
-data/moon/
+data/moon/            # or data/mars/
 ├─ manifest.json      # 4.2 MB: body, biomes, sources, every region entry
 ├─ fine.bin           # 54.6 MB: 4-byte record per fine hex, region tiles concatenated
 └─ preview_*.png      # optional equirectangular previews
 ```
 
-Sources are cached under `pipeline/.cache/moon/` (LDEM 16/64, USGS geology,
-Robbins 2019 CSV + zip). Both `data/` and `pipeline/.cache/` are gitignored.
+Sources are cached per body under `pipeline/.cache/<body>/`: Moon uses LDEM
+16/64, USGS geology and the Robbins 2019 CSV + zip; Mars uses MOLA MEGDR 16 ppd,
+the USGS 15M geologic map and the Robbins & Hynek 2012 catalogue. Both `data/`
+and `pipeline/.cache/` are gitignored. The Moon bake is deliberately unchanged
+(`generatedUtc=2026-11-11T21:48:07+00:00`) so old Moon saves stay valid; the
+current Mars bake was regenerated after the empty-hex elevation fix
+(`generatedUtc=2026-11-18T19:35:34+00:00`), so the old Mars test slot is
+intentionally incompatible.
 
 The pipeline's H3 (`h3==4.5.0`) and the runtime's (`pocketken.H3 4.5.0.1`) must
 stay on the same H3 major version — the child-order test guards the tile layout,
 not the library version. Bump both together.
 
-## 6. Repository conventions
+## 6. Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests. It sets
+`SPM_DATA` to a temporary root and `SPM_REQUIRE_DATA=1`, bakes synthetic Moon and
+Mars fixtures, builds and tests .NET, then downloads the pinned Godot 4.7.2 mono
+Linux archive (SHA-256
+`129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`). The Godot
+step runs the five `--frame-budget=20 --frames=30` smokes from the frame-gate
+section. Headless `--shot` is deliberately not used because it hangs in
+automation; the frame-gate run is the smoke and exit-code check. No `data/` is
+committed.
+
+## 7. Repository conventions
 
 - **LF line endings.** Git may warn that LF will become CRLF; ignore the warning.
   **Do not** rewrite files with `Get-Content -Raw | Set-Content` — it has caused
@@ -213,11 +257,11 @@ not the library version. Bump both together.
 - Tests: xUnit, one file per subsystem, descriptive `Subject_ExpectedBehaviour` names.
 - Commits: imperative subject, body explaining why and how it was verified.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Could not find 'moon/manifest.json'` | No bake, or wrong working directory | Run the bake, or set `SPM_DATA` to the folder containing `moon/` |
+| `Could not find '<body>/manifest.json'` | No bake for the selected body, or wrong working directory | Run the matching bake, or set `SPM_DATA` to the folder containing `moon/` and `mars/` |
 | `Manifest ... describes body ...` | `--body` / directory mismatch | Match the folder name to the manifest's `body.key` |
 | `Tile file for body ... not found` | `fine.bin` missing but manifest present | Re-run the bake |
 | Save status `save · disabled · incompatible` | Version, format, or fingerprint mismatch | Keep the save; re-bake with the same inputs or start a new slot with `--fresh` |
@@ -227,4 +271,4 @@ not the library version. Bump both together.
 | `--rot` seems ignored | It only applies in the colony view | Use `--view=management` or press `M` first |
 | `--place` warns "requires --view=site" | Region/colony views no longer place buildings | Add `--view=site --hex=<ordinal>` and pass `--place=<q>,<r>` |
 | Installation vanishes after reload | Local footprint could not be rebuilt (unknown def, invalid parent hex, outside the 37-cell disk, or local overlap) | Check the `campaign:` warnings printed on load |
-| Tests fail only on another machine | Real-bake tests assume `data/moon` | They skip when it is absent; if they fail, the bake is present but inconsistent |
+| Tests fail only on another machine | Real-bake tests assume `data/moon` and `data/mars` | They skip when absent; with `SPM_REQUIRE_DATA=1` they must run, so bake both bodies first |

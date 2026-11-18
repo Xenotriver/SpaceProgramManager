@@ -4,21 +4,23 @@ A space-agency management game built in **Godot 4.7 (.NET / C#)**. Real Solar
 System bodies are baked offline into an **H3** hexagonal grid; the runtime renders
 a globe, a per-region hex map, a region-scale isometric colony view, and a close-up
 per-hex **site view** where installations are placed on a local grid. Campaign
-state is engine-free and saved as JSON.
+state is engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-17**, M3 site view, **132 tests passing**.
+Snapshot: **2026-11-18**, M4 multi-body, **148 tests passing**.
 
 | Area | State |
 |---|---|
 | Moon data pipeline | **Done** — 41,162 regions, 14,117,882 fine hexes, biome + crater + elevation |
-| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, buildings, sites, campaign, save store, slot catalogue |
-| Godot runtime | **Done** — main menu, slots, globe, region/colony inspectors, site placement, save/load, CLI automation |
-| Campaign shell | **Done (M2)** — new/continue/load, manual save, toasts, pause scaffold, region search, settings |
+| Mars data pipeline | **Done (M4)** — 41,162 regions, 7 biomes, MOLA elevation, geology and craters |
+| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, per-body building catalogues, sites, campaign, save store, slot catalogue |
+| Godot runtime | **Done** — main menu, slots, body selection, system map, globe, region/colony inspectors, site placement, save/load, CLI automation |
+| Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
-| Multi-body | **Planned (M4)** — Moon only today |
+| Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
+| CI and performance gate | **Done (M4)** — synthetic bakes, headless Godot smoke, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -31,7 +33,7 @@ mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
 | `Sim.Tests/` | xUnit tests for the simulation core. |
 | `Game/` | Godot 4.7.2 project (C#). References `Sim`. |
 | `pipeline/` | Python 3.13 offline data pipeline (H3, rasterio, geopandas). |
-| `data/` | Generated tiles (gitignored). The game needs `data/moon/`. |
+| `data/` | Generated tiles (gitignored). The game uses `data/moon/` and `data/mars/`; CI generates synthetic fixtures. |
 | `docs/` | Architecture, save format, roadmap, development notes, decisions. |
 
 ## Requirements
@@ -55,9 +57,10 @@ Open `Game/project.godot` in the Godot .NET editor, or from the command line:
 godot --path Game
 ```
 
-The game expects `data/moon/manifest.json` + `data/moon/fine.bin`. It searches
-upward from the executable and honours the `SPM_DATA` environment variable
-(pointing at the folder that contains `moon/`).
+The game expects `data/<body>/manifest.json` + `data/<body>/fine.bin` for the
+selected body (`moon` by default, or `mars`). It searches upward from the
+executable and honours the `SPM_DATA` environment variable (pointing at the folder
+that contains `moon/` and `mars/`).
 
 ### Controls
 
@@ -75,12 +78,13 @@ mouse for the same actions.
 | Settings | Save root, keybind reference, open save folder |
 | Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
+| `M` | Open/close the schematic Solar System Map (Moon and Mars are ready) |
 
 **Globe**
 
 | Input | Action |
 |---|---|
-| Left drag | Rotate the Moon |
+| Left drag | Rotate the active body |
 | Wheel | Zoom |
 | Right drag | Pan |
 | Left click | Open the region under the cursor |
@@ -99,7 +103,8 @@ mouse for the same actions.
 | Left click | Select hex; a second click plans a rover route |
 | `1` `2` `3` `4` / Tab | Biome / terrain / site score / sites overlay |
 | `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
-| `M` | Enter the colony view |
+| `G` | Enter the colony view |
+| `M` | Open the Solar System Map |
 | Esc | Back to the globe |
 
 **Colony view (isometric)**
@@ -112,6 +117,7 @@ mouse for the same actions.
 | `[` / `]` | Decrease / increase relief exaggeration |
 | `1`–`4` / Tab | Overlay |
 | `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
+| `M` | Open the Solar System Map |
 | Esc | Back to the region view |
 
 **Site view (per-hex grid)**
@@ -153,6 +159,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 
 | Flag | Meaning |
 |---|---|
+| `--body=<moon\|mars>` | Select the baked body to load (default `moon`) |
 | `--region=<h3>` | Open a region by H3 index (restores the last active region when omitted) |
 | `--view=region\|management\|site` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
@@ -167,16 +174,20 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--slot=<id>` | Open a slot under the save root directly |
 | `--continue` | Open the last-played slot directly |
 | `--menu` | Force the main menu (pair with `--shot` to capture it) |
+| `--map` | Open the Solar System Map after startup |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |
 | `--time=<0\|1\|2\|4>` | Starting speed (default `1×`; `0` pauses) |
 | `--advance=<hours>` | Tick loaded regions immediately, save, then continue |
 | `--shot=<png>` | Render a few frames, save a screenshot, quit |
+| `--frame-budget=<ms>` | Run the p95 frame-time gate (12 warmup frames, exit 1 on failure) |
+| `--frames=<n>` | Measured frames for the gate, clamped to 30–3600 (default 180) |
 | `--fps` / `--redraw` / `--spin` | Print FPS + draw timings / force redraws / spin the globe |
 
 Any user argument except `--menu` skips the menu and starts the selected slot, so
-pre-M2 automation is unchanged.
+pre-M2 automation is unchanged. Cross-body slots are listed as incompatible and
+refused; they are never overwritten.
 
 ## Saving
 
@@ -208,12 +219,20 @@ pipeline/.venv/Scripts/python pipeline/bake_moon.py --dem 16
 # full-fidelity bake (64 ppd, ~41k regions)
 pipeline/.venv/Scripts/python pipeline/bake_moon.py --dem 64 --jobs 4
 
+# Mars uses the same resolutions with MOLA / USGS geology / Robbins craters
+pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16
+
+# deterministic no-download fixtures (used by CI)
+pipeline/.venv/Scripts/python pipeline/bake_moon.py --synthetic --out _ci/moon
+pipeline/.venv/Scripts/python pipeline/bake_mars.py --synthetic --out _ci/mars
+
 # optional equirectangular previews
 pipeline/.venv/Scripts/python pipeline/preview_moon.py
 ```
 
-Sources: LOLA LDEM (NASA PDS), USGS Unified Geologic Map of the Moon 2020,
-Robbins (2019) lunar crater catalogue. See [`docs/development.md`](docs/development.md).
+Sources: LOLA LDEM, USGS Unified Geologic Map of the Moon 2020 and Robbins (2019)
+lunar craters; MOLA MEGDR 16 ppd, USGS Mars 15M Geologic Map and Robbins & Hynek
+(2012) Mars craters. See [`docs/development.md`](docs/development.md).
 
 ## Design notes
 
@@ -222,7 +241,9 @@ Robbins (2019) lunar crater catalogue. See [`docs/development.md`](docs/developm
 - **Site** — a radius-3 axial disk of **37** local cells inside one fine hex.
   Installations occupy local cells; footprints are derived from the definition.
 - **Region** — H3 resolution 3 (~60 km): the data tile and overview unit. Each
-  region contains **343** fine hexes (286 on the 12 pentagons).
+  region contains **343** fine hexes (286 on the 12 pentagons). Mars keeps the
+  same resolutions, so saves and tile code are identical; only ground area and
+  body-specific data differ.
 - Biomes are assigned by area share, then neighbour majority, then distance,
   then a deterministic priority list.
 - Movement uses a vessel-speed model: uphill ×0.8, downhill ×1.15, crater rims

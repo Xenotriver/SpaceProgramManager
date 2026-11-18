@@ -292,10 +292,11 @@ long pause in one region does not silently advance distant colonies.
 - Unknown **fields** are tolerated by `System.Text.Json` (ignored), which allows
   additive changes in a future version only if old runtimes can safely ignore
   them. Do not rely on that for semantic changes.
-- The bake fingerprint is part of the contract: regenerating `data/moon` with a
-  different `generatedUtc`, region count, or resolutions invalidates old saves by
-  design. A future migration may remap buildings by H3 index if the bake is
-  compatible; that does not exist yet.
+- The bake fingerprint is part of the contract: `bodyKey`, `generatedUtc`, region
+  count and resolutions must all match the loaded manifest. Regenerating
+  `data/<body>` with different values, or opening a save under another body,
+  invalidates it by design. A future migration may remap buildings by H3 index if
+  the bake is compatible; that does not exist yet.
 
 `slot.json` has its own `format`/`version` (`spm-slot` / `1`). Bumping it does not
 touch `campaign.json`: an older runtime ignores the file and a newer runtime
