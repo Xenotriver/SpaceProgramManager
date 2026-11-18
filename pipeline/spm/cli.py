@@ -25,15 +25,15 @@ def _log(message: str) -> None:
     print(f"[pipeline] {message}", flush=True)
 
 
-def _make_sampler(biome: np.ndarray, dlon: float, dlat: float):
-    height, width = biome.shape
+def _make_sampler(values: np.ndarray, dlon: float, dlat: float):
+    height, width = values.shape
 
     def sample(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
         row = np.floor((LOLA_LAT_NORTH - lat) / dlat).astype(np.int64)
         col = np.floor((np.mod(lon, 360.0) - LOLA_LON_WEST) / dlon).astype(np.int64)
         np.clip(row, 0, height - 1, out=row)
         np.clip(col, 0, width - 1, out=col)
-        return biome[row, col]
+        return values[row, col]
 
     return sample
 
@@ -237,9 +237,14 @@ def run(args: argparse.Namespace) -> Path:
     agg = hexify.aggregate_pixels(grid, blocks, resolution=fine_res, jobs=args.jobs)
 
     _log("resolving empty / tied hexes")
-    sampler = _make_sampler(biome, dlon, dlat)
+    biome_sampler = _make_sampler(biome, dlon, dlat)
+    elevation_sampler = _make_sampler(elevation, dlon, dlat)
     agg = hexify.fill_empty_and_ties(
-        grid, agg, sample_fn=sampler, priority=list(range(len(body.biomes)))
+        grid,
+        agg,
+        biome_sample_fn=biome_sampler,
+        elevation_sample_fn=elevation_sampler,
+        priority=list(range(len(body.biomes))),
     )
 
     dominant = agg.dominant.astype(np.int8, copy=True)

@@ -316,6 +316,37 @@ public class WorldLoaderTests
         }
     }
 
+    [Fact]
+    public void RealBake_Mars_EmptyHexesHaveSampledElevation()
+    {
+        var root = TryFindRealDataRoot("mars");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("mars", root);
+
+        var sampled = 0L;
+        var atSeaLevel = 0L;
+        for (var ordinal = 0; ordinal < world.Regions.Count; ordinal += 64)
+        {
+            var tile = world.GetRegionAt(ordinal);
+            for (var i = 0; i < tile.HexCount; i++)
+            {
+                sampled++;
+                if (tile.ElevationM(i) == 0)
+                    atSeaLevel++;
+            }
+        }
+
+        // MOLA has almost no exact-zero pixels; hexes with no sampled pixels
+        // must inherit the DEM value at their centroid instead of defaulting
+        // to 0 m. The old bake left 17.4% of hexes at sea level.
+        Assert.True(sampled > 0);
+        Assert.True(
+            atSeaLevel * 100.0 / sampled < 1.0,
+            $"{atSeaLevel}/{sampled} sampled hexes are at 0 m; empty-hex elevation was not filled.");
+    }
+
     private static string? TryFindRealDataRoot(string bodyKey = "moon")
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

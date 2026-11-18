@@ -214,13 +214,15 @@ def fill_empty_and_ties(
     grid: Grid,
     agg: FineAggregate,
     *,
-    sample_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    biome_sample_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    elevation_sample_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     priority: list[int],
 ) -> FineAggregate:
     """Resolve hexes with no pixels (nearest sample) and exact ties.
 
-    * empty hexes: the raster is sampled at the hex centroid (a
-      distance/nearest-occurrence fill).
+    * empty hexes: both biome and elevation are sampled at the hex centroid
+      (a distance/nearest-occurrence fill). Filling only the biome leaves
+      sparse-DEM gaps at the elevation default of 0 m, which reads as a ridge.
     * tied hexes: neighbour majority, then the fixed priority order.
     """
     dominant = agg.dominant
@@ -238,7 +240,8 @@ def fill_empty_and_ties(
             la, lo = h3.cell_to_latlng(int(grid.hex_ids[pos]))
             lat[k] = la
             lon[k] = lo
-        dominant[empty] = sample_fn(lat, lon).astype(np.int8)
+        dominant[empty] = biome_sample_fn(lat, lon).astype(np.int8)
+        agg.elevation_m[empty] = np.asarray(elevation_sample_fn(lat, lon)).astype(np.float32)
 
     if tied.size:
         priority_rank = {code: rank for rank, code in enumerate(priority)}
