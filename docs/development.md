@@ -107,14 +107,15 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 |---|---|
 | `--body=<moon\|mars>` | Select the baked body (default `moon`). |
 | `--region=<h3>` | Open a region by H3 index. Without it the last active region is restored. |
-| `--view=globe\|region\|management\|site` | Select the active view; `--iso` aliases `management`. |
+| `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
 | `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
 | `--place=<q>,<r>` | Place at a local grid cell. Repeat the flag for more installations; requires `--view=site`. |
-| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals. |
+| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals in the region view. |
+| `--dispatch=<rover-id>,<region>,<hex>` | Send a rover along a planned cross-region route. |
 | `--speed=<km/h>` | Rover base speed (default `8`). |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera. |
 | `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
@@ -122,6 +123,7 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--menu` | Force the main menu even with other arguments (useful with `--shot`). |
 | `--map` | Open the Solar System Map after startup. |
 | `--tech` | Open the tech tree after startup. |
+| `--fleet` | Open the rover fleet/garage screen after startup. |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign. |
 | `--nosave` | Disable persistence for this run. |
@@ -148,7 +150,8 @@ Notes:
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
 - `M` toggles the Solar System Map from any view; `G` enters the colony view only
-  from the region view.
+  from the region view; `A` opens the area view and `R` the fleet screen from any
+  gameplay view. In the area view, click a rover and then a region to dispatch it.
 - `Tab` toggles surface imagery/biome on the globe and cycles overlays in region
   and colony views; `1`–`5` select an overlay directly. With a valid sidecar,
   true colour is the default for every slot unless `--overlay` is passed.
@@ -170,8 +173,9 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-12 smokes: colour and biome for globe/region, colour for colony on both bodies,
-plus both globes, the unchanged Moon site view and the tech tree screen.
+15 smokes: colour and biome for globe/region, colour for colony on both bodies,
+plus both globes, the unchanged Moon site view, the tech tree screen, the area view
+on both bodies and the fleet screen.
 
 ## 5. Data pipeline
 
@@ -264,9 +268,10 @@ not the library version. Bump both together.
 Mars tile fixtures plus imagery sidecars, runs the Python imagery unit tests,
 builds and tests .NET, then downloads the pinned Godot 4.7.2 mono Linux archive
 (SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`).
-The Godot step runs eleven `--frame-budget=20 --frames=30` smokes: colour and
-biome coverage for globe/region, colour for colony on both bodies, plus the
-unchanged Moon site view. Headless `--shot` is deliberately not used because it
+The Godot step runs fifteen `--frame-budget=20 --frames=30` smokes: colour and
+biome coverage for globe/region, colour for colony on both bodies, the unchanged
+Moon site view, the tech screen, the area view on both bodies and the fleet screen.
+Headless `--shot` is deliberately not used because it
 hangs in automation; the frame-gate run is the smoke and exit-code check. No
 `data/` is committed.
 

@@ -139,7 +139,10 @@ are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
   is trimmed to `CampaignDefaults.MaxEventLogEntries` (50) on load and save.
 - Rover `speedKmh` defaults to `CampaignDefaults.DefaultRoverSpeedKmh` (8),
   resolving the old 8 vs 10 km/h drift. Travel timestamps are authoritative
-  game hours, not wall-clock times.
+  game hours, not wall-clock times. M5 C2 purchases append a rover with no cargo
+  at an operational `rover_garage`, and dispatch fills `destination*`,
+  `departureGameHour` and `arrivalGameHour`; `Tick` moves the rover on arrival.
+  The fine-hex route itself is derived from the save fields and is never persisted.
 - IDs in these blocks are stable strings; definition data, rewards and event
   text live in static registries, not in the save.
 

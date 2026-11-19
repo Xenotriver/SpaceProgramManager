@@ -24,6 +24,9 @@ public enum ShellCommand
     Speed4,
     SwitchBody,
     UnlockTech,
+    PurchaseRover,
+    SelectRover,
+    OpenArea,
 }
 
 /// <summary>
@@ -44,6 +47,7 @@ public partial class ShellOverlay : Node2D
         Search,
         SystemMap,
         TechTree,
+        Fleet,
     }
 
     private const float RowHeight = 46f;
@@ -138,6 +142,29 @@ public partial class ShellOverlay : Node2D
     /// <summary>Supplies tech state on every draw; the shell owns no game state.</summary>
     public Func<TechTreeView>? TechViewProvider { get; set; }
 
+    /// <summary>One rover row in the fleet screen.</summary>
+    public sealed record RoverFleetRow(
+        string Id,
+        string Name,
+        string Status,
+        string Detail,
+        string Right,
+        bool Available);
+
+    /// <summary>Live garage and fleet values rendered by the fleet screen.</summary>
+    public sealed record RoverFleetView(
+        ulong RegionIndex,
+        bool GarageReady,
+        int Capacity,
+        int Stationed,
+        IReadOnlyList<RoverFleetRow> Rovers);
+
+    /// <summary>Supplies rover state on every draw; the shell owns no game state.</summary>
+    public Func<RoverFleetView>? FleetViewProvider { get; set; }
+
+    private RoverFleetView CurrentFleetView() => FleetViewProvider?.Invoke()
+        ?? new RoverFleetView(0UL, false, 0, 0, Array.Empty<RoverFleetRow>());
+
     private TechTreeView CurrentTechView() => TechViewProvider?.Invoke()
         ?? new TechTreeView(
             0.0,
@@ -218,6 +245,21 @@ public partial class ShellOverlay : Node2D
 
         _returnScreen = Screen.Closed;
         _screen = Screen.TechTree;
+        _selected = 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the rover fleet and garage screen from gameplay.</summary>
+    public void OpenFleet()
+    {
+        if (_screen == Screen.Fleet)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.Fleet;
         _selected = 0;
         QueueRedraw();
     }
@@ -543,6 +585,10 @@ public partial class ShellOverlay : Node2D
                 Back();
                 return;
 
+            case Key.R when _screen == Screen.Fleet:
+                Back();
+                return;
+
             case Key.Enter or Key.KpEnter or Key.Space:
                 ActivateSelected();
                 return;
@@ -641,6 +687,9 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.Quit:
             case ShellCommand.SwitchBody:
             case ShellCommand.UnlockTech:
+            case ShellCommand.PurchaseRover:
+            case ShellCommand.SelectRover:
+            case ShellCommand.OpenArea:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -681,6 +730,13 @@ public partial class ShellOverlay : Node2D
                 QueueRedraw();
                 break;
 
+            case "screen:fleet":
+                _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
+                _screen = Screen.Fleet;
+                _selected = 0;
+                QueueRedraw();
+                break;
+
             case "screen:main":
                 _screen = Screen.Main;
                 _selected = 0;
@@ -717,6 +773,7 @@ public partial class ShellOverlay : Node2D
                 break;
 
             case Screen.TechTree:
+            case Screen.Fleet:
                 _screen = _returnScreen;
                 break;
 
@@ -824,7 +881,7 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · M system map · T tech tree · G colony · Home active region", null,
+                    "F5 save · Esc pause/back · / search · M system map · T tech · A area · R fleet · G colony · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -838,6 +895,8 @@ public partial class ShellOverlay : Node2D
                     true, ShellCommand.SaveNow, null));
                 specs.Add(new RowSpec("Tech tree", "Spend science points on new technology", "T",
                     true, ShellCommand.None, "screen:tech"));
+                specs.Add(new RowSpec("Rover fleet", "Buy rovers and plan cross-region trips", "R",
+                    true, ShellCommand.None, "screen:fleet"));
                 specs.Add(new RowSpec("Load campaign", "Switch slot and reload the scene", null,
                     true, ShellCommand.None, "screen:slots"));
                 specs.Add(new RowSpec("Settings", null, null, true, ShellCommand.None, "screen:settings"));
@@ -924,6 +983,58 @@ public partial class ShellOverlay : Node2D
                         false,
                         reason));
                 }
+                break;
+
+            case Screen.Fleet:
+                var fleet = CurrentFleetView();
+                var garage = fleet.GarageReady
+                    ? $"garage ready · {fleet.Stationed}/{fleet.Capacity} slots"
+                    : "no operational rover garage here";
+                title = "ROVER FLEET";
+                subtitle = $"Region {fleet.RegionIndex} · {garage} · {fleet.Rovers.Count} rover(s)";
+                hint = "Click a rover, then a region in the area view to dispatch · R/Esc close";
+                specs.Add(new RowSpec("Open area operations",
+                    "Show rover tracks and dispatch targets", "A",
+                    true, ShellCommand.OpenArea, null));
+                specs.Add(new RowSpec(
+                    $"Purchase {RoverCatalogue.Mk1.DisplayName}",
+                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("credits"):N0} cr · " +
+                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("metals"):0.#} metals · " +
+                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("electronics"):0.#} electronics",
+                    fleet.GarageReady && fleet.Stationed < fleet.Capacity ? "garage" : "unavailable",
+                    fleet.GarageReady && fleet.Stationed < fleet.Capacity,
+                    ShellCommand.PurchaseRover,
+                    RoverCatalogue.Mk1Id,
+                    false,
+                    fleet.GarageReady
+                        ? "garage is full"
+                        : "build and finish a Rover Garage in this region first"));
+
+                foreach (var rover in fleet.Rovers.Take(8))
+                {
+                    specs.Add(new RowSpec(
+                        rover.Name,
+                        rover.Detail,
+                        rover.Right,
+                        rover.Available,
+                        ShellCommand.SelectRover,
+                        rover.Id,
+                        false,
+                        $"{rover.Name} is unavailable ({rover.Status})"));
+                }
+
+                if (fleet.Rovers.Count > 8)
+                {
+                    specs.Add(new RowSpec(
+                        $"+ {fleet.Rovers.Count - 8} more rover(s)",
+                        "Fleets above eight need a wider display",
+                        null,
+                        false,
+                        ShellCommand.None,
+                        null));
+                }
+
+                specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));
                 break;
 
             default:

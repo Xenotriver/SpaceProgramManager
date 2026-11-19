@@ -535,7 +535,8 @@ synthetic Moon and Mars fixtures into `SPM_DATA`, sets `SPM_REQUIRE_DATA=1`,
 builds/tests, then downloads the official Godot 4.7.2 mono Linux zip pinned to
 SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`.
 Five headless view runs initially used `--frame-budget=20 --frames=30`; M4.5
-extends the same job to eleven runs covering imagery and biome fallback. `--shot`
+extended the same job to eleven runs covering imagery and biome fallback, and M5
+C1/C2 extended it to fifteen runs with the tech, area and fleet screens. `--shot`
 is excluded.
 
 **Why.** `godotengine/setup-godot` does not exist in GitHub's API, and a pinned
@@ -759,6 +760,36 @@ No schema, fingerprint or tile-format change was needed.
 
 ---
 
+## D39 — AreaView now; rovers come from garages
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** M5 C2 builds the multi-region `AreaView` immediately rather than
+deferring it. It renders the active region plus its present H3 neighbours on one
+tangent plane, with region borders/hover outlines, rover markers and cross-region
+tracks. The engine-free `RegionalRoutePlanner` runs A* over the coarse region graph
+and reuses `RoutePlanner`, `MovementModel` and on-demand region tiles for fine-hex
+legs. Rovers are **not** granted at campaign start: `CampaignState.TryPurchaseRover`
+requires an operational, unpaused `rover_garage` and enforces its `rover_slots`
+capacity; `DispatchRover` sends an available rover along a route and `Tick` applies
+the arrival. The `R` fleet screen and `A` area key expose this loop; `--view=area`,
+`--fleet` and `--dispatch` support automation. Cargo remains persisted and
+displayed, but transfer economy stays out of C2.
+
+**Why.** The user chose both "build AreaView now" and "garage purchase only" at the
+C2 decision point. Cross-region movement needs a view between the globe and a
+single region, and a fleet with no acquisition rule would either appear from
+nothing or wait on a larger economy milestone. Reusing existing v4 `rovers` fields
+and movement APIs keeps the save contract and deterministic core intact.
+
+**Cost.** The area view loads up to seven region tiles and recomputes geometry on
+entry; it deliberately does not cover the whole body. Coarse region A* chooses the
+cheapest border crossing per pair but does not globally optimise every internal
+hex path at once. Fleet rows are capped at eight in the immediate-mode screen.
+No save-schema, fingerprint or tile-format change was needed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -767,5 +798,6 @@ hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
-D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, and
-the M5 C1 tech catalogue and purchase rule by D38.
+D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
+M5 C1 tech catalogue and purchase rule by D38, and the M5 C2 AreaView/garage
+choice by D39.

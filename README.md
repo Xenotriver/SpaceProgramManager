@@ -2,13 +2,14 @@
 
 A space-agency management game built in **Godot 4.7 (.NET / C#)**. Real Solar
 System bodies are baked offline into an **H3** hexagonal grid; the runtime renders
-a globe, a per-region hex map, a region-scale isometric colony view, and a close-up
-per-hex **site view** where installations are placed on a local grid. Campaign
-state is engine-free and saved as JSON. Moon and Mars are playable.
+a globe, a per-region hex map, a multi-region **area view** for rover logistics,
+a region-scale isometric colony view, and a close-up per-hex **site view** where
+installations are placed on a local grid. Campaign state is engine-free and saved
+as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4 and C1 tech tree, **160 C# tests + 5 pipeline tests passing**.
+Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree and C2 rover logistics, **167 C# tests + 5 pipeline tests passing**.
 
 | Area | State |
 |---|---|
@@ -19,11 +20,12 @@ Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
+| Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
 | Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 12 headless Godot smokes, 20 ms p95 frame budget |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 15 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -84,6 +86,9 @@ mouse for the same actions.
 | Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
 | `M` | Open/close the schematic Solar System Map (Moon and Mars are ready) |
+| `T` | Open/close the tech tree |
+| `A` | Open the area view |
+| `R` | Open the rover fleet / garage screen |
 
 **Globe**
 
@@ -112,6 +117,17 @@ mouse for the same actions.
 | `G` | Enter the colony view |
 | `M` | Open the Solar System Map |
 | Esc | Back to the globe |
+
+**Area view (rover logistics)**
+
+| Input | Action |
+|---|---|
+| Wheel / right drag | Zoom / pan |
+| Hover | Outline a region and describe the rover or region under the cursor |
+| Left click a rover | Select it as the source of the next dispatch |
+| Left click a region | Open that region, or dispatch the selected rover to its centre |
+| `R` | Open the fleet screen to buy rovers or choose a rover |
+| Esc | Clear the selected rover, then back to the globe |
 
 **Colony view (isometric)**
 
@@ -142,6 +158,13 @@ Region and colony views are **inspectors**: they draw one aggregate marker per
 occupied fine hex with a count and the most urgent status. All placement and
 removal happens in the site view through `CampaignState`.
 
+Rovers are not granted at campaign start. Build and finish a **Rover Garage**,
+then buy Rover Mk I units from the `R` fleet screen. Select an available rover and
+click a region in the area view to dispatch it; travel completes on the simulation
+clock. The cross-region route is derived from H3 neighbours and movement costs and
+is never stored in the save. Cargo is persisted and shown in the fleet screen;
+transfer rules belong to a later content step.
+
 A session starts at 1×. `Space` pauses/resumes the clock in every view; the pause
 menu also has direct Pause / 1× / 2× / 4× buttons. At 1× one real second is one
 game hour; steps are 0.25 h. The bottom-left HUD shows the day/hour, speed and credits, plus power
@@ -167,14 +190,15 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 |---|---|
 | `--body=<moon\|mars>` | Select the baked body to load (default `moon`) |
 | `--region=<h3>` | Open a region by H3 index (restores the last active region when omitted) |
-| `--view=globe\|region\|management\|site` | Select the active view; `--iso` aliases `management` |
+| `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
 | `--overlay=biome\|terrain\|score\|buildings\|color` | Select the overlay; `color`, `colour`, `imagery` and `surface` are aliases, and globe accepts `color`/`biome` |
 | `--rot=<degrees>` | Colony camera angle, quantised to the nearest 60° |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`) |
 | `--active=<defId>` | Select the building definition to place; site view only |
 | `--place=<q>,<r>` | Place the active building at a local grid cell; repeat the flag for more installations; requires `--view=site` |
-| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals |
+| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals in the region view |
+| `--dispatch=<rover-id>,<region>,<hex>` | Dispatch a rover along a planned cross-region route |
 | `--speed=<km/h>` | Rover base speed (default `8`) |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera |
 | `--slot=<id>` | Open a slot under the save root directly |
@@ -182,6 +206,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--menu` | Force the main menu (pair with `--shot` to capture it) |
 | `--map` | Open the Solar System Map after startup |
 | `--tech` | Open the tech tree after startup |
+| `--fleet` | Open the rover fleet/garage screen after startup |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |

@@ -38,6 +38,8 @@ public partial class Main : Node2D
         "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-5 overlay · Tab cycle · [ ] relief · Enter site · M map · T tech · Esc back";
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
+    private const string AreaStatus =
+        "Wheel zoom · right-drag pan · click rover then region to dispatch · A fleet · M map · T tech · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -49,6 +51,7 @@ public partial class Main : Node2D
         Region,
         Management,
         Site,
+        Area,
     }
 
     private BodyWorld _world = null!;
@@ -60,6 +63,7 @@ public partial class Main : Node2D
     private CampaignService _campaignService = null!;
     private MoonGlobe _globe = null!;
     private RegionView _regionView = null!;
+    private AreaView _areaView = null!;
     private ManagementView _managementView = null!;
     private SiteView _siteView = null!;
     private ShellOverlay _shell = null!;
@@ -164,6 +168,12 @@ public partial class Main : Node2D
         _regionView.ViewModeChanged += OnViewModeChanged;
         _regionView.BaseSpeedKmh = FloatArgument("--speed", (float)CampaignDefaults.DefaultRoverSpeedKmh);
 
+        _areaView = new AreaView { Visible = false };
+        _worldLayer.AddChild(_areaView);
+        _areaView.RegionOpened += OnAreaRegionOpened;
+        _areaView.DispatchRequested += OnAreaDispatchRequested;
+        _areaView.AreaHovered += OnAreaHovered;
+
         _registry = BuildingCatalogue.RegistryFor(_world.BodyKey);
         _buildingNames = _registry.All.ToDictionary(
             pair => pair.Key,
@@ -195,6 +205,7 @@ public partial class Main : Node2D
         AddChild(_shell);
         _shell.Command += OnShellCommand;
         _shell.TechViewProvider = CurrentTechView;
+        _shell.FleetViewProvider = CurrentFleetView;
 
         GD.Print($"{KnownBodies.DisplayName(_world.BodyKey)} loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
@@ -267,6 +278,9 @@ public partial class Main : Node2D
         if (HasArgument("--tech"))
             _shell.OpenTechTree();
 
+        if (HasArgument("--fleet"))
+            _shell.OpenFleet();
+
         var shotPath = FindShotPath();
         if (shotPath is not null)
             CaptureAndQuit(shotPath);
@@ -327,6 +341,7 @@ public partial class Main : Node2D
         _started = true;
         _worldLayer.Visible = true;
         _shell.Close();
+        _areaView.Refresh();
 
         if (string.IsNullOrWhiteSpace(saveOverride))
         {
@@ -339,6 +354,9 @@ public partial class Main : Node2D
         var region = skipCliView ? 0UL : UlongArgument("--region");
         if (region == 0 && _campaign.Meta.ActiveRegionIndex is { } restored)
             region = restored;
+
+        var areaRegion = region != 0 ? region : _world.Regions[0].Index;
+        _areaView.Load(_world, _campaign, areaRegion);
 
         if (region != 0)
             ShowRegion(region);
@@ -355,6 +373,11 @@ public partial class Main : Node2D
                  && _campaign.Meta.ActiveRegionIndex is { } activeRegion)
         {
             ShowRegion(activeRegion);
+        }
+        else if (string.Equals(view.Mode, "area", StringComparison.OrdinalIgnoreCase)
+                 && _areaView.IsLoaded)
+        {
+            ShowArea(_areaView.CenterRegion);
         }
         else if (string.Equals(view.Mode, "site", StringComparison.OrdinalIgnoreCase)
                  && view.SelectedHexOrdinal is { } restoredHex)
@@ -398,6 +421,7 @@ public partial class Main : Node2D
         _worldLayer.Visible = false;
         _globe.Visible = true;
         _regionView.Visible = false;
+        _areaView.Visible = false;
         _managementView.Visible = false;
         _siteView.Visible = false;
 
@@ -412,6 +436,64 @@ public partial class Main : Node2D
                 0.0, new HashSet<string>(StringComparer.Ordinal), _buildingNames)
             : new ShellOverlay.TechTreeView(
                 _campaign.Meta.SciencePoints, _campaign.Meta.UnlockedTechs, _buildingNames);
+
+    private ShellOverlay.RoverFleetView CurrentFleetView()
+    {
+        if (!_started || _campaign is null)
+            return new ShellOverlay.RoverFleetView(
+                0UL, false, 0, 0, Array.Empty<ShellOverlay.RoverFleetRow>());
+
+        var regionIndex = _areaView.IsLoaded
+            ? _areaView.CenterRegion
+            : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index;
+
+        var ready = false;
+        var capacity = 0;
+        foreach (var building in _campaign.Buildings(regionIndex))
+        {
+            if (building.DefId != RoverCatalogue.GarageDefId
+                || building.Paused
+                || building.Status is not (BuildingStatus.Operational or BuildingStatus.Idle)
+                || !_registry.TryGet(building.DefId, out var def)
+                || def is null)
+                continue;
+
+            ready = true;
+            capacity += (int)def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0);
+        }
+
+        var stationed = _campaign.Rovers.Count(rover => rover.LocationRegion == regionIndex);
+        var rows = _campaign.Rovers
+            .OrderBy(rover => rover.Name, StringComparer.Ordinal)
+            .Select(rover =>
+            {
+                var location = rover.LocationRegion is { } currentRegion
+                               && rover.LocationHex is { } currentHex
+                    ? $"region {currentRegion} · hex {currentHex}"
+                    : "location unknown";
+                var cargo = rover.Cargo.Count == 0
+                    ? "empty hold"
+                    : string.Join(", ", rover.Cargo.Select(pair => $"{pair.Key} {pair.Value:0.#}"));
+                var available = rover.Status is RoverStatus.Idle or RoverStatus.Docked
+                                && rover.Health > 0.0;
+                var right = rover.Status == RoverStatus.Enroute
+                            && rover.ArrivalGameHour is { } arrival
+                    ? $"ETA {arrival:0.#} h"
+                    : rover.Status.ToString();
+
+                return new ShellOverlay.RoverFleetRow(
+                    rover.Id,
+                    rover.Name,
+                    rover.Status.ToString(),
+                    $"{location} · {rover.SpeedKmh:0.#} km/h · {rover.Health:0.#}% · {cargo}",
+                    right,
+                    available);
+            })
+            .ToArray();
+
+        return new ShellOverlay.RoverFleetView(
+            regionIndex, ready, capacity, stationed, rows);
+    }
 
     private void OnShellCommand(ShellCommand command, string? payload)
     {
@@ -499,6 +581,29 @@ public partial class Main : Node2D
                 }
 
                 _shell.PushToast(purchase.Message, error: !purchase.Success);
+                return;
+
+            case ShellCommand.PurchaseRover:
+                _shell.Close();
+                PurchaseRover();
+                return;
+
+            case ShellCommand.SelectRover:
+                if (payload is null)
+                    return;
+
+                _shell.Close();
+                ShowArea(_areaView.IsLoaded
+                    ? _areaView.CenterRegion
+                    : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index);
+                _areaView.SelectRover(payload);
+                return;
+
+            case ShellCommand.OpenArea:
+                _shell.Close();
+                ShowArea(_areaView.IsLoaded
+                    ? _areaView.CenterRegion
+                    : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index);
                 return;
 
             case ShellCommand.OpenSaveFolder:
@@ -613,6 +718,11 @@ public partial class Main : Node2D
             if (_regionView.IsLoaded)
                 ShowRegion(_regionView.RegionIndex);
         }
+        else if (string.Equals(view, "area", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_areaView.IsLoaded)
+                ShowArea(_areaView.CenterRegion);
+        }
         else if (HasArgument("--iso")
                  || string.Equals(view, "management", StringComparison.OrdinalIgnoreCase))
         {
@@ -630,6 +740,23 @@ public partial class Main : Node2D
                 && int.TryParse(parts[1], out var to))
             {
                 _regionView.ShowRoute(from, to);
+            }
+        }
+
+        // Automation hook for logistics: --dispatch=<rover-id>,<region>,<hex>.
+        var dispatch = ArgumentValue("--dispatch");
+        if (dispatch is not null)
+        {
+            var parts = dispatch.Split(',');
+            if (parts.Length == 3
+                && ulong.TryParse(parts[1], out var regionIndex)
+                && ulong.TryParse(parts[2], out var hex))
+            {
+                DispatchRover(parts[0], regionIndex, hex);
+            }
+            else
+            {
+                GD.PushWarning($"Invalid --dispatch='{dispatch}' (expected rover-id,region,hex)");
             }
         }
 
@@ -688,10 +815,12 @@ public partial class Main : Node2D
             _clock.Reset(_campaign.Meta.GameTimeHours);
             _campaignService.SaveSimulation();
             _regionView.QueueRedraw();
+            _areaView.Refresh();
             _managementView.QueueRedraw();
             _siteView.QueueRedraw();
             GD.Print($"time: advanced {report.Hours:F2} h · {report.Steps} step(s) · " +
-                     $"{report.Completed} completed · {report.Idled} idled");
+                     $"{report.Completed} completed · {report.Idled} idled · " +
+                     $"{report.Arrived} rover(s) arrived");
             QueueRedraw();
         }
     }
@@ -734,6 +863,7 @@ public partial class Main : Node2D
             Mode.Management => "management",
             Mode.Region => "region",
             Mode.Site => "site",
+            Mode.Area => "area",
             _ => "globe",
         },
         SelectedHexOrdinal = _mode == Mode.Site ? _siteParentOrdinal : null,
@@ -834,6 +964,8 @@ public partial class Main : Node2D
 
                 if (_mode == Mode.Region)
                     _regionView.QueueRedraw();
+                else if (_mode == Mode.Area)
+                    _areaView.Refresh();
                 else if (_mode == Mode.Management)
                     _managementView.QueueRedraw();
                 else if (_mode == Mode.Site)
@@ -890,6 +1022,9 @@ public partial class Main : Node2D
                 break;
             case Mode.Site:
                 _siteView.QueueRedraw();
+                break;
+            case Mode.Area:
+                _areaView.Refresh();
                 break;
             default:
                 _globe.QueueRedraw();
@@ -1018,6 +1153,16 @@ public partial class Main : Node2D
                 ShowManagement();
                 break;
 
+            case Key.A when !_shell.IsOpen:
+                ShowArea(_areaView.IsLoaded
+                    ? _areaView.CenterRegion
+                    : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index);
+                break;
+
+            case Key.R when !_shell.IsOpen:
+                _shell.OpenFleet();
+                break;
+
             case Key.Comma when _mode == Mode.Site:
                 _siteView.CycleActiveBuilding(-1);
                 break;
@@ -1050,6 +1195,10 @@ public partial class Main : Node2D
                 ShowGlobe();
                 break;
 
+            case Key.Escape when _mode == Mode.Area:
+                ShowGlobe();
+                break;
+
             case Key.Escape:
                 _shell.OpenPause();
                 break;
@@ -1070,6 +1219,7 @@ public partial class Main : Node2D
         _regionView.Load(_world, regionIndex);
         _regionView.SetViewMode(_activeOverlay);
         _regionView.Visible = true;
+        _areaView.Visible = false;
         _managementView.Visible = false;
         _siteView.Visible = false;
         _globe.Visible = false;
@@ -1077,6 +1227,27 @@ public partial class Main : Node2D
         _status = RegionStatus;
         _selectedHex = -1;
         _selectedBiome = string.Empty;
+        _campaignService.SetActiveRegion(regionIndex);
+        RefreshMarkers();
+        QueueRedraw();
+    }
+
+    private void ShowArea(ulong regionIndex)
+    {
+        if (!_world.TryGetRegionEntry(regionIndex, out _))
+        {
+            GD.PushWarning($"Region {regionIndex} is not in the {KnownBodies.DisplayName(_world.BodyKey)} bake.");
+            return;
+        }
+
+        _areaView.Load(_world, _campaign, regionIndex);
+        _areaView.Visible = true;
+        _regionView.Visible = false;
+        _managementView.Visible = false;
+        _siteView.Visible = false;
+        _globe.Visible = false;
+        _mode = Mode.Area;
+        _status = AreaStatus;
         _campaignService.SetActiveRegion(regionIndex);
         RefreshMarkers();
         QueueRedraw();
@@ -1092,6 +1263,7 @@ public partial class Main : Node2D
         _managementView.SetOverlay(_activeOverlay);
         _managementView.Visible = true;
         _regionView.Visible = false;
+        _areaView.Visible = false;
         _siteView.Visible = false;
         _globe.Visible = false;
         _status = ManagementStatus;
@@ -1124,6 +1296,7 @@ public partial class Main : Node2D
         _siteView.Load(_world, tile, hexOrdinal, _campaign, _registry);
         _siteView.Visible = true;
         _regionView.Visible = false;
+        _areaView.Visible = false;
         _managementView.Visible = false;
         _globe.Visible = false;
         _mode = Mode.Site;
@@ -1136,6 +1309,7 @@ public partial class Main : Node2D
     private void ShowGlobe()
     {
         _regionView.Visible = false;
+        _areaView.Visible = false;
         _managementView.Visible = false;
         _siteView.Visible = false;
         _globe.Visible = true;
@@ -1175,6 +1349,64 @@ public partial class Main : Node2D
     private void OnRegionSelected(ulong regionIndex, string biomeId, int hexCount)
     {
         ShowRegion(regionIndex);
+    }
+
+    private void OnAreaRegionOpened(ulong regionIndex)
+    {
+        ShowRegion(regionIndex);
+    }
+
+    private void OnAreaHovered(string detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            _status = AreaStatus;
+            QueueRedraw();
+            return;
+        }
+
+        _status = detail;
+        QueueRedraw();
+    }
+
+    private void OnAreaDispatchRequested(string roverId, ulong regionIndex, ulong hex)
+    {
+        DispatchRover(roverId, regionIndex, hex);
+    }
+
+    private void DispatchRover(string roverId, ulong regionIndex, ulong hex)
+    {
+        if (!_started || _campaign is null)
+            return;
+
+        var result = _campaign.DispatchRover(roverId, regionIndex, hex);
+        if (result.Success)
+        {
+            _campaignService.SetViewState(CaptureView());
+            _campaignService.SaveSimulation();
+            _areaView.Refresh();
+        }
+
+        _shell.PushToast(result.Message, error: !result.Success);
+    }
+
+    private void PurchaseRover()
+    {
+        if (!_started || _campaign is null)
+            return;
+
+        var regionIndex = _areaView.IsLoaded
+            ? _areaView.CenterRegion
+            : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index;
+        var result = _campaign.TryPurchaseRover(regionIndex, out _);
+        if (result.Success)
+        {
+            _campaignService.SetViewState(CaptureView());
+            _campaignService.SaveSimulation();
+            _areaView.Refresh();
+        }
+
+        _shell.PushToast(result.Message, error: !result.Success);
     }
 
     private void OnHexHovered(int ordinal, string biomeId, int elevationM, int craterKind)

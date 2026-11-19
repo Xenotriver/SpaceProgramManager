@@ -1,5 +1,6 @@
 using H3;
 using Sim.Buildings;
+using Sim.Movement;
 using Sim.Site;
 using Sim.Time;
 using Sim.World;
@@ -21,6 +22,8 @@ public sealed class CampaignState
     private readonly SiteScorerConfig _siteConfig;
     private readonly Dictionary<ulong, RegionState> _regions = new();
     private readonly HashSet<ulong> _loaded = new();
+    private readonly Dictionary<string, RegionalRoutePlan> _roverRoutes =
+        new(StringComparer.Ordinal);
 
     public CampaignState(BodyWorld world, BuildingRegistry registry, SiteScorerConfig? siteConfig = null)
     {
@@ -107,6 +110,131 @@ public sealed class CampaignState
         UnlockTech(techId);
         return new TechPurchaseResult(
             TechPurchaseStatus.Purchased, $"{def.DisplayName} researched");
+    }
+
+    /// <summary>Campaign-wide rover fleet; the save owns every field.</summary>
+    public IReadOnlyList<RoverState> Rovers => Meta.Rovers;
+
+    /// <summary>
+    /// Buys a rover at an operational garage in <paramref name="regionIndex"/>.
+    /// New rovers are docked at the garage hex and have no cargo.
+    /// </summary>
+    public RoverActionResult TryPurchaseRover(
+        ulong regionIndex,
+        out RoverState? rover,
+        double? speedKmh = null)
+    {
+        rover = null;
+
+        if (!_regions.TryGetValue(regionIndex, out var region))
+            return new RoverActionResult(RoverActionStatus.NoGarage, "no garage in this region");
+
+        var garages = region.Buildings
+            .Where(building => building.DefId == RoverCatalogue.GarageDefId
+                               && !building.Paused
+                               && building.Status is BuildingStatus.Operational or BuildingStatus.Idle)
+            .ToList();
+
+        if (garages.Count == 0)
+            return new RoverActionResult(RoverActionStatus.NoGarage, "no operational rover garage here");
+
+        var capacity = 0;
+        foreach (var garage in garages)
+        {
+            if (_registry.TryGet(garage.DefId, out var def) && def is not null)
+                capacity += (int)def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0);
+        }
+
+        var stationed = Meta.Rovers.Count(item => item.LocationRegion == regionIndex);
+        if (stationed >= capacity)
+            return new RoverActionResult(RoverActionStatus.NoCapacity, "garage is full");
+
+        var model = RoverCatalogue.Mk1;
+        if (!TryPay(model.Cost, out var error))
+            return new RoverActionResult(RoverActionStatus.CannotAfford, error);
+
+        var speed = speedKmh ?? model.SpeedKmh;
+        if (speed <= 0.0)
+            speed = model.SpeedKmh;
+
+        rover = new RoverState
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Name = $"Rover {Meta.Rovers.Count + 1}",
+            DefId = model.Id,
+            Status = RoverStatus.Docked,
+            Health = model.Health,
+            SpeedKmh = speed,
+            LocationRegion = regionIndex,
+            LocationHex = (ulong)garages[0].ParentHex,
+        };
+
+        Meta.Rovers.Add(rover);
+        Meta.UpdatedUtc = DateTimeOffset.UtcNow;
+        return new RoverActionResult(RoverActionStatus.Purchased, $"{rover.Name} ready at garage");
+    }
+
+    /// <summary>
+    /// Sends an available rover from its current hex to a fine hex in
+    /// <paramref name="toRegion"/>. Travel finishes during <see cref="Tick"/>.
+    /// </summary>
+    public RoverActionResult DispatchRover(string roverId, ulong toRegion, ulong toHex)
+    {
+        var rover = Meta.Rovers.FirstOrDefault(item => item.Id == roverId);
+        if (rover is null)
+            return new RoverActionResult(RoverActionStatus.UnknownRover, "unknown rover");
+
+        if (rover.Status is not (RoverStatus.Idle or RoverStatus.Docked) || rover.Health <= 0.0)
+            return new RoverActionResult(RoverActionStatus.NotAvailable, $"{rover.Name} is not available");
+
+        if (rover.LocationRegion is not { } fromRegion || rover.LocationHex is not { } fromHex)
+            return new RoverActionResult(RoverActionStatus.WrongLocation, $"{rover.Name} has no location");
+
+        var plan = RegionalRoutePlanner.Plan(
+            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh);
+        if (plan is null)
+            return new RoverActionResult(RoverActionStatus.Unreachable, "destination is unreachable");
+
+        rover.Status = RoverStatus.Enroute;
+        rover.DepartureGameHour = Meta.GameTimeHours;
+        rover.ArrivalGameHour = Meta.GameTimeHours + plan.TotalHours;
+        rover.DestinationRegion = toRegion;
+        rover.DestinationHex = toHex;
+        _roverRoutes[rover.Id] = plan;
+        Meta.UpdatedUtc = DateTimeOffset.UtcNow;
+
+        return new RoverActionResult(
+            RoverActionStatus.Dispatched,
+            $"{rover.Name} en route · {plan.TotalDistanceKm:0.#} km · {plan.TotalHours:0.#} h");
+    }
+
+    /// <summary>
+    /// Cached or rebuilt route for an en-route rover. Used by the area view to
+    /// draw its track; it is derived from save fields and never persisted.
+    /// </summary>
+    public RegionalRoutePlan? RouteForRover(string roverId)
+    {
+        var rover = Meta.Rovers.FirstOrDefault(item => item.Id == roverId);
+        if (rover?.Status != RoverStatus.Enroute
+            || rover.LocationRegion is not { } fromRegion
+            || rover.LocationHex is not { } fromHex
+            || rover.DestinationRegion is not { } toRegion
+            || rover.DestinationHex is not { } toHex)
+            return null;
+
+        if (_roverRoutes.TryGetValue(roverId, out var cached)
+            && cached.StartRegion == fromRegion
+            && cached.StartHex == fromHex
+            && cached.GoalRegion == toRegion
+            && cached.GoalHex == toHex)
+            return cached;
+
+        var rebuilt = RegionalRoutePlanner.Plan(
+            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh);
+        if (rebuilt is not null)
+            _roverRoutes[roverId] = rebuilt;
+
+        return rebuilt;
     }
 
     /// <summary>Scoring configuration used for placement validation.</summary>
@@ -447,6 +575,7 @@ public sealed class CampaignState
         var remaining = hours;
         var completed = 0;
         var idled = 0;
+        var arrived = 0;
         var steps = 0;
 
         while (remaining > 1e-9)
@@ -455,6 +584,7 @@ public sealed class CampaignState
             var report = Step(step);
             completed += report.Completed;
             idled += report.Idled;
+            arrived += report.Arrived;
             steps += report.Steps;
             remaining -= step;
         }
@@ -462,7 +592,7 @@ public sealed class CampaignState
         if (steps > 0)
             Meta.UpdatedUtc = DateTimeOffset.UtcNow;
 
-        return new TickReport(hours, steps, completed, idled);
+        return new TickReport(hours, steps, completed, idled, arrived);
     }
 
     /// <summary>Pauses or resumes one installation's construction or operation.</summary>
@@ -545,6 +675,7 @@ public sealed class CampaignState
 
         var completed = 0;
         var idled = 0;
+        var arrived = 0;
         var steps = 1;
 
         // Sorted region order makes shared-stockpile updates reproducible.
@@ -554,7 +685,35 @@ public sealed class CampaignState
                 SimulateRegion(region, hours, ref completed, ref idled);
         }
 
-        return new TickReport(hours, steps, completed, idled);
+        arrived += CompleteRoverArrivals();
+
+        return new TickReport(hours, steps, completed, idled, arrived);
+    }
+
+    private int CompleteRoverArrivals()
+    {
+        var arrived = 0;
+        var now = Meta.GameTimeHours;
+
+        foreach (var rover in Meta.Rovers
+                     .Where(item => item.Status == RoverStatus.Enroute
+                                    && item.ArrivalGameHour is not null
+                                    && item.ArrivalGameHour <= now)
+                     .OrderBy(item => item.Id, StringComparer.Ordinal)
+                     .ToList())
+        {
+            rover.LocationRegion = rover.DestinationRegion;
+            rover.LocationHex = rover.DestinationHex;
+            rover.DestinationRegion = null;
+            rover.DestinationHex = null;
+            rover.DepartureGameHour = null;
+            rover.ArrivalGameHour = null;
+            rover.Status = RoverStatus.Docked;
+            _roverRoutes.Remove(rover.Id);
+            arrived++;
+        }
+
+        return arrived;
     }
 
     private void SimulateRegion(RegionState region, double hours, ref int completed, ref int idled)
@@ -779,10 +938,10 @@ public sealed class CampaignState
     }
 }
 
-/// <summary>Outcome of advancing the clock: how many buildings finished or stalled.</summary>
-public readonly record struct TickReport(double Hours, int Steps, int Completed, int Idled)
+/// <summary>Outcome of advancing the clock: buildings finished/stalled and rovers arrived.</summary>
+public readonly record struct TickReport(double Hours, int Steps, int Completed, int Idled, int Arrived = 0)
 {
-    public static TickReport None => new(0.0, 0, 0, 0);
+    public static TickReport None => new(0.0, 0, 0, 0, 0);
 
     /// <summary>True when time actually advanced.</summary>
     public bool Changed => Steps > 0;

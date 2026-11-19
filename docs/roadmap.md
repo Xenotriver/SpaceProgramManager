@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4 and C1 tech tree, **160 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree and C2 rover logistics, **167 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -20,9 +20,10 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
+| Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 12 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 15 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -30,6 +31,7 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
 an H3 index, open a region, inspect hexes across five overlays, plan a rover route,
+buy rovers from a finished garage, watch them cross regions in the area view,
 press `Enter` to open a fine hex as a site, place several installations on its
 37-cell local grid, and have all of it persist across launches against a
 fingerprinted bake. The player can start on Moon or Mars directly with `--body`
@@ -315,7 +317,15 @@ between regions, rover fleet state, failure/repair.
   `T` screen (also in the pause menu and `--tech`) shows live state and saves on
   success. No save schema change; D38 records the design. Clean build, 160/160
   C# tests, no push.
-- [ ] **C2 — rover logistics + fleet state** (AreaView decision point).
+- [x] **C2 — rover logistics + fleet state (complete 2026-11-19).** Resolved the
+  open AreaView choice by building it now and rejected starting rovers: rovers
+  come only from a finished `rover_garage`. `RegionalRoutePlanner` does coarse H3
+  region A* plus local cheapest-time legs, reusing `MovementModel` and
+  `RoutePlanner`. `CampaignState` buys, dispatches and completes rover travel;
+  `AreaView` draws neighbours, borders, tracks and markers, and the `R` fleet
+  screen buys/dispatches with live garage status. Cargo stays persisted/displayed
+  only. No save-schema, fingerprint or tile-format change; D39 records the design.
+  Clean build, 167/167 C# tests, no push.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**
@@ -357,4 +367,4 @@ Not tied to a milestone; pull in when they start hurting.
 | 10 | Site-view build-grid dimensions | **Decided in M3:** radius-3 axial disk, 37 local cells |
 | 11 | 3D building layer: migrate the colony view to 3D vs. hybrid 2D terrain + 3D buildings (plan §2.7) | **Open** — deferred until 3D assets are integrated; M3 kept procedural prisms |
 | 12 | Art source/licence policy for committed models (plan §2.7) | CC0 preferred; decide before the first asset |
-| 13 | Terrain presentation: raised hex vs heightmap vs faceted hex terrain vs multi-region | **Decided 2026-11-19:** chamfer + slope shading was rejected by playtest; corner-averaged faceted hex surface shipped. No heightmap. AreaView stays deferred unless rover logistics needs cross-region display |
+| 13 | Terrain presentation: raised hex vs heightmap vs faceted hex terrain vs multi-region | **Decided 2026-11-19:** chamfer + slope shading was rejected by playtest; corner-averaged faceted hex surface shipped. No heightmap. The multi-region AreaView is **done (M5 C2)** for rover logistics; terrain itself stays 2D facets |

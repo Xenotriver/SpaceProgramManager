@@ -110,3 +110,8 @@ jobs:
 
           # M5 C1 tech screen.
           run_smoke moon moon-tech --tech
+
+          # M5 C2 area view and rover fleet screens.
+          run_smoke moon moon-area --view=area
+          run_smoke mars mars-area --view=area
+          run_smoke moon moon-fleet --view=area --fleet

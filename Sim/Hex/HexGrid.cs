@@ -49,4 +49,27 @@ public static class HexGrid
     /// <summary>Grid distance in cells, or -1 when it cannot be determined.</summary>
     public static int GridDistance(H3Index a, H3Index b)
         => a.GridDistance(b);
+
+    /// <summary>
+    /// Great-circle centre-to-centre distance in kilometres. Used by movement and
+    /// routing so Sim never needs an engine-side projection.
+    /// </summary>
+    public static double DistanceKm(H3Index a, H3Index b, double bodyRadiusKm)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bodyRadiusKm);
+
+        var first = Unit(a.ToLatLng());
+        var second = Unit(b.ToLatLng());
+        var dot = first.X * second.X + first.Y * second.Y + first.Z * second.Z;
+        return Math.Acos(Math.Clamp(dot, -1.0, 1.0)) * bodyRadiusKm;
+    }
+
+    private static (double X, double Y, double Z) Unit(H3.Model.LatLng latLng)
+    {
+        var cosLat = Math.Cos(latLng.Latitude);
+        return (
+            cosLat * Math.Cos(latLng.Longitude),
+            Math.Sin(latLng.Latitude),
+            cosLat * Math.Sin(latLng.Longitude));
+    }
 }

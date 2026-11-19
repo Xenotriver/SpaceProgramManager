@@ -12,8 +12,10 @@ see [`save-format.md`](save-format.md).
 2. **The pipeline bakes, the runtime loads.** Heavy geometry, biome classification
    and crater detection happen offline in Python. The runtime reads compact tiles.
 3. **Campaign state has one owner.** `CampaignState` is the single source of truth
-   for installations. `SiteView` is the only view that routes placement/removal
-   mutations into it; `RegionView` and `ManagementView` are read-only inspectors.
+   for installations and the rover fleet. `SiteView` is the only view that routes
+   placement/removal mutations into it; `RegionView`, `ManagementView` and
+   `AreaView` are read-only inspectors. Rover purchases and dispatch also go
+   through `CampaignState`, which saves via `CampaignService`.
 4. **Saves are guarded.** A campaign is tied to the exact body and bake it was
    created against (`bodyKey` plus fingerprint), written atomically, and never
    silently overwritten when unreadable or cross-body.
@@ -23,8 +25,8 @@ see [`save-format.md`](save-format.md).
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Game (Godot 4.7.2, net8.0)                                   │
-│  Main · MoonGlobe · RegionView · ManagementView · SiteView     │
-│  ShellOverlay · CampaignService · GameSettings                 │
+│  Main · MoonGlobe · RegionView · AreaView · ManagementView     │
+│  SiteView · ShellOverlay · CampaignService · GameSettings      │
 └───────────────────────────────┬──────────────────────────────┘
                                 │ ProjectReference
 ┌───────────────────────────────▼──────────────────────────────┐
@@ -50,11 +52,11 @@ Projects: `SpaceProgramManager.slnx` → `Sim`, `Sim.Tests`, `Game`.
 |---|---|
 | `Sim/Hex` | `HexGrid`: H3 index ↔ lat/long, neighbours, parent/children, distance |
 | `Sim/Biomes` | `Biome`, `DominantBiomeResolver` (area share → neighbour majority → distance → priority) |
-| `Sim/Movement` | `MovementModel` (uphill ×0.8, downhill ×1.15, crater penalty, no stacking), `RoutePlanner` (cheapest-time path) |
+| `Sim/Movement` | `MovementModel` (uphill ×0.8, downhill ×1.15, crater penalty, no stacking), `RoutePlanner` (cheapest intra-region path), `RegionalRoutePlanner` (coarse H3 region A* plus local legs) |
 | `Sim/World` | `BodyManifest`, `BodyWorld`, `KnownBodies`, `RegionTile`, `HexRecord`, `TileFormat`, `BiomeRegistry` |
 | `Sim/Site` | `LocalGrid` (37-cell axial disk), `SiteScore`, `SiteFactors`, `SiteScorerConfig`, `RegionTileScoring` (sunlight, comms, terrain, resources, crater clearance) |
 | `Sim/Buildings` | `BuildingDef` (17 body-independent IDs), `BuildingCatalogue`, `BuildingRegistry`, `BuildingInstance` (`ParentHex` + `LocalCenter`), `BuildingStatus`, per-body biome restrictions and local placement validation |
-| `Sim/Campaign` | `CampaignState`, `RegionState`, `SiteState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint` |
+| `Sim/Campaign` | `CampaignState`, `RegionState`, `SiteState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint`, `RoverCatalogue`, rover purchase/dispatch APIs |
 
 ### World loading
 
@@ -77,15 +79,16 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 
 | Class | Role |
 |---|---|
-| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Region` / `Management` / `Site`), HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
+| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Region` / `Area` / `Management` / `Site`), HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
 | `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
 | `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), hover/select, rover route, aggregate site markers (read-only) |
+| `AreaView` | Active region plus present H3 neighbours on one tangent plane; region hover/outlines, rover markers and cross-region track rendering; click-to-dispatch (read-only) |
 | `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief, overlays, pan/zoom/pick, 60° orbit, aggregate site markers (read-only) |
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
 | `GameSettings` | `user://settings.json`: save root, last slot, relief default, FPS flag. Never inside a slot |
-| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
+| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search, tech tree, rover fleet/garage and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
 | `IsoProjection` | Pure helpers for the isometric projection, inverse projection, painter depth and plane rotation |
 
 ### Startup and slot flow
@@ -104,6 +107,7 @@ StartCampaign(slotId)
   → CampaignService.Load()              # campaign.json through bodyKey + fingerprint gate
   → slot.json view snapshot            # restore mode, region, camera, selected site hex
   → RegionView / ManagementView load the region on demand
+  → AreaView loads the active region plus present neighbours
   → SiteView loads the selected fine hex when mode is "site"
 ```
 
@@ -129,9 +133,9 @@ mouse/keyboard
    → <slot>/regions/<h3>.json + <slot>/campaign.json + <slot>/slot.json
 ```
 
-`RegionView` and `ManagementView` only hit-test for selection and route planning;
-they never mutate `RegionState`. `SiteView` calls campaign methods and then
-refreshes its cached installation list.
+`RegionView`, `AreaView` and `ManagementView` only hit-test for selection, route
+planning and dispatch targets; they never mutate `RegionState` directly. `SiteView`
+calls campaign methods and then refreshes its cached installation list.
 
 ### Disk → state → view
 
@@ -146,6 +150,7 @@ CampaignService.EnsureRegionLoaded(regionIndex)
    → CampaignStore.LoadRegion(regionIndex)
    → CampaignState.InstallRegion(stored, tile)   # rebuild local footprints, drop invalid records
 RegionView.Load(world, regionIndex)              # must run after EnsureRegionLoaded
+AreaView.Load(world, campaign, regionIndex)      # neighbours + rover markers
 ManagementView.Load(world, regionIndex)
 SiteView.Load(world, tile, hexOrdinal, campaign, registry)  # site mode only
 ```
