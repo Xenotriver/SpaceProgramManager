@@ -39,9 +39,9 @@ public partial class Main : Node2D
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
     private const string AreaStatus =
-        "Wheel zoom · right-drag pan · click region to zoom in · G colony · Tab terrain slope · R fleet · M map · T tech · Esc globe";
-    private const string AreaSlopeStatus =
-        "Area terrain slope · Tab biome colours · G colony · click region to zoom in · R fleet · M map · T tech · Esc globe";
+        "wheel zoom · right-drag pan · G isometric · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
+    private const string AreaIsoStatus =
+        "wheel zoom · right-drag pan · G flat · Q/E rotate · [ ] relief · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -171,6 +171,7 @@ public partial class Main : Node2D
         _regionView.BaseSpeedKmh = FloatArgument("--speed", (float)CampaignDefaults.DefaultRoverSpeedKmh);
 
         _areaView = new AreaView { Visible = false };
+        _areaView.SetImagery(_imagery);
         _worldLayer.AddChild(_areaView);
         _areaView.RegionOpened += OnAreaRegionOpened;
         _areaView.DispatchRequested += OnAreaDispatchRequested;
@@ -446,7 +447,9 @@ public partial class Main : Node2D
                 _campaign.Meta.SciencePoints, _campaign.Meta.UnlockedTechs, _buildingNames);
 
     private string AreaStatusText()
-        => _areaView.UsesSlope ? AreaSlopeStatus : AreaStatus;
+        => _areaView.UsesIsometric
+            ? $"isometric area · {ModeName(_areaView.Overlay)} · {AreaIsoStatus}"
+            : $"flat area · {ModeName(_areaView.Overlay)} · {AreaStatus}";
 
     private ulong CurrentRegionIndex()
         => _areaView.IsLoaded
@@ -784,19 +787,32 @@ public partial class Main : Node2D
         if (overlay is not null)
             SetOverlay(ParseOverlay(overlay));
 
-        // Exercises the same toggle as G in the area view.
+        // Automation path for the terrain overlay; Tab cycles all five overlays.
         if (HasArgument("--slope") && _mode == Mode.Area)
         {
             _areaView.ToggleSlope();
             _status = AreaStatusText();
         }
 
-        var rot = ArgumentValue("--rot");
-        if (rot is not null
-            && _mode == Mode.Management
-            && int.TryParse(rot, out var rotDegrees))
+        var projection = ArgumentValue("--projection");
+        if (projection is not null && _mode == Mode.Area)
         {
-            _managementView.SetRotation((int)Math.Round(rotDegrees / 60.0));
+            var isometric = string.Equals(projection, "iso", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(projection, "isometric", StringComparison.OrdinalIgnoreCase);
+            _areaView.SetProjection(isometric ? AreaProjectionMode.Isometric : AreaProjectionMode.Flat);
+            _status = AreaStatusText();
+        }
+
+        if (HasArgument("--relief") && _mode == Mode.Area)
+            _areaView.SetRelief(FloatArgument("--relief", _areaView.ReliefScale));
+
+        var rot = ArgumentValue("--rot");
+        if (rot is not null && int.TryParse(rot, out var rotDegrees))
+        {
+            if (_mode == Mode.Management)
+                _managementView.SetRotation((int)Math.Round(rotDegrees / 60.0));
+            else if (_mode == Mode.Area)
+                _areaView.Rotate((int)Math.Round(rotDegrees / 60.0));
         }
 
         var active = ArgumentValue("--active");
@@ -1123,23 +1139,23 @@ public partial class Main : Node2D
                 ShowSite(_selectedHex >= 0 ? _selectedHex : 0);
                 break;
 
-            case Key.Key1 when _mode is Mode.Region or Mode.Management:
+            case Key.Key1 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.Biome);
                 break;
 
-            case Key.Key2 when _mode is Mode.Region or Mode.Management:
+            case Key.Key2 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.Terrain);
                 break;
 
-            case Key.Key3 when _mode is Mode.Region or Mode.Management:
+            case Key.Key3 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.SiteScore);
                 break;
 
-            case Key.Key4 when _mode is Mode.Region or Mode.Management:
+            case Key.Key4 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.Buildings);
                 break;
 
-            case Key.Key5 when _mode is Mode.Region or Mode.Management:
+            case Key.Key5 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.Imagery);
                 break;
 
@@ -1153,7 +1169,8 @@ public partial class Main : Node2D
                 break;
 
             case Key.Tab when _mode == Mode.Area:
-                _areaView.ToggleSlope();
+                _areaView.CycleOverlay();
+                _activeOverlay = _areaView.Overlay;
                 _status = AreaStatusText();
                 QueueRedraw();
                 break;
@@ -1174,6 +1191,30 @@ public partial class Main : Node2D
                 RotateCamera(1);
                 break;
 
+            case Key.Q when _mode == Mode.Area && _areaView.UsesIsometric:
+                _areaView.Rotate(-1);
+                _status = $"area camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc globe";
+                QueueRedraw();
+                break;
+
+            case Key.E when _mode == Mode.Area && _areaView.UsesIsometric:
+                _areaView.Rotate(1);
+                _status = $"area camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc globe";
+                QueueRedraw();
+                break;
+
+            case Key.Bracketleft when _mode == Mode.Area && _areaView.UsesIsometric:
+                _areaView.SetRelief(_areaView.ReliefScale / 1.15f);
+                _status = $"area relief {_areaView.ReliefScale:F2} · [ ] adjust · Q/E rotate";
+                QueueRedraw();
+                break;
+
+            case Key.Bracketright when _mode == Mode.Area && _areaView.UsesIsometric:
+                _areaView.SetRelief(_areaView.ReliefScale * 1.15f);
+                _status = $"area relief {_areaView.ReliefScale:F2} · [ ] adjust · Q/E rotate";
+                QueueRedraw();
+                break;
+
             case Key.M:
                 _shell.ToggleSystemMap();
                 break;
@@ -1187,8 +1228,9 @@ public partial class Main : Node2D
                 break;
 
             case Key.G when _mode == Mode.Area:
-                ShowRegion(_areaView.CenterRegion);
-                ShowManagement();
+                _areaView.ToggleProjection();
+                _status = AreaStatusText();
+                QueueRedraw();
                 break;
 
             case Key.A when !_shell.IsOpen:
@@ -1607,6 +1649,10 @@ public partial class Main : Node2D
                 DrawSitePanel();
                 break;
 
+            case Mode.Area:
+                DrawAreaPanel();
+                break;
+
             default:
                 DrawRegionPanel();
                 break;
@@ -1736,6 +1782,111 @@ public partial class Main : Node2D
                     var color = BiomePalette.For(biomeId);
                     DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
                     DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
+                    DrawString(_font, new Vector2(PanelLeft + 38, y + 11), DisplayName(biomeId),
+                        HorizontalAlignment.Left, -1, 13, AccentText);
+                    y += LegendRowHeight;
+                }
+
+                break;
+
+            case RegionViewMode.Terrain:
+                DrawRamp(TerrainPalette.For, y);
+                break;
+
+            case RegionViewMode.SiteScore:
+                DrawRamp(t => SiteScorePalette.For(t, true), y);
+                break;
+
+            case RegionViewMode.Buildings:
+                DrawSiteLegend(y);
+                break;
+
+            case RegionViewMode.Imagery:
+                DrawImageryLegend(y);
+                break;
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + height - 10),
+            "Esc back to globe · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
+    }
+
+    private void DrawAreaPanel()
+    {
+        var mode = _areaView.Overlay;
+        var biomes = _areaView.BiomesPresent;
+        var legendRows = mode switch
+        {
+            RegionViewMode.Biome => Math.Max(1, biomes.Count),
+            RegionViewMode.Buildings => 3,
+            RegionViewMode.Imagery => 3,
+            _ => 1,
+        };
+
+        var height = 228f + legendRows * LegendRowHeight + 18f;
+        DrawRect(new Rect2(PanelLeft, PanelTop, PanelWidth, height), PanelColor);
+        DrawRect(new Rect2(PanelLeft, PanelTop, 3f, height), new Color(0.55f, 0.78f, 0.85f, 0.9f));
+
+        var projection = _areaView.UsesIsometric ? "ISOMETRIC" : "FLAT";
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30),
+            $"{KnownBodies.DisplayName(_world.BodyKey)} · AREA · {projection}",
+            HorizontalAlignment.Left, -1, 17, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 50),
+            $"{_areaView.RegionCount} regions · {_areaView.HexCount} hexes · res {_world.FineResolution}",
+            HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 70),
+            $"H3 {new H3Index(_areaView.CenterRegion)}", HorizontalAlignment.Left, -1, 11, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 92),
+            $"overlay: {ModeName(mode)} · Tab / 1-5", HorizontalAlignment.Left, -1, 12,
+            new Color(0.55f, 0.85f, 1f));
+
+        if (_areaView.UsesIsometric)
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 116),
+                $"camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief {_areaView.ReliefScale:F2}",
+                HorizontalAlignment.Left, -1, 12, AccentText);
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 136),
+                "one faceted slab · G returns to flat map", HorizontalAlignment.Left, -1, 11, MutedText);
+        }
+        else
+        {
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 116),
+                "tangent-plane map · G opens isometric diorama", HorizontalAlignment.Left, -1, 12, AccentText);
+            DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 136),
+                "click a region to drill in", HorizontalAlignment.Left, -1, 11, MutedText);
+        }
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 160),
+            mode == RegionViewMode.Terrain
+                ? $"elev {_areaView.TerrainMinM}..{_areaView.TerrainMaxM} m · area-wide ramp"
+                : mode == RegionViewMode.SiteScore
+                    ? $"score {_areaView.SiteScoreMin:P0}..{_areaView.SiteScoreMax:P0} · {_areaView.SiteScoreMs:F0} ms"
+                    : mode == RegionViewMode.Buildings
+                        ? $"{_areaView.BuildingCount} installation(s) across the area"
+                        : mode == RegionViewMode.Imagery && _areaView.HasImagery
+                            ? _imagery?.SourceName ?? "surface imagery"
+                            : "area-wide legend",
+            HorizontalAlignment.Left, -1, 11, MutedText);
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 184), LegendTitle(mode),
+            HorizontalAlignment.Left, -1, 11, MutedText);
+
+        var y = PanelTop + 204f;
+        switch (mode)
+        {
+            case RegionViewMode.Biome:
+                if (biomes.Count == 0)
+                {
+                    DrawString(_font, new Vector2(PanelLeft + 18, y + 11), "none",
+                        HorizontalAlignment.Left, -1, 12, MutedText);
+                    break;
+                }
+
+                foreach (var biomeId in biomes)
+                {
+                    var color = BiomePalette.For(biomeId);
+                    DrawRect(new Rect2(PanelLeft + 18, y, 12, 12), color);
+                    DrawRect(new Rect2(PanelLeft + 18, y, 12, 12),
+                        new Color(0, 0, 0, 0.35f), filled: false, width: 1f);
                     DrawString(_font, new Vector2(PanelLeft + 38, y + 11), DisplayName(biomeId),
                         HorizontalAlignment.Left, -1, 13, AccentText);
                     y += LegendRowHeight;

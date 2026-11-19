@@ -116,5 +116,12 @@ jobs:
           run_smoke mars mars-area --view=area
           run_smoke moon moon-fleet --view=area --fleet
 
-          # Experimental area-first navigation: faceted slope shading.
+          # Experimental area-first navigation: slope automation hook.
           run_smoke moon moon-area-slope --region=589971619905011711 --slope
+
+          # Experimental area-first navigation: isometric diorama overlays.
+          run_smoke moon moon-area-iso --view=area --region=589971619905011711 --projection=iso
+          run_smoke moon moon-area-iso-terrain --view=area --region=589971619905011711 --projection=iso --overlay=terrain
+          run_smoke moon moon-area-iso-score --view=area --region=589971619905011711 --projection=iso --overlay=score
+          run_smoke moon moon-area-iso-buildings --view=area --region=589971619905011711 --projection=iso --overlay=buildings
+          run_smoke moon moon-area-iso-color --view=area --region=589971619905011711 --projection=iso --overlay=color

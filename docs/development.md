@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 160` — 160 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 167` — 167 passed, 0 failed, 0 skipped on a machine with
 `data/moon` and `data/mars` present. Tests that need a real bake **skip** when it
 is absent — do not make them fail. Set `SPM_REQUIRE_DATA=1` to turn those skips
 into failures (intended for CI).
@@ -109,10 +109,11 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--region=<h3>` | Open the area around a region by H3 index. Without it the last active region is restored. |
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
-| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; area accepts `terrain` for slope shading; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
-| `--slope` | Toggle area-scale terrain-slope shading; same action as `Tab` in the area view. |
-| `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
-| `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for area/region/colony views; area ramps are normalised area-wide across all 2,401 hexes. `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
+| `--slope` | Toggle the area terrain overlay (terrain ↔ biome); `Tab` cycles all five area overlays. |
+| `--projection=flat\|iso` | Select the area projection (`iso` or `isometric`); `G` toggles it at runtime. |
+| `--rot=<deg>` | Colony or isometric-area camera angle, quantised to the nearest 60°. |
+| `--relief=<scale>` | Colony or isometric-area relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
 | `--place=<q>,<r>` | Place at a local grid cell. Repeat the flag for more installations; requires `--view=site`. |
 | `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals in the region view. |
@@ -153,11 +154,13 @@ Notes:
 - `M` toggles the Solar System Map from any view; `A` opens the area view and `R`
   the fleet screen from any gameplay view. Globe clicks and `--region` open the
   area view by default; clicking a region there drills into the region view.
-  `G` enters the colony view from both area and region view.
-- `Tab` toggles surface imagery/biome on the globe, toggles faceted terrain-slope
-  shading in the area view, and cycles overlays in region and colony views;
-  `1`–`5` select an overlay directly in region and colony views. With a valid
-  sidecar, true colour is the default for every slot unless `--overlay` is passed.
+  `G` toggles the area between its flat tangent-plane map and a seven-region
+  isometric diorama; colony view is entered from region view.
+- `Tab` toggles surface imagery/biome on the globe and cycles overlays in area,
+  region and colony views; `1`–`5` select an overlay directly in those views.
+  In isometric area view `Q`/`E` rotate the slab and `[`/`]` adjust relief.
+  With a valid sidecar, true colour is the default for every slot unless
+  `--overlay` is passed.
 - Screenshot and save scratch space for this repo:
   `C:\Users\xenot\AppData\Local\Temp\opencode\spm`.
 - `F12` writes `user://moon_overview.png`.
@@ -176,9 +179,10 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-16 smokes: colour and biome for globe/region, colour for colony on both bodies,
+21 smokes: colour and biome for globe/region, colour for colony on both bodies,
 plus both globes, the unchanged Moon site view, the tech tree screen, the area view
-on both bodies, the fleet screen and the area terrain-slope toggle.
+on both bodies, the fleet screen, the area terrain-slope toggle and five isometric
+area-overlay runs.
 
 ## 5. Data pipeline
 
@@ -271,10 +275,10 @@ not the library version. Bump both together.
 Mars tile fixtures plus imagery sidecars, runs the Python imagery unit tests,
 builds and tests .NET, then downloads the pinned Godot 4.7.2 mono Linux archive
 (SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`).
-The Godot step runs sixteen `--frame-budget=20 --frames=30` smokes: colour and
+The Godot step runs twenty-one `--frame-budget=20 --frames=30` smokes: colour and
 biome coverage for globe/region, colour for colony on both bodies, the unchanged
-Moon site view, the tech screen, the area view on both bodies, the fleet screen and
-the area terrain-slope toggle.
+Moon site view, the tech screen, the area view on both bodies, the fleet screen,
+the area terrain-slope toggle and the five isometric area-overlay combinations.
 Headless `--shot` is deliberately not used because it
 hangs in automation; the frame-gate run is the smoke and exit-code check. No
 `data/` is committed.

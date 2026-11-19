@@ -21,7 +21,7 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
 | Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
-| Area-first navigation | **Experimental** | Globe click/`--region` opens area; `G`/`--slope` toggles area-scale slope shading; D40 |
+| Area-first navigation | **Experimental** | Globe click/`--region` opens area; `G` toggles flat/isometric area; five overlays area-wide; D40 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 16 headless Godot smokes, `--frame-budget=20` p95 gate |
@@ -33,7 +33,8 @@ The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
 an H3 index, open the area around a region by default, drill into the region view,
 inspect hexes across five overlays, plan a rover route, buy rovers from a finished
-garage, watch them cross regions in the area view, toggle area-scale slope shading,
+garage, watch them cross regions in the area view, switch that view between a flat
+map and an isometric seven-region diorama with the same five overlays as a region,
 press `Enter` to open a fine hex as a site, place several installations on its
 37-cell local grid, and have all of it persist across launches against a
 fingerprinted bake. The player can start on Moon or Mars directly with `--body`
@@ -330,11 +331,12 @@ between regions, rover fleet state, failure/repair.
   Clean build, 167/167 C# tests, no push.
   - **Experimental follow-up (2026-11-19): area-first navigation.** Globe clicks
     and `--region` now open `AreaView`; a region click there drills into the old
-    region view. `G` opens colony view from both area and region; `Tab`/`--slope`
-    toggles faceted terrain-slope shading across the seven visible tiles, with a
-    smoothstep relief curve for readable contrast on broad ramps. Explicit view
-    flags still win. D40 records the test; it remains reversible and no save
-    contract changed.
+    region view. `G` toggles the flat tangent-plane map against a seven-region
+    isometric diorama; `1`–`5`/`Tab` apply biome, terrain, site-score, buildings
+    and colour overlays with area-wide normalisation, and `--slope` still selects
+    terrain. `Q`/`E` orbit and `[`/`]` adjust relief; `--projection`, `--rot` and
+    `--relief` expose the same paths to automation. Explicit view flags still win.
+    D40 records the test; it remains reversible and no save contract changed.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**

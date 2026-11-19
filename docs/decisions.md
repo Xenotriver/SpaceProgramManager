@@ -797,30 +797,35 @@ No save-schema, fingerprint or tile-format change was needed.
 **Decision.** An experiment makes the multi-region area view the default drill-in
 from the globe: clicking a body region or starting with `--region` lands in
 `AreaView`, and clicking a region there opens the old single-region view. The
-intended hierarchy is planet → area → region → site. `G` opens the colony view
-from both area and region; from area it first loads the centred region because
-`ManagementView` requires a loaded `RegionView`. `Tab` in the area view toggles a
-faceted terrain-slope presentation over the visible region tiles, using shared
-corner-height averages and the same fixed light as the colony terrain; `--slope`
-and `--overlay=terrain` expose the same path to automation. Explicit
-`--view=region|management|site|globe` flags still win.
+intended hierarchy is planet → area → region → site. `AreaView` keeps its flat
+tangent-plane map but adds an **isometric projection** of all seven tiles as one
+faceted slab, visually matching the colony diorama. `G` toggles flat ↔ isometric
+in area view; colony view is reached from region view. Both projections support
+the five region overlays — biome, terrain, site score, buildings and colour —
+with `1`–`5` direct selection and `Tab` cycling. Terrain and site-score ramps are
+normalised area-wide over all 2,401 hexes. `Q`/`E` rotate the isometric slab and
+`[`/`]` adjust relief; `--projection=flat|iso`, `--rot` and `--relief` expose the
+same paths to automation. `--slope` and `--overlay=terrain` still select the
+terrain overlay. Explicit `--view=region|management|site|globe` flags still win.
 
 **Why.** The area scale gives better situational awareness than jumping straight
-to one region, and the user specifically asked whether the existing terrain-slope
-idea survives at that scale. Reusing `AreaView`'s tangent-plane geometry and the
-already baked per-hex elevations tests this without a new view, new save field or
-change to `Sim`.
+to one region. The user clarified that the goal is not a slope-shaded flat map but
+the colony-style isometric treatment at seven-region scale, with the same filters
+the region view already offers. `AreaDiorama` reuses `IsoProjection`, the shared
+corner-height approach and the palettes already used by `ManagementView`, so the
+experiment adds no new view, save field or change to `Sim`. The flat presentation
+is retained because it remains useful for rover logistics and because the toggle
+makes the projection difference explicit.
 
-**Cost.** The mesh now covers up to 2,401 fine hexes instead of 343 and rebuilds
-when the overlay changes; corner heights are averaged by formatted projected
-position because `GetCellBoundaryVertices()` returns `LatLng`, not an H3 index.
-This is still a flat map with shaded facets, not a full 2.5D diorama over seven
-tiles, and it stays experimental until visual review. Automation confirmed the
-toggle and mesh rebuild on both bodies. The first Moon pass read as a single
-tilted plane, so a presentation-only smoothstep relief curve now redistributes
-vertical contrast without changing elevation ordering or the hypsometric palette;
-both tested bodies then showed facet shade `0.70–1.00`. No save-schema,
-fingerprint or tile-format change was needed.
+**Cost.** The isometric mesh covers up to 2,401 fine hexes instead of 343. Corner
+heights are averaged by shared string keys because `GetCellBoundaryVertices()`
+returns `LatLng`, not an H3 index; only the outer edge of the seven-tile mosaic
+gets a skirt. Site scores are computed lazily on first use (~300 ms on the real
+Moon bake) and cached for the session; the steady-state frame budget stays under
+the 20 ms gate. The presentation-only smoothstep relief curve from the first pass
+is retained for readable slope contrast, and all palettes come from the existing
+`RegionPalettes` helpers. No save-schema, fingerprint or tile-format change was
+needed. The experiment stays experimental until visual review.
 
 ---
 
