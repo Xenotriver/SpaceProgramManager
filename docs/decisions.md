@@ -617,7 +617,7 @@ remain (biome for globe/region, terrain for colony).
 
 ## D33 — Cheap chamfer-and-slope test before any terrain redesign
 
-**Commit:** 2026-11-19 · **Status:** active
+**Commit:** `2378137` · **Status:** superseded by D34
 
 **Decision.** The colony view keeps H3 fine hexes as the only authoritative
 terrain cells. Each prism now has a small chamfered rim and a directional
@@ -633,10 +633,36 @@ building slots, and answers whether the blockiness is actually a problem before
 a larger geometry rewrite. It also avoids inventing interpolated elevation data
 that the bake does not contain.
 
-**Cost.** Top shading varies with relief exaggeration and camera orbit, and
-border hexes use fewer neighbours. If the result is still too blocky, the next
-candidate is a non-authoritative faceted hex surface shared at corners; that
-remains deferred, as does an AreaView for cross-region routes.
+**Cost.** Top shading varied with relief exaggeration and camera orbit, and
+border hexes used fewer neighbours. On visual review the result was not pleasant
+enough, so this test was superseded within the same day by D34. It remains useful
+as evidence that palette-only tweaks were insufficient.
+
+---
+
+## D34 — Faceted hex surface replaces chamfered prisms
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** `ManagementView` renders each fine hex as a six-triangle fan: the
+centre vertex uses the cell's authoritative elevation, and each corner vertex uses
+the mean elevation of every cell in the loaded region that shares that H3 vertex.
+Shared corners are keyed from the gnomonic tangent-plane point and reused exactly,
+so neighbouring cells meet without a vertical wall. Only edges incident to one
+cell receive a skirt. Facets are flat-shaded from their plane normal while every
+overlay keeps its existing flat per-hex colour.
+
+**Why.** The D33 chamfer test proved that shading alone did not make the terrain
+pleasant to look at. A corner-averaged surface removes the stair silhouette while
+keeping one visual cell per buildable H3 hex, so picking, site markers, placement
+and overlays still line up exactly. It avoids inventing a raster heightmap and
+avoids treating interpolated corner heights as authoritative data.
+
+**Cost.** Corner heights are smoothed at region borders because neighbouring
+tiles are not loaded, and sharp local elevation extremes are softened. A future
+AreaView would improve those seams. Nothing changes in `Sim`, the tile format,
+save schema, `bodyKey` or `BakeFingerprint`; movement and scoring still read the
+original per-hex elevation.
 
 ---
 
@@ -647,5 +673,5 @@ bake-change save migration, and 3D building assets/presentation. Multi-installat
 hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
-choices are settled by D23–D29; M4.5 imagery choices are settled by D30–D32, and
-the terrain-presentation test by D33.
+choices are settled by D23–D29, M4.5 imagery by D30–D32, and the terrain
+presentation by D33–D34.

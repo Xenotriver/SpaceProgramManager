@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using Godot;
 using H3;
@@ -8,16 +9,18 @@ using H3.Extensions;
 using Sim.Biomes;
 using Sim.Buildings;
 using Sim.Campaign;
-using Sim.Hex;
 using Sim.Site;
 using Sim.World;
 
 /// <summary>
 /// Close-up colony management view: the region rendered as a procedural 2.5D
-/// isometric diorama of extruded hex prisms.
+/// isometric diorama of a faceted hex surface.
 ///
+/// Each hex is a six-triangle fan from its own elevation to corner heights
+/// averaged across the hexes that meet there, so neighbouring cells share a
+/// continuous edge instead of a stair-step. Only the outer boundary has a skirt.
 /// The terrain is baked into a single <see cref="ArrayMesh"/> with painter-sorted
-/// vertices (far prisms first), so drawing the whole region costs one mesh draw.
+/// vertices (far cells first), so drawing the whole region costs one mesh draw.
 /// The camera is a plain 2D transform over isometric units, which keeps picking
 /// and placement exact and cheap. Orbiting rotates the plane in 60° steps about
 /// the centre of the view, so the diorama turns in place.
@@ -46,15 +49,6 @@ public partial class ManagementView : Node2D
     /// <summary>Thickness of the terrain slab, as a fraction of the region width.</summary>
     private const float SlabFraction = 0.025f;
 
-    /// <summary>How far the visible top is inset before the chamfered rim.</summary>
-    private const float BevelInset = 0.12f;
-
-    /// <summary>Drop from the flat top to the chamfered rim, relative to the slab.</summary>
-    private const float BevelDropFraction = 0.35f;
-
-    /// <summary>Strength of the directional top-slope shading test.</summary>
-    private const float SlopeShadeStrength = 0.26f;
-
     private static readonly Color BorderColor = new(0f, 0f, 0f, 0.20f);
     private static readonly Color HoverColor = new(1f, 1f, 1f, 0.95f);
     private static readonly Color SelectionColor = new(0.55f, 0.85f, 1f, 0.95f);
@@ -70,6 +64,32 @@ public partial class ManagementView : Node2D
             color.A);
     }
 
+    /// <summary>Flat-shades one facet from its plane normal and the fixed light.</summary>
+    private static Color FacetShade(
+        Color fill, Vector2 center, Vector2 a, Vector2 b,
+        float centerHeight, float aHeight, float bHeight)
+    {
+        var ab = new Vector3(a.X - center.X, a.Y - center.Y, aHeight - centerHeight);
+        var ac = new Vector3(b.X - center.X, b.Y - center.Y, bHeight - centerHeight);
+        var normal = ab.Cross(ac);
+        if (normal.Z < 0f)
+            normal = -normal;
+
+        if (normal.LengthSquared() < 1e-12f)
+            return ScaleColor(fill, 1f);
+
+        var light = new Vector3(LightDirection.X, LightDirection.Y, 1.6f).Normalized();
+        var diffuse = Mathf.Clamp(normal.Normalized().Dot(light), 0f, 1f);
+        return ScaleColor(fill, 0.70f + 0.34f * diffuse);
+    }
+
+    private static string CornerKey(Vector2 plane)
+        => $"{plane.X.ToString("F6", CultureInfo.InvariantCulture)}:" +
+           $"{plane.Y.ToString("F6", CultureInfo.InvariantCulture)}";
+
+    private static string EdgeKey(int a, int b)
+        => a < b ? $"{a}:{b}" : $"{b}:{a}";
+
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
     private SurfaceImagery? _imagery;
@@ -79,12 +99,14 @@ public partial class ManagementView : Node2D
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private Vector2[][] _rotatedCorners = Array.Empty<Vector2[]>();
     private Vector2[][] _isoCorners = Array.Empty<Vector2[]>();
+    private int[][] _cornerIds = Array.Empty<int[]>();
+    private float[][] _cornerHeights = Array.Empty<float[]>();
+    private bool[][] _boundaryEdges = Array.Empty<bool[]>();
+    private int _cornerCount;
     private Vector2[] _rotatedCenters = Array.Empty<Vector2>();
     private Vector2[] _isoCenters = Array.Empty<Vector2>();
     private float[] _elevations = Array.Empty<float>();
     private float[] _heights = Array.Empty<float>();
-    private float[] _bevelDrops = Array.Empty<float>();
-    private float[] _slopeShades = Array.Empty<float>();
     private Color[] _biomeFills = Array.Empty<Color>();
     private Color[] _terrainFills = Array.Empty<Color>();
     private Color[] _imageryFills = Array.Empty<Color>();
@@ -233,12 +255,14 @@ public partial class ManagementView : Node2D
         _corners = new Vector2[count][];
         _rotatedCorners = new Vector2[count][];
         _isoCorners = new Vector2[count][];
+        _cornerIds = new int[count][];
+        _cornerHeights = new float[count][];
+        _boundaryEdges = new bool[count][];
+        _cornerCount = 0;
         _rotatedCenters = new Vector2[count];
         _isoCenters = new Vector2[count];
         _elevations = new float[count];
         _heights = new float[count];
-        _bevelDrops = new float[count];
-        _slopeShades = new float[count];
         _biomeFills = new Color[count];
         _terrainFills = new Color[count];
         _imageryFills = Array.Empty<Color>();
@@ -264,6 +288,7 @@ public partial class ManagementView : Node2D
         var minElevation = short.MaxValue;
         var maxElevation = short.MinValue;
         var biomesPresent = new List<string>();
+        var cornerIdsByKey = new Dictionary<string, int>(StringComparer.Ordinal);
 
         for (var i = 0; i < count; i++)
         {
@@ -283,15 +308,49 @@ public partial class ManagementView : Node2D
 
             var boundary = cells[i].GetCellBoundaryVertices().ToList();
             var corners = new Vector2[boundary.Count];
+            var ids = new int[boundary.Count];
 
             for (var v = 0; v < boundary.Count; v++)
             {
                 corners[v] = Project(ToUnitVector(boundary[v]), regionCenter, east, north);
                 min = new Vector2(Mathf.Min(min.X, corners[v].X), Mathf.Min(min.Y, corners[v].Y));
                 max = new Vector2(Mathf.Max(max.X, corners[v].X), Mathf.Max(max.Y, corners[v].Y));
+
+                var key = CornerKey(corners[v]);
+                if (!cornerIdsByKey.TryGetValue(key, out var id))
+                {
+                    id = _cornerCount++;
+                    cornerIdsByKey[key] = id;
+                }
+
+                ids[v] = id;
             }
 
             _corners[i] = corners;
+            _cornerIds[i] = ids;
+            _cornerHeights[i] = new float[boundary.Count];
+        }
+
+        var edgeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < count; i++)
+        {
+            var ids = _cornerIds[i];
+            for (var v = 0; v < ids.Length; v++)
+            {
+                var key = EdgeKey(ids[v], ids[(v + 1) % ids.Length]);
+                edgeCounts.TryGetValue(key, out var seen);
+                edgeCounts[key] = seen + 1;
+            }
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            var ids = _cornerIds[i];
+            var boundary = new bool[ids.Length];
+            for (var v = 0; v < ids.Length; v++)
+                boundary[v] = edgeCounts[EdgeKey(ids[v], ids[(v + 1) % ids.Length])] == 1;
+
+            _boundaryEdges[i] = boundary;
         }
 
         TerrainMinM = (short)minElevation;
@@ -328,7 +387,9 @@ public partial class ManagementView : Node2D
         RebuildGeometry();
         FitView();
 
-        GD.Print($"colony: {count} hexes · span {spanPlane:F4} · elev {TerrainMinM}..{TerrainMaxM} m · " +
+        GD.Print($"colony: {count} hexes · {_cornerCount} shared corners · " +
+                 $"{_boundaryEdges.Sum(edges => edges.Count(boundary => boundary))} skirt edges · " +
+                 $"span {spanPlane:F4} · elev {TerrainMinM}..{TerrainMaxM} m · " +
                  $"auto relief {_autoRelief:F2} · slab {_slab:F5} · fit {_pixelsPerRadian:F0} px/unit · " +
                  $"camera {CameraDegrees}°");
 
@@ -671,7 +732,7 @@ public partial class ManagementView : Node2D
                  $"(range {_siteScoreMin:P0} – {_siteScoreMax:P0})");
     }
 
-    /// <summary>Recomputes elevations, rotated corners, isometric corners and depth order.</summary>
+    /// <summary>Recomputes shared corner heights, rotated points and depth order.</summary>
     private void RebuildGeometry()
     {
         if (_tile is null)
@@ -682,20 +743,37 @@ public partial class ManagementView : Node2D
         var sin = Mathf.Sin(_yaw);
         _baseHeight = -_slab;
 
+        for (var i = 0; i < _heights.Length; i++)
+            _heights[i] = (float)((_elevations[i] - TerrainMinM) / radiusMetres * _autoRelief * ReliefScale);
+
+        var cornerSums = new float[_cornerCount];
+        var cornerCounts = new int[_cornerCount];
+        for (var i = 0; i < _heights.Length; i++)
+        {
+            for (var v = 0; v < _cornerIds[i].Length; v++)
+            {
+                var id = _cornerIds[i][v];
+                cornerSums[id] += _heights[i];
+                cornerCounts[id]++;
+            }
+        }
+
+        for (var i = 0; i < _heights.Length; i++)
+        {
+            for (var v = 0; v < _cornerIds[i].Length; v++)
+            {
+                var id = _cornerIds[i][v];
+                _cornerHeights[i][v] = cornerCounts[id] > 0
+                    ? cornerSums[id] / cornerCounts[id]
+                    : _heights[i];
+            }
+        }
+
         for (var i = 0; i < _corners.Length; i++)
         {
-            var height = (float)((_elevations[i] - TerrainMinM) / radiusMetres * _autoRelief * ReliefScale);
-            _heights[i] = height;
-
-            // A small chamfer breaks up the flat prism top without changing the
-            // cell's authoritative elevation or its picking centre.
-            var bevelDrop = Mathf.Min(_slab * BevelDropFraction, _slab * 0.5f + Mathf.Max(0f, height) * 0.2f);
-            _bevelDrops[i] = bevelDrop;
-            var rimHeight = height - bevelDrop;
-
             var center = IsoProjection.Rotate(CellCenter(i), _pivot, cos, sin);
             _rotatedCenters[i] = center;
-            _isoCenters[i] = IsoProjection.Project(center, height);
+            _isoCenters[i] = IsoProjection.Project(center, _heights[i]);
 
             var corners = _corners[i];
             var rotated = new Vector2[corners.Length];
@@ -703,41 +781,16 @@ public partial class ManagementView : Node2D
             for (var v = 0; v < corners.Length; v++)
             {
                 rotated[v] = IsoProjection.Rotate(corners[v], _pivot, cos, sin);
-                iso[v] = IsoProjection.Project(rotated[v], rimHeight);
+                iso[v] = IsoProjection.Project(rotated[v], _cornerHeights[i][v]);
             }
 
             _rotatedCorners[i] = rotated;
             _isoCorners[i] = iso;
         }
 
-        // Directional top shading is derived from neighbour elevation gradients.
-        // It is only a vertex-colour multiplier; movement and placement still use
-        // the H3 cell elevations unchanged.
-        var cells = _tile.Cells;
-        for (var i = 0; i < _corners.Length; i++)
-        {
-            var center = _rotatedCenters[i];
-            var gradient = Vector2.Zero;
-            foreach (var neighbour in HexGrid.Neighbors(cells[i]))
-            {
-                if (!_ordinalByIndex.TryGetValue((ulong)neighbour, out var j))
-                    continue;
-
-                var delta = _rotatedCenters[j] - center;
-                var lengthSquared = delta.LengthSquared();
-                if (lengthSquared < 1e-12f)
-                    continue;
-
-                gradient += delta * ((_heights[j] - _heights[i]) / lengthSquared);
-            }
-
-            _slopeShades[i] = Mathf.Clamp(
-                -gradient.Dot(LightDirection) * SlopeShadeStrength, -0.22f, 0.22f);
-        }
-
         _cellRadius = EstimateCellRadius();
 
-        // Far prisms first so nearer ones paint over them.
+        // Far cells first so the outer skirt paints behind the near surface.
         _order = Enumerable.Range(0, _corners.Length)
             .OrderByDescending(i => IsoProjection.Depth(_rotatedCenters[i]))
             .ToArray();
@@ -748,43 +801,57 @@ public partial class ManagementView : Node2D
 
     private void BuildMesh()
     {
-        // Per corner: two wall triangles (6 vertices), two bevel triangles (6)
-        // and one top-fan triangle (3). Sizing from actual corner counts also
-        // handles the rare pentagon cell.
-        var vertexCount = _corners.Sum(corners => corners.Length * 15);
-        var vertices = new Vector2[vertexCount];
-        var colors = new Color[vertexCount];
+        var topVertices = _corners.Sum(corners => corners.Length * 3);
+        var skirtVertices = _boundaryEdges.Sum(edges => edges.Count(boundary => boundary) * 6);
+        var vertices = new Vector2[topVertices + skirtVertices];
+        var colors = new Color[topVertices + skirtVertices];
         var index = 0;
 
         foreach (var i in _order)
         {
-            var rim = _isoCorners[i];
             var plane = _rotatedCorners[i];
-            var rotatedCenter = _rotatedCenters[i];
-            var center = _isoCenters[i];
+            var center = _rotatedCenters[i];
+            var isoCenter = _isoCenters[i];
+            var isoCorners = _isoCorners[i];
             var fill = _fills[i];
             var height = _heights[i];
-            var rimHeight = height - _bevelDrops[i];
-            var n = rim.Length;
+            var n = plane.Length;
 
-            var inner = new Vector2[n];
-            for (var v = 0; v < n; v++)
-                inner[v] = IsoProjection.Project(plane[v].Lerp(rotatedCenter, BevelInset), height);
-
+            // Six flat facets per hex. Neighbouring hexes use the same averaged
+            // corner height, so the surface meets without a vertical wall.
             for (var v = 0; v < n; v++)
             {
                 var next = (v + 1) % n;
-                var topA = rim[v];
-                var topB = rim[next];
-                var bottomA = new Vector2(topA.X, topA.Y + rimHeight - _baseHeight);
-                var bottomB = new Vector2(topB.X, topB.Y + rimHeight - _baseHeight);
+                var facet = FacetShade(fill, center, plane[v], plane[next],
+                    height, _cornerHeights[i][v], _cornerHeights[i][next]);
+
+                vertices[index] = isoCenter;
+                colors[index++] = facet;
+                vertices[index] = isoCorners[v];
+                colors[index++] = facet;
+                vertices[index] = isoCorners[next];
+                colors[index++] = facet;
+            }
+
+            // Only the region rim gets a skirt, keeping the diorama slice look.
+            for (var v = 0; v < n; v++)
+            {
+                if (!_boundaryEdges[i][v])
+                    continue;
+
+                var next = (v + 1) % n;
+                var heightA = _cornerHeights[i][v];
+                var heightB = _cornerHeights[i][next];
+                var topA = isoCorners[v];
+                var topB = isoCorners[next];
+                var bottomA = new Vector2(topA.X, topA.Y + heightA - _baseHeight);
+                var bottomB = new Vector2(topB.X, topB.Y + heightB - _baseHeight);
 
                 var edge = plane[next] - plane[v];
                 var normal = new Vector2(edge.Y, -edge.X).Normalized();
-                var shade = 0.42f + 0.20f * Mathf.Max(0f, normal.Dot(LightDirection));
+                var shade = 0.38f + 0.22f * Mathf.Max(0f, normal.Dot(LightDirection));
                 var wall = ScaleColor(fill, shade);
 
-                // Two triangles per wall, wound consistently with the top fan.
                 vertices[index] = topA;
                 colors[index++] = wall;
                 vertices[index] = topB;
@@ -798,42 +865,6 @@ public partial class ManagementView : Node2D
                 colors[index++] = wall;
                 vertices[index] = bottomA;
                 colors[index++] = wall;
-            }
-
-            for (var v = 0; v < n; v++)
-            {
-                var next = (v + 1) % n;
-                var edge = plane[next] - plane[v];
-                var normal = new Vector2(edge.Y, -edge.X).Normalized();
-                var shade = 0.74f + 0.18f * Mathf.Max(0f, normal.Dot(LightDirection))
-                                   + _slopeShades[i] * 0.35f;
-                var bevel = ScaleColor(fill, shade);
-
-                vertices[index] = inner[v];
-                colors[index++] = bevel;
-                vertices[index] = rim[v];
-                colors[index++] = bevel;
-                vertices[index] = rim[next];
-                colors[index++] = bevel;
-
-                vertices[index] = inner[v];
-                colors[index++] = bevel;
-                vertices[index] = rim[next];
-                colors[index++] = bevel;
-                vertices[index] = inner[next];
-                colors[index++] = bevel;
-            }
-
-            var top = ScaleColor(fill, 1.02f + _slopeShades[i]);
-
-            for (var v = 0; v < n; v++)
-            {
-                vertices[index] = center;
-                colors[index++] = top;
-                vertices[index] = inner[v];
-                colors[index++] = top;
-                vertices[index] = inner[(v + 1) % n];
-                colors[index++] = top;
             }
         }
 

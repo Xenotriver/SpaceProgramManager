@@ -214,9 +214,10 @@ projected cell centre within a radius, not polygon containment.
   are copied per region at load; site scores are computed once and cached.
 - **Colony view** — the entire terrain is a single `ArrayMesh` with painter-sorted
   triangles, so the region costs one mesh draw; overlays only swap vertex colours
-  (mesh rebuild). Each hex is a chamfered prism whose top uses a directional slope
-  multiplier derived from neighbouring elevations; this is a presentation-only
-  low-poly test, not a heightmap. Imagery, relief shading and aggregate site
+  (mesh rebuild). Each hex is a six-triangle fan from its own elevation to corner
+  heights averaged across incident hexes, so neighbours share edges instead of
+  forming stairs. Only the region rim has a skirt. This is a non-authoritative
+  low-poly surface, not a raster heightmap; imagery, site markers and aggregate
   markers stay on the same mesh/marker path. Orbit rebuilds geometry arrays once
   per step.
 - **Site view** — 37 local tiles in one small `ArrayMesh` with painter-sorted
