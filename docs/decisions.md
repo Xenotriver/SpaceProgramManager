@@ -660,18 +660,83 @@ avoids treating interpolated corner heights as authoritative data.
 
 **Cost.** Corner heights are smoothed at region borders because neighbouring
 tiles are not loaded, and sharp local elevation extremes are softened. A future
-AreaView would improve those seams. Nothing changes in `Sim`, the tile format,
-save schema, `bodyKey` or `BakeFingerprint`; movement and scoring still read the
-original per-hex elevation.
+AreaView would improve those seams. This rendering decision itself changed no
+`Sim` code, tile format, save schema, `bodyKey` or `BakeFingerprint`; movement and
+scoring still read the original per-hex elevation. M5 C0 later bumped the save
+schema for unrelated content state.
+
+---
+
+## D35 — Save v4 for M5 global state
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** Campaign metadata is version 4. It adds three authoritative blocks:
+`contracts` (active/completed/failed records with progress), `events` (pending
+choices, one cooldown and a 50-entry history), and `rovers` (a campaign-wide
+fleet with location, destination, travel times, health, speed and cargo). Region
+shards also move to v4 so new and migrated saves share one schema number. v1, v2
+and v3 are still accepted and migrated in memory; v5+ and format mismatches are
+refused without touching the file. `slot.json` remains `spm-slot` v1 and purely
+derived.
+
+**Why.** M5 C0 must settle persistence before building content UIs. Rovers move
+between region shards that are loaded on demand, so fleet state belongs in
+`campaign.json`. Contracts and events are campaign-wide too. Science points and
+unlocked techs already existed in v3 and stay top-level; no timed-research field
+was invented before C1 defines the rules.
+
+**Cost.** Old runtimes cannot read v4 saves, by design. Every supported older
+version needs a fixture and an explicit migration path, and unknown enum values
+or missing record ids need deterministic fallbacks. The bake fingerprint gate,
+tile format and `slot.json` contract are untouched.
+
+---
+
+## D36 — Typed failure/repair records on installations
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** M5 failure and repair state is stored as a typed `failure` object on
+each installation in its region shard: cause, severity, started time, optional
+repair start and optional repair completion. It is omitted while healthy. The
+existing primitive-only `state` bag remains available for future or unknown data
+but is not used for gameplay-critical failure values.
+
+**Why.** `health`, `status` and `statusReason` already exist, but they cannot
+express when a failure happened or when a repair completes without inventing
+string conventions. A typed field makes migrations and tests explicit while
+leaving v1–v3 shards readable with a simple "no failure" default.
+
+**Cost.** Region shards are rewritten as v4 on the next save even when their site
+shape did not change. Unknown or invalid failure values are clamped/skipped
+rather than corrupting the live campaign.
+
+---
+
+## D37 — Rover default speed is 8 km/h
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** New rovers default to `CampaignDefaults.DefaultRoverSpeedKmh = 8`.
+The existing `--speed` CLI override remains available for automation and tuning.
+
+**Why.** Plan §2.3 specified 8 km/h as the testing default while the route code
+used 10 km/h. M5 C0 is the save-contract gate and the natural place to remove the
+drift before rover fleet state is persisted.
+
+**Cost.** Route-time previews in automated runs without `--speed` become ~25%
+slower than in M4 builds. The stored `speedKmh` is authoritative once a rover
+exists, so old fleets do not silently change.
 
 ---
 
 ## Open decisions
 
-Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
-bake-change save migration, and 3D building assets/presentation. Multi-installation
+Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
+hover-only region outlines, and 3D building assets/presentation. Multi-installation
 hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
-choices are settled by D23–D29, M4.5 imagery by D30–D32, and the terrain
-presentation by D33–D34.
+choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
+D33–D34, and the M5 C0 save contract, typed failures and rover speed by D35–D37.

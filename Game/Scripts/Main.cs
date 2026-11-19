@@ -160,7 +160,7 @@ public partial class Main : Node2D
         _regionView.RouteComputed += OnRouteComputed;
         _regionView.RouteCleared += OnRouteCleared;
         _regionView.ViewModeChanged += OnViewModeChanged;
-        _regionView.BaseSpeedKmh = FloatArgument("--speed", 10f);
+        _regionView.BaseSpeedKmh = FloatArgument("--speed", (float)CampaignDefaults.DefaultRoverSpeedKmh);
 
         _registry = BuildingCatalogue.RegistryFor(_world.BodyKey);
 

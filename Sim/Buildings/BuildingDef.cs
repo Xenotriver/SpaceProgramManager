@@ -414,6 +414,31 @@ public sealed record BuildingInstance
 
     /// <summary>Custom state data (for complex buildings).</summary>
     public Dictionary<string, object> State { get; init; } = new();
+
+    /// <summary>
+    /// Typed failure and repair record. Absent while the installation is healthy;
+    /// gameplay data belongs here rather than in the generic <see cref="State"/> bag.
+    /// </summary>
+    public BuildingFailure? Failure { get; set; }
+}
+
+/// <summary>Persistent failure/repair state for one installation (M5).</summary>
+public sealed class BuildingFailure
+{
+    /// <summary>Stable failure cause id from the event registry.</summary>
+    public string Cause { get; set; } = string.Empty;
+
+    /// <summary>Damage severity in 0..1.</summary>
+    public double Severity { get; set; }
+
+    /// <summary>Game hour when the failure happened.</summary>
+    public double StartedGameHour { get; set; }
+
+    /// <summary>Game hour when repairs began, if any.</summary>
+    public double? RepairStartGameHour { get; set; }
+
+    /// <summary>Game hour when repairs finished, if any.</summary>
+    public double? RepairCompleteGameHour { get; set; }
 }
 
 public enum BuildingStatus

@@ -1,10 +1,10 @@
-# Save format (v3)
+# Save format (v4)
 
 The campaign save is a directory ("slot") containing one metadata file, one
 derived summary, and one JSON shard per region that has installations. The
 implementation is `Sim/Campaign/CampaignStore.cs` and
 `Sim/Campaign/CampaignSlotStore.cs`; this document is the contract. The current
-schema is **v3**; v1 and v2 saves are read and migrated in memory, never
+schema is **v4**; v1, v2 and v3 saves are read and migrated in memory, never
 overwritten on load.
 
 ## Layout
@@ -36,7 +36,7 @@ integer range).
 ```json
 {
   "format": "spm-campaign",
-  "version": 3,
+  "version": 4,
   "bodyKey": "moon",
   "fineResolution": 6,
   "regionResolution": 3,
@@ -52,14 +52,66 @@ integer range).
   "stockpile": { "metals": 220, "oxygen": 487.5 },
   "unlockedTechs": ["basic_metallurgy"],
   "visitedRegions": ["589971619905011711"],
-  "activeRegion": "589971619905011711"
+  "activeRegion": "589971619905011711",
+  "contracts": {
+    "active": [
+      {
+        "id": "9b6d0f8e-0000-4000-8000-000000000001",
+        "defId": "oxygen_delivery",
+        "status": "active",
+        "acceptedGameHour": 32.5,
+        "deadlineGameHour": 80.0,
+        "progress": { "oxygen": 120 },
+        "rewardClaimed": false
+      }
+    ],
+    "completed": [],
+    "failed": []
+  },
+  "events": {
+    "pending": [
+      {
+        "id": "c14a7d20-0000-4000-8000-000000000002",
+        "defId": "dust_storm",
+        "raisedGameHour": 40.0,
+        "targetRegion": "589971619905011711",
+        "choices": ["shelter", "continue"]
+      }
+    ],
+    "cooldownGameHour": 55.0,
+    "log": [
+      {
+        "gameHour": 40.0,
+        "defId": "dust_storm",
+        "choice": "shelter",
+        "summary": "Habitat secured"
+      }
+    ]
+  },
+  "rovers": [
+    {
+      "id": "6f2a1b90-0000-4000-8000-000000000003",
+      "name": "Athena",
+      "defId": "rover_mk1",
+      "status": "enroute",
+      "health": 100,
+      "speedKmh": 8,
+      "locationRegion": "589971619905011711",
+      "locationHex": "603482350201864191",
+      "destinationRegion": "592315495026958335",
+      "destinationHex": "604395630023950335",
+      "departureGameHour": 40.0,
+      "arrivalGameHour": 46.5,
+      "cargo": { "oxygen": 20 }
+    }
+  ]
 }
 ```
 
 | Field | Meaning |
 |---|---|
 | `format` | Always `spm-campaign` |
-| `version` | Schema version; currently `3` (v1 and v2 are accepted and migrated) |
+| `version` | Schema version; currently `4` (v1–v3 are accepted and migrated) |
 | `bodyKey`, `fineResolution`, `regionResolution`, `regionCount`, `generatedUtc` | **Bake fingerprint** — must equal the loaded manifest |
 | `createdUtc`, `updatedUtc` | Campaign timestamps (UTC, ISO 8601) |
 | `gameTimeHours` | Authoritative in-game clock in hours; advanced in 0.25 h steps by `CampaignState.Tick` |
@@ -69,9 +121,27 @@ integer range).
 | `unlockedTechs` | Technology ids available to `CampaignState.Preview`; empty at game start |
 | `visitedRegions` | Regions opened at least once (decimal H3 strings, sorted) |
 | `activeRegion` | Region to reopen on launch, or omitted |
+| `contracts` | Accepted/completed/failed contracts; each record carries a stable id, definition id, status, timestamps, progress counters and reward flag |
+| `events` | Pending choices, event cooldown and a bounded history (last 50 entries). Event definitions stay in static registries |
+| `rovers` | Campaign-wide rover fleet: identity, location, destination, travel times, health, speed and cargo. Stored here because rovers cross region shards |
 
 Null fields are omitted (`JsonIgnoreCondition.WhenWritingNull`). Property names
 are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
+
+### M5 state details
+
+- Contract and event `status` values are lowercase enum strings. An unknown
+  value falls back to `active`/`idle`; a record with no definition id is skipped
+  rather than guessed. A missing or invalid record id gets a fresh GUID.
+- `contracts.progress` keys are resource or counter ids defined by the contract
+  registry; the save carries only delivered amounts.
+- `events.pending[].choices` are the choice ids presented to the player. `log`
+  is trimmed to `CampaignDefaults.MaxEventLogEntries` (50) on load and save.
+- Rover `speedKmh` defaults to `CampaignDefaults.DefaultRoverSpeedKmh` (8),
+  resolving the old 8 vs 10 km/h drift. Travel timestamps are authoritative
+  game hours, not wall-clock times.
+- IDs in these blocks are stable strings; definition data, rewards and event
+  text live in static registries, not in the save.
 
 ### Migration from v1
 
@@ -88,10 +158,11 @@ changing the file and applies these defaults in memory:
   loads replay the same sequence.
 - `gameTimeHours`, `visitedRegions`, `activeRegion`, fingerprint: preserved.
 
-The next write (`SaveMeta`) stores v3. A v2 metadata file has the same fields as
-v3, so it is read unchanged and rewritten as v3 on the next save. These paths are
-covered by `CampaignStoreTests.Meta_MigratesV1SaveToCurrentDefaults` and the
-v3 round-trip tests.
+The next write (`SaveMeta`) stores v4. A v2 or v3 metadata file has the same
+core fields as v4, so it is read unchanged and rewritten as v4 on the next save.
+v3 files have no M5 blocks; contracts, events and rovers start empty. These paths
+are covered by `CampaignStoreTests.Meta_MigratesV1SaveToCurrentDefaults`,
+`Meta_MigratesV3SaveToV4Defaults` and the v4 round-trip tests.
 
 ## `slot.json`
 
@@ -138,9 +209,9 @@ from `campaign.json` and `regions/*.json`.
 one in `campaign.json`. Otherwise the store recounts the region shards and
 rewrites it. A corrupt or missing summary never blocks opening a slot.
 
-The summary is not part of the campaign schema: `campaign.json` is v3 (v1/v2 saves
-are migrated on load), an older runtime ignores `slot.json`, and a newer runtime
-rebuilds it from the campaign. Its own `spm-slot` version stays `1`; site
+The summary is not part of the campaign schema: `campaign.json` is v4 (v1/v2/v3
+saves are migrated on load), an older runtime ignores `slot.json`, and a newer
+runtime rebuilds it from the campaign. Its own `spm-slot` version stays `1`; site
 selection is an optional UI field. The M4.5 `color` overlay value is likewise
 additive UI state: when a valid imagery sidecar exists the game defaults to true
 colour for every slot, so saved overlay strings do not gate or migrate imagery.
@@ -155,7 +226,7 @@ makes a save incompatible.
 ```json
 {
   "format": "spm-campaign",
-  "version": 3,
+  "version": 4,
   "region": "589971619905011711",
   "sites": [
     {
@@ -172,7 +243,14 @@ makes a save incompatible.
           "statusReason": "",
           "storedResources": {},
           "constructionStartTime": 0.5,
-          "constructionCompleteTime": 18.5
+          "constructionCompleteTime": 18.5,
+          "failure": {
+            "cause": "dust_storm",
+            "severity": 0.4,
+            "startedGameHour": 40.0,
+            "repairStartGameHour": 44.0,
+            "repairCompleteGameHour": null
+          }
         },
         {
           "id": "0f43ceb5-505d-4140-9069-61df1204863a",
@@ -209,13 +287,14 @@ makes a save incompatible.
 | `storedResources` | Per-installation resource buffer |
 | `constructionStartTime`, `constructionCompleteTime` | Game hours when construction began and finished; the latter is omitted until complete |
 | `state` | Optional flat string/number/bool bag for future per-installation data |
+| `failure` | Optional typed M5 failure/repair record: `cause`, `severity` (0..1), `startedGameHour`, optional `repairStartGameHour` and `repairCompleteGameHour`; omitted while healthy |
 
-`statusReason`, `constructionCompleteTime` and `state` are omitted when
+`statusReason`, `constructionCompleteTime`, `state` and `failure` are omitted when
 null/empty. **The local footprint is never stored**: it is rebuilt from the
-definition and `localCenter` on load. v3 has no `buildings` or `centerHex` field;
-those only appear in legacy shards.
+definition and `localCenter` on load. v3/v4 shards have no `buildings` or
+`centerHex` field; those only appear in legacy shards.
 
-### v1/v2 → v3 shard migration
+### v1/v2 → v4 shard migration
 
 A legacy v1 or v2 shard holds a flat `buildings` array whose records use
 `centerHex` instead of `parentHex` / `localCenter`. `LoadRegion` converts each
@@ -224,7 +303,9 @@ distinct centre hex into one site with that centre's fine hex as `parentHex` and
 v1 records also receive the M1 defaults (`paused = false`, empty `statusReason`).
 The old no-overlap rule guarantees distinct centre hexes, so no conflict
 resolution is needed. Conversion is read-only until the next save, which writes
-v3. Tests cover v2 → v3, the v1 → v2 → v3 chain, and refusal of unknown versions.
+v4. A v3 shard already has the v4 site shape; it loads directly and simply has no
+`failure` records. Tests cover v2 → v4, the v1 → v2 → v4 chain, v3 migration and
+refusal of unknown versions.
 
 ## Invariants
 
@@ -242,10 +323,12 @@ v3. Tests cover v2 → v3, the v1 → v2 → v3 chain, and refusal of unknown ve
    next save of that region omits it. This is the same behaviour as v2.
 4. **Only primitive `state` values survive.** Strings, numbers and booleans are
    kept; objects/arrays are dropped with a warning.
-5. **Region index must match the file name**, otherwise the shard is rejected.
-6. **`slot.json` is never authoritative.** It only mirrors campaign metadata and
-   view state; deleting it must not lose an installation, a credit or a visited
-   region.
+5. **Failure/repair is typed.** M5 gameplay writes `failure`, not gameplay keys
+   inside the primitive `state` bag. Old shards without the field are healthy.
+6. **Region index must match the file name**, otherwise the shard is rejected.
+7. **`slot.json` is never authoritative.** It only mirrors campaign metadata and
+   view state; deleting it must not lose an installation, a credit, a contract, a
+   rover or a visited region.
 
 ## Atomic writes and backups
 
@@ -268,11 +351,12 @@ an empty file.
 | Slot has no `slot.json` | Rebuilt from `campaign.json` + region shards on the next list |
 | `slot.json` has a stale `updatedUtc` | Rebuilt; its cached counts are ignored |
 | `slot.json` is corrupt or has another format/version | Ignored and overwritten when the slot is listed |
-| Metadata invalid JSON / wrong format / version outside 1–3 | Listed as **unreadable**; opening is refused and the file is never overwritten |
+| Metadata invalid JSON / wrong format / version outside 1–4 | Listed as **unreadable**; opening is refused and the file is never overwritten |
 | Metadata version 1 | Migrated in memory with starting defaults; the file is unchanged until the next save |
-| Metadata version 2 | Same fields as v3; rewritten as v3 on the next save |
+| Metadata version 2 or 3 | Same core fields as v4; M5 blocks start empty and the file is rewritten as v4 on the next save |
 | Region shard version 1 or 2 | Converted to one site per legacy `centerHex` at local `(0,0)`; v1 also gets `paused = false` and empty `statusReason`; file unchanged until the next save |
-| Region shard version 3 | Read directly; local footprints rebuilt from definitions |
+| Region shard version 3 | Read directly; site shape is unchanged, `failure` is absent, footprints rebuilt from definitions |
+| Region shard version 4 | Read directly; typed failure records restored when present |
 | Fingerprint mismatch | Listed as **incompatible** with both fingerprints; opening is refused and the files are kept |
 | Opening a readable slot | Load metadata, then `slot.json` (or a recount), then shards on demand |
 | Missing region shard | Empty region (not an error) |
@@ -289,13 +373,16 @@ long pause in one region does not silently advance distant colonies.
 
 ## Compatibility policy
 
-- `version` is bounded: the runtime accepts `1`, `2` and `3`; `1` and `2` are
+- `version` is bounded: the runtime accepts `1` through `4`; older versions are
   migrated in memory and rewritten only on an explicit save. Unknown or future
   versions are refused, not guessed, and the file is never overwritten.
 - Any schema change requires: bump `Version`, add a migration path from every
   still-supported older version, add a `CampaignStoreTests` fixture for each
-  migration, and update this document. The v3 shard conversion must keep the
-  v1 → v2 chain working, including the bake fingerprint gate.
+  migration, and update this document. The v4 shard path keeps the v1 → v2 → v3
+  chain working, including the bake fingerprint gate.
+- A v4 save is deliberately unreadable by the v3 runtime: it refuses the future
+  version and never overwrites the file. M5 content must not be silently dropped
+  by an older build.
 - Unknown **fields** are tolerated by `System.Text.Json` (ignored), which allows
   additive changes in a future version only if old runtimes can safely ignore
   them. Do not rely on that for semantic changes.

@@ -170,6 +170,181 @@ public class CampaignStoreTests : IDisposable
     }
 
     [Fact]
+    public void Meta_MigratesV3SaveToV4Defaults()
+    {
+        var store = new CampaignStore(_root);
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(store.MetaPath, $$"""
+            {
+              "format": "spm-campaign",
+              "version": 3,
+              "bodyKey": "{{Fingerprint.BodyKey}}",
+              "fineResolution": {{Fingerprint.FineResolution}},
+              "regionResolution": {{Fingerprint.RegionResolution}},
+              "regionCount": {{Fingerprint.RegionCount}},
+              "generatedUtc": "{{Fingerprint.GeneratedUtc}}",
+              "createdUtc": "2026-11-15T10:32:08+00:00",
+              "updatedUtc": "2026-11-17T09:14:00+00:00",
+              "gameTimeHours": 32.5,
+              "credits": 9750000,
+              "sciencePoints": 125.5,
+              "rngSeed": 12345,
+              "rngState": 67890,
+              "stockpile": { "metals": 220 },
+              "unlockedTechs": ["basic_metallurgy"],
+              "visitedRegions": ["589971619905011711"],
+              "activeRegion": "589971619905011711"
+            }
+            """);
+
+        var loaded = store.LoadMeta(Fingerprint);
+
+        Assert.Equal(125.5, loaded.SciencePoints);
+        Assert.Equal(new[] { "basic_metallurgy" }, loaded.UnlockedTechs);
+        Assert.Empty(loaded.Contracts);
+        Assert.Empty(loaded.PendingEvents);
+        Assert.Empty(loaded.EventLog);
+        Assert.Null(loaded.EventCooldownGameHour);
+        Assert.Empty(loaded.Rovers);
+
+        store.SaveMeta(loaded, Fingerprint);
+        var json = File.ReadAllText(store.MetaPath);
+        Assert.Contains("\"version\": 4", json);
+        Assert.Contains("\"contracts\"", json);
+        Assert.Contains("\"events\"", json);
+        Assert.Contains("\"rovers\"", json);
+    }
+
+    [Fact]
+    public void Meta_RoundTripsM5State()
+    {
+        var store = new CampaignStore(_root);
+        var meta = new CampaignMeta();
+        var contractId = Guid.NewGuid().ToString("D");
+        var roverId = Guid.NewGuid().ToString("D");
+        var eventId = Guid.NewGuid().ToString("D");
+
+        var active = new CampaignContract
+        {
+            Id = contractId,
+            DefId = "oxygen_delivery",
+            AcceptedGameHour = 12.0,
+            DeadlineGameHour = 40.0,
+        };
+        active.Progress["oxygen"] = 120.0;
+        meta.Contracts.Add(active);
+        meta.Contracts.Add(new CampaignContract
+        {
+            DefId = "surface_survey",
+            Status = ContractStatus.Completed,
+            AcceptedGameHour = 1.0,
+            RewardClaimed = true,
+        });
+
+        meta.PendingEvents.Add(new PendingCampaignEvent
+        {
+            Id = eventId,
+            DefId = "dust_storm",
+            RaisedGameHour = 20.0,
+            TargetRegion = 589971619905011711,
+            Choices = { "shelter", "continue" },
+        });
+        meta.EventCooldownGameHour = 55.0;
+        for (var i = 0; i < CampaignDefaults.MaxEventLogEntries + 5; i++)
+        {
+            meta.AppendEventLog(new CampaignEventLogEntry
+            {
+                GameHour = i,
+                DefId = $"event_{i}",
+                Choice = i % 2 == 0 ? "shelter" : "continue",
+            });
+        }
+
+        var rover = new RoverState
+        {
+            Id = roverId,
+            Name = "Athena",
+            DefId = "rover_mk1",
+            Status = RoverStatus.Enroute,
+            Health = 80.0,
+            SpeedKmh = CampaignDefaults.DefaultRoverSpeedKmh,
+            LocationRegion = 589971619905011711,
+            LocationHex = 603482350201864191,
+            DestinationRegion = 592315495026958335,
+            DestinationHex = 604395630023950335,
+            DepartureGameHour = 20.0,
+            ArrivalGameHour = 26.5,
+        };
+        rover.Cargo["oxygen"] = 20.0;
+        meta.Rovers.Add(rover);
+
+        store.SaveMeta(meta, Fingerprint);
+        var loaded = store.LoadMeta(Fingerprint);
+
+        var loadedContract = loaded.Contracts.Single(item => item.Status == ContractStatus.Active);
+        Assert.Equal(contractId, loadedContract.Id);
+        Assert.Equal("oxygen_delivery", loadedContract.DefId);
+        Assert.Equal(40.0, loadedContract.DeadlineGameHour);
+        Assert.Equal(120.0, loadedContract.Progress["oxygen"]);
+        Assert.False(loadedContract.RewardClaimed);
+        Assert.Contains(loaded.Contracts, item => item.Status == ContractStatus.Completed && item.RewardClaimed);
+
+        var pending = Assert.Single(loaded.PendingEvents);
+        Assert.Equal(eventId, pending.Id);
+        Assert.Equal(20.0, pending.RaisedGameHour);
+        Assert.Equal(589971619905011711UL, pending.TargetRegion);
+        Assert.Equal(new[] { "shelter", "continue" }, pending.Choices);
+        Assert.Equal(55.0, loaded.EventCooldownGameHour);
+        Assert.Equal(CampaignDefaults.MaxEventLogEntries, loaded.EventLog.Count);
+        Assert.Equal("event_5", loaded.EventLog[0].DefId);
+
+        var loadedRover = Assert.Single(loaded.Rovers);
+        Assert.Equal(roverId, loadedRover.Id);
+        Assert.Equal("Athena", loadedRover.Name);
+        Assert.Equal(RoverStatus.Enroute, loadedRover.Status);
+        Assert.Equal(80.0, loadedRover.Health);
+        Assert.Equal(CampaignDefaults.DefaultRoverSpeedKmh, loadedRover.SpeedKmh);
+        Assert.Equal(589971619905011711UL, loadedRover.LocationRegion);
+        Assert.Equal(603482350201864191UL, loadedRover.LocationHex);
+        Assert.Equal(26.5, loadedRover.ArrivalGameHour);
+        Assert.Equal(20.0, loadedRover.Cargo["oxygen"]);
+    }
+
+    [Fact]
+    public void Meta_RejectsFutureVersionWithoutOverwriting()
+    {
+        var store = new CampaignStore(_root);
+        store.SaveMeta(new CampaignMeta(), Fingerprint);
+        var json = File.ReadAllText(store.MetaPath)
+            .Replace("\"version\": 4", "\"version\": 5", StringComparison.Ordinal);
+        File.WriteAllText(store.MetaPath, json);
+        var before = File.ReadAllBytes(store.MetaPath);
+
+        var error = Assert.Throws<InvalidDataException>(() => store.LoadMeta(Fingerprint));
+
+        Assert.Contains("not supported", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(store.MetaPath));
+    }
+
+    [Fact]
+    public void Meta_RejectsFingerprintMismatchWithV4State()
+    {
+        var store = new CampaignStore(_root);
+        var meta = new CampaignMeta();
+        meta.Contracts.Add(new CampaignContract { DefId = "oxygen_delivery" });
+        meta.Rovers.Add(new RoverState { DefId = "rover_mk1" });
+        store.SaveMeta(meta, Fingerprint);
+        var before = File.ReadAllBytes(store.MetaPath);
+
+        var error = Assert.Throws<InvalidDataException>(
+            () => store.LoadMeta(Fingerprint with { BodyKey = "mars" }));
+
+        Assert.Contains("loaded bake", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(store.MetaPath));
+        Assert.Empty(store.ListRegionIndices());
+    }
+
+    [Fact]
     public void Region_RoundTripsBuildings()
     {
         var store = new CampaignStore(_root);
@@ -215,6 +390,40 @@ public class CampaignStoreTests : IDisposable
         Assert.Equal(12.0, restored.State["fuel"]);
         Assert.Equal("idle", restored.State["mode"]);
         Assert.Equal(true, restored.State["sealed"]);
+    }
+
+    [Fact]
+    public void Region_RoundTripsBuildingFailure()
+    {
+        var store = new CampaignStore(_root);
+        var building = new BuildingInstance
+        {
+            DefId = "rtg_generator",
+            ParentHex = CenterHex,
+            LocalCenter = LocalGrid.Center,
+            LocalFootprint = new[] { LocalGrid.Center },
+            Status = BuildingStatus.Damaged,
+            Failure = new BuildingFailure
+            {
+                Cause = "dust_storm",
+                Severity = 0.4,
+                StartedGameHour = 40.0,
+                RepairStartGameHour = 44.0,
+            },
+        };
+
+        store.SaveRegion(123, new[] { building });
+        var loaded = store.LoadRegion(123);
+
+        Assert.Empty(loaded.Warnings);
+        var restored = Assert.Single(loaded.Buildings);
+        Assert.NotNull(restored.Failure);
+        Assert.Equal("dust_storm", restored.Failure.Cause);
+        Assert.Equal(0.4, restored.Failure.Severity);
+        Assert.Equal(40.0, restored.Failure.StartedGameHour);
+        Assert.Equal(44.0, restored.Failure.RepairStartGameHour);
+        Assert.Null(restored.Failure.RepairCompleteGameHour);
+        Assert.Contains("\"failure\"", File.ReadAllText(store.RegionPath(123)));
     }
 
     [Fact]
@@ -414,7 +623,7 @@ public class CampaignStoreTests : IDisposable
 
         store.SaveRegion(123, buildings);
         var json = File.ReadAllText(store.RegionPath(123));
-        Assert.Contains("\"version\": 3", json);
+        Assert.Contains("\"version\": 4", json);
         Assert.Contains("\"sites\"", json);
         Assert.Contains("\"localCenter\"", json);
         Assert.DoesNotContain("\"footprint\"", json);
@@ -557,7 +766,7 @@ public class CampaignStoreTests : IDisposable
         store.SaveRegion(123, loaded.Buildings);
         var upgraded = store.LoadRegion(123);
         Assert.Equal(2, upgraded.Buildings.Count);
-        Assert.Contains("\"version\": 3", File.ReadAllText(store.RegionPath(123)));
+        Assert.Contains("\"version\": 4", File.ReadAllText(store.RegionPath(123)));
     }
 
     [Fact]

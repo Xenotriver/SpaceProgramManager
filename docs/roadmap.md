@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M5 C0 save v4, **153 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -17,7 +17,8 @@ Anchor: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline te
 | Godot runtime | **Done** | Globe, region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause, search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
-| Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v3 with v1/v2 migration |
+| Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
+| M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | CI and performance gate | **Done (M4, extended M4.5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 11 headless Godot smokes, `--frame-budget=20` p95 gate |
@@ -300,6 +301,18 @@ Implemented:
 Scope: tech tree UI, contracts/missions, events, science points, rover logistics
 between regions, rover fleet state, failure/repair.
 
+- [x] **C0 — save/design gate (complete 2026-11-19).** Bumped `campaign.json` and
+  region shards to v4 while keeping v1–v3 readable and the bake fingerprint gate
+  intact. v4 adds contract progress, bounded events, a campaign-wide rover fleet
+  and typed per-installation failure/repair; `slot.json` stays version 1 and
+  rebuildable. Added D35–D37, including the 8 km/h rover default. Clean build,
+  153/153 C# tests, no push.
+- [ ] **C1 — tech tree UI.**
+- [ ] **C2 — rover logistics + fleet state** (AreaView decision point).
+- [ ] **C3 — contracts, missions, events and science rewards.**
+- [ ] **C4 — failure/repair loop.**
+- [ ] **C5 — docs, CI and full verification.**
+
 ### M6 — Hardware designer
 
 Unchanged from plan §6.2: engine designer, parameter → outcome model, families,
@@ -325,7 +338,7 @@ Not tied to a milestone; pull in when they start hurting.
 
 | # | Question | Status |
 |---|---|---|
-| 1 | Rover default speed: code uses **10 km/h**, plan §2.3 says testing default **8 km/h** | **Drift — decide in M5** (speed is a rover property) |
+| 1 | Rover default speed: code uses **10 km/h**, plan §2.3 says testing default **8 km/h** | **Decided in M5 C0 (D37):** 8 km/h default; `--speed` still overrides it |
 | 2 | Fine hexes per region: plan says ~2,400 (res 7), the bake uses **343** (res 6) | **Drift — plan text is stale; res 6 is the real choice** |
 | 3 | Multiple installations per hex (plan §2.5) vs no-overlap footprints | **Decided in M3:** one site per fine hex; overlap is checked only among local cells |
 | 4 | Are `RequiredTech` and `Cost` authoritative or advisory? | **Decided in M1:** authoritative; both enforced in `CampaignState.Preview`/`TryPlace` |

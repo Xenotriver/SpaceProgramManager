@@ -8,7 +8,7 @@ state is engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline tests passing**.
+Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M5 C0 save v4, **153 C# tests + 5 pipeline tests passing**.
 
 | Area | State |
 |---|---|
@@ -17,6 +17,7 @@ Snapshot: **2026-11-18**, M4.5 true-colour overlay, **148 C# tests + 5 pipeline 
 | Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, per-body building catalogues, sites, campaign, save store, slot catalogue |
 | Godot runtime | **Done** — main menu, slots, body selection, system map, globe, region/colony inspectors, site placement, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
+| M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
@@ -173,7 +174,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--active=<defId>` | Select the building definition to place; site view only |
 | `--place=<q>,<r>` | Place the active building at a local grid cell; repeat the flag for more installations; requires `--view=site` |
 | `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals |
-| `--speed=<km/h>` | Rover base speed (default `10`) |
+| `--speed=<km/h>` | Rover base speed (default `8`) |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera |
 | `--slot=<id>` | Open a slot under the save root directly |
 | `--continue` | Open the last-played slot directly |
@@ -208,9 +209,11 @@ Campaigns live under `user://saves/<slotId>/`:
 ```
 
 Writes are atomic and keep a `.bak`; unreadable shards are quarantined as
-`.corrupt` instead of being overwritten. The campaign schema is **v3**; v1 and v2
-saves are migrated in memory and upgraded only on the next save. Saving happens
-on every placement or removal, on pause, every 5 seconds, on `F5`, and on exit.
+`.corrupt` instead of being overwritten. The campaign schema is **v4**; v1–v3
+saves are migrated in memory and upgraded only on the next save. v4 adds
+contracts, events, rover fleet state and typed failure/repair records. Saving
+happens on every placement or removal, on pause, every 5 seconds, on `F5`, and
+on exit.
 See [`docs/save-format.md`](docs/save-format.md).
 
 ## Data pipeline

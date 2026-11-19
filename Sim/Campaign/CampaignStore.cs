@@ -22,8 +22,8 @@ public sealed class CampaignStore
     /// <summary>Format id written into every save file.</summary>
     public const string FormatId = "spm-campaign";
 
-    /// <summary>Current save schema version (v3 stores sites with local cells).</summary>
-    public const int Version = 3;
+    /// <summary>Current save schema version (v4 adds contracts, events and rovers).</summary>
+    public const int Version = 4;
 
     /// <summary>Oldest schema that can be read and migrated in place.</summary>
     public const int OldestSupportedVersion = 1;
@@ -119,6 +119,12 @@ public sealed class CampaignStore
                 .Select(HexString)
                 .ToList(),
             ActiveRegion = meta.ActiveRegionIndex is { } active ? HexString(active) : null,
+            Contracts = ToContractBlock(meta),
+            Events = ToEventBlock(meta),
+            Rovers = meta.Rovers
+                .OrderBy(rover => rover.Id, StringComparer.Ordinal)
+                .Select(ToDto)
+                .ToList(),
         };
 
         WriteAtomic(MetaPath, JsonSerializer.Serialize(dto, JsonOptions));
@@ -208,6 +214,7 @@ public sealed class CampaignStore
             meta.RngState = dto.RngState == 0 ? meta.RngSeed : dto.RngState;
         }
 
+        ApplyM5Blocks(dto, meta);
         return meta;
     }
 
@@ -454,16 +461,16 @@ public sealed class CampaignStore
         }
         else
         {
-            // A v3 shard must declare its sites explicitly. A missing `sites`
+            // A v3/v4 shard must declare its sites explicitly. A missing `sites`
             // field or a legacy `buildings` field means this file was not written
             // by the current schema. Loading it as an empty region would drop its
             // installations on the next save, so refuse it and let the caller
             // quarantine the shard instead of silently overwriting it.
             if (dto.Sites is null)
-                throw new InvalidDataException($"{path}: v3 shard is missing 'sites'.");
+                throw new InvalidDataException($"{path}: v3/v4 shard is missing 'sites'.");
 
             if (dto.Buildings is { Count: > 0 })
-                throw new InvalidDataException($"{path}: v3 shard contains legacy 'buildings'.");
+                throw new InvalidDataException($"{path}: v3/v4 shard contains legacy 'buildings'.");
 
             foreach (var site in dto.Sites)
             {
@@ -549,6 +556,7 @@ public sealed class CampaignStore
             ConstructionStartTime = stored.ConstructionStartTime,
             ConstructionCompleteTime = stored.ConstructionCompleteTime,
             State = state,
+            Failure = ToFailure(stored.Failure),
         };
     }
 
@@ -654,6 +662,250 @@ public sealed class CampaignStore
             ConstructionStartTime = building.ConstructionStartTime,
             ConstructionCompleteTime = building.ConstructionCompleteTime,
             State = state.Count > 0 ? state : null,
+            Failure = building.Failure is null ? null : new FailureDto
+            {
+                Cause = building.Failure.Cause,
+                Severity = building.Failure.Severity,
+                StartedGameHour = building.Failure.StartedGameHour,
+                RepairStartGameHour = building.Failure.RepairStartGameHour,
+                RepairCompleteGameHour = building.Failure.RepairCompleteGameHour,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Applies M5 state for every supported schema version. Older saves simply
+    /// have no blocks, so their campaign starts with empty contracts/events/rovers.
+    /// </summary>
+    private static void ApplyM5Blocks(CampaignDto dto, CampaignMeta meta)
+    {
+        meta.Contracts.Clear();
+        if (dto.Contracts is not null)
+        {
+            var stored = (dto.Contracts.Active ?? new List<ContractDto>())
+                .Concat(dto.Contracts.Completed ?? new List<ContractDto>())
+                .Concat(dto.Contracts.Failed ?? new List<ContractDto>());
+            foreach (var contract in stored)
+            {
+                if (contract is not null && ToContract(contract) is { } restored)
+                    meta.Contracts.Add(restored);
+            }
+        }
+
+        meta.PendingEvents.Clear();
+        meta.EventLog.Clear();
+        if (dto.Events is not null)
+        {
+            foreach (var pending in dto.Events.Pending ?? new List<PendingEventDto>())
+            {
+                if (pending is not null && ToPendingEvent(pending) is { } restored)
+                    meta.PendingEvents.Add(restored);
+            }
+
+            foreach (var entry in dto.Events.Log ?? new List<EventLogDto>())
+            {
+                if (entry is not null)
+                    meta.AppendEventLog(ToEventLogEntry(entry));
+            }
+
+            meta.EventCooldownGameHour = dto.Events.CooldownGameHour;
+        }
+        else
+        {
+            meta.EventCooldownGameHour = null;
+        }
+
+        meta.Rovers.Clear();
+        foreach (var rover in dto.Rovers ?? new List<RoverDto>())
+        {
+            if (rover is not null && ToRover(rover) is { } restored)
+                meta.Rovers.Add(restored);
+        }
+    }
+
+    private static ContractBlockDto ToContractBlock(CampaignMeta meta)
+    {
+        var block = new ContractBlockDto();
+        foreach (var contract in meta.Contracts.OrderBy(item => item.Id, StringComparer.Ordinal))
+        {
+            var dto = new ContractDto
+            {
+                Id = contract.Id,
+                DefId = contract.DefId,
+                Status = contract.Status.ToString().ToLowerInvariant(),
+                AcceptedGameHour = contract.AcceptedGameHour,
+                DeadlineGameHour = contract.DeadlineGameHour,
+                Progress = new Dictionary<string, double>(
+                    contract.Progress ?? new Dictionary<string, double>(StringComparer.Ordinal),
+                    StringComparer.Ordinal),
+                RewardClaimed = contract.RewardClaimed,
+            };
+
+            switch (contract.Status)
+            {
+                case ContractStatus.Completed:
+                    block.Completed.Add(dto);
+                    break;
+                case ContractStatus.Failed:
+                    block.Failed.Add(dto);
+                    break;
+                default:
+                    block.Active.Add(dto);
+                    break;
+            }
+        }
+
+        return block;
+    }
+
+    private static CampaignContract? ToContract(ContractDto stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored.DefId))
+            return null;
+
+        var id = Guid.TryParse(stored.Id, out var parsed) && parsed != Guid.Empty
+            ? parsed
+            : Guid.NewGuid();
+
+        return new CampaignContract
+        {
+            Id = id.ToString("D"),
+            DefId = stored.DefId,
+            Status = Enum.TryParse<ContractStatus>(stored.Status, ignoreCase: true, out var status)
+                ? status
+                : ContractStatus.Active,
+            AcceptedGameHour = stored.AcceptedGameHour,
+            DeadlineGameHour = stored.DeadlineGameHour,
+            Progress = new Dictionary<string, double>(
+                stored.Progress ?? new Dictionary<string, double>(StringComparer.Ordinal),
+                StringComparer.Ordinal),
+            RewardClaimed = stored.RewardClaimed,
+        };
+    }
+
+    private static EventBlockDto ToEventBlock(CampaignMeta meta) => new()
+    {
+        Pending = meta.PendingEvents
+            .OrderBy(item => item.Id, StringComparer.Ordinal)
+            .Select(ToDto)
+            .ToList(),
+        CooldownGameHour = meta.EventCooldownGameHour,
+        Log = meta.EventLog.Select(ToDto).ToList(),
+    };
+
+    private static PendingEventDto ToDto(PendingCampaignEvent pending) => new()
+    {
+        Id = pending.Id,
+        DefId = pending.DefId,
+        RaisedGameHour = pending.RaisedGameHour,
+        TargetRegion = HexString(pending.TargetRegion),
+        Choices = (pending.Choices ?? new List<string>()).ToList(),
+    };
+
+    private static PendingCampaignEvent? ToPendingEvent(PendingEventDto stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored.DefId))
+            return null;
+
+        var id = Guid.TryParse(stored.Id, out var parsed) && parsed != Guid.Empty
+            ? parsed
+            : Guid.NewGuid();
+
+        return new PendingCampaignEvent
+        {
+            Id = id.ToString("D"),
+            DefId = stored.DefId,
+            RaisedGameHour = stored.RaisedGameHour,
+            TargetRegion = TryParseHex(stored.TargetRegion, out var region) ? (ulong)region : null,
+            Choices = (stored.Choices ?? new List<string>())
+                .Where(choice => !string.IsNullOrWhiteSpace(choice))
+                .Distinct(StringComparer.Ordinal)
+                .ToList(),
+        };
+    }
+
+    private static EventLogDto ToDto(CampaignEventLogEntry entry) => new()
+    {
+        GameHour = entry.GameHour,
+        DefId = entry.DefId,
+        Choice = entry.Choice,
+        Summary = entry.Summary,
+    };
+
+    private static CampaignEventLogEntry ToEventLogEntry(EventLogDto stored) => new()
+    {
+        GameHour = stored.GameHour,
+        DefId = stored.DefId,
+        Choice = stored.Choice,
+        Summary = stored.Summary,
+    };
+
+    private static RoverDto ToDto(RoverState rover) => new()
+    {
+        Id = rover.Id,
+        Name = rover.Name,
+        DefId = rover.DefId,
+        Status = rover.Status.ToString().ToLowerInvariant(),
+        Health = rover.Health,
+        SpeedKmh = rover.SpeedKmh,
+        LocationRegion = HexString(rover.LocationRegion),
+        LocationHex = HexString(rover.LocationHex),
+        DestinationRegion = HexString(rover.DestinationRegion),
+        DestinationHex = HexString(rover.DestinationHex),
+        DepartureGameHour = rover.DepartureGameHour,
+        ArrivalGameHour = rover.ArrivalGameHour,
+        Cargo = new Dictionary<string, double>(
+            rover.Cargo ?? new Dictionary<string, double>(StringComparer.Ordinal),
+            StringComparer.Ordinal),
+    };
+
+    private static RoverState? ToRover(RoverDto stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored.DefId))
+            return null;
+
+        var id = Guid.TryParse(stored.Id, out var parsed) && parsed != Guid.Empty
+            ? parsed
+            : Guid.NewGuid();
+
+        return new RoverState
+        {
+            Id = id.ToString("D"),
+            Name = string.IsNullOrWhiteSpace(stored.Name) ? "Rover" : stored.Name,
+            DefId = stored.DefId,
+            Status = Enum.TryParse<RoverStatus>(stored.Status, ignoreCase: true, out var status)
+                ? status
+                : RoverStatus.Idle,
+            Health = double.IsFinite(stored.Health)
+                ? Math.Clamp(stored.Health, 0.0, 100.0)
+                : CampaignDefaults.DefaultRoverHealth,
+            SpeedKmh = double.IsFinite(stored.SpeedKmh) && stored.SpeedKmh > 0.0
+                ? stored.SpeedKmh
+                : CampaignDefaults.DefaultRoverSpeedKmh,
+            LocationRegion = TryParseHex(stored.LocationRegion, out var region) ? (ulong)region : null,
+            LocationHex = TryParseHex(stored.LocationHex, out var hex) ? (ulong)hex : null,
+            DestinationRegion = TryParseHex(stored.DestinationRegion, out var targetRegion) ? (ulong)targetRegion : null,
+            DestinationHex = TryParseHex(stored.DestinationHex, out var targetHex) ? (ulong)targetHex : null,
+            DepartureGameHour = stored.DepartureGameHour,
+            ArrivalGameHour = stored.ArrivalGameHour,
+            Cargo = new Dictionary<string, double>(
+                stored.Cargo ?? new Dictionary<string, double>(StringComparer.Ordinal),
+                StringComparer.Ordinal),
+        };
+    }
+
+    private static BuildingFailure? ToFailure(FailureDto? stored)
+    {
+        if (stored is null || string.IsNullOrWhiteSpace(stored.Cause))
+            return null;
+
+        return new BuildingFailure
+        {
+            Cause = stored.Cause,
+            Severity = double.IsFinite(stored.Severity) ? Math.Clamp(stored.Severity, 0.0, 1.0) : 0.0,
+            StartedGameHour = stored.StartedGameHour,
+            RepairStartGameHour = stored.RepairStartGameHour,
+            RepairCompleteGameHour = stored.RepairCompleteGameHour,
         };
     }
 
@@ -698,6 +950,8 @@ public sealed class CampaignStore
     };
 
     private static string HexString(ulong value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string? HexString(ulong? value) => value is { } index ? HexString(index) : null;
 
     private static string HexString(H3Index value) => HexString((ulong)value);
 
@@ -759,6 +1013,68 @@ public sealed class CampaignStore
         public Dictionary<string, double> Stockpile { get; set; } = new();
         public List<string> VisitedRegions { get; set; } = new();
         public string? ActiveRegion { get; set; }
+        public ContractBlockDto? Contracts { get; set; }
+        public EventBlockDto? Events { get; set; }
+        public List<RoverDto>? Rovers { get; set; }
+    }
+
+    private sealed class ContractBlockDto
+    {
+        public List<ContractDto> Active { get; set; } = new();
+        public List<ContractDto> Completed { get; set; } = new();
+        public List<ContractDto> Failed { get; set; } = new();
+    }
+
+    private sealed class ContractDto
+    {
+        public string Id { get; set; } = string.Empty;
+        public string DefId { get; set; } = string.Empty;
+        public string Status { get; set; } = "active";
+        public double AcceptedGameHour { get; set; }
+        public double? DeadlineGameHour { get; set; }
+        public Dictionary<string, double> Progress { get; set; } = new(StringComparer.Ordinal);
+        public bool RewardClaimed { get; set; }
+    }
+
+    private sealed class EventBlockDto
+    {
+        public List<PendingEventDto> Pending { get; set; } = new();
+        public double? CooldownGameHour { get; set; }
+        public List<EventLogDto> Log { get; set; } = new();
+    }
+
+    private sealed class PendingEventDto
+    {
+        public string Id { get; set; } = string.Empty;
+        public string DefId { get; set; } = string.Empty;
+        public double RaisedGameHour { get; set; }
+        public string? TargetRegion { get; set; }
+        public List<string> Choices { get; set; } = new();
+    }
+
+    private sealed class EventLogDto
+    {
+        public double GameHour { get; set; }
+        public string DefId { get; set; } = string.Empty;
+        public string? Choice { get; set; }
+        public string? Summary { get; set; }
+    }
+
+    private sealed class RoverDto
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = "Rover";
+        public string DefId { get; set; } = string.Empty;
+        public string Status { get; set; } = "idle";
+        public double Health { get; set; } = 100.0;
+        public double SpeedKmh { get; set; } = 8.0;
+        public string? LocationRegion { get; set; }
+        public string? LocationHex { get; set; }
+        public string? DestinationRegion { get; set; }
+        public string? DestinationHex { get; set; }
+        public double? DepartureGameHour { get; set; }
+        public double? ArrivalGameHour { get; set; }
+        public Dictionary<string, double> Cargo { get; set; } = new(StringComparer.Ordinal);
     }
 
     private sealed class RegionDto
@@ -793,6 +1109,16 @@ public sealed class CampaignStore
         public double ConstructionStartTime { get; set; }
         public double? ConstructionCompleteTime { get; set; }
         public Dictionary<string, object>? State { get; set; }
+        public FailureDto? Failure { get; set; }
+    }
+
+    private sealed class FailureDto
+    {
+        public string Cause { get; set; } = string.Empty;
+        public double Severity { get; set; }
+        public double StartedGameHour { get; set; }
+        public double? RepairStartGameHour { get; set; }
+        public double? RepairCompleteGameHour { get; set; }
     }
 
     private sealed class LegacyBuildingDto : BuildingFieldsDto

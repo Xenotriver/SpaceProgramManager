@@ -116,7 +116,7 @@ public partial class RegionView : Node2D
     public int RouteFrom => _routeFrom;
 
     /// <summary>Rover cruise speed used by the movement preview (km/h).</summary>
-    public double BaseSpeedKmh { get; set; } = 10.0;
+    public double BaseSpeedKmh { get; set; } = CampaignDefaults.DefaultRoverSpeedKmh;
 
     private readonly Dictionary<int, Vector2[]> _drawBuffers = new();
     private readonly Dictionary<int, Vector2[]> _closedBuffers = new();

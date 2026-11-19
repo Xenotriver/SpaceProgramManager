@@ -28,6 +28,15 @@ public static class CampaignDefaults
     /// <summary>Techs available from the first hour. The tree itself is M5.</summary>
     public static IReadOnlyCollection<string> StartingTechs { get; } = Array.Empty<string>();
 
+    /// <summary>Default rover speed; resolves the 8 vs 10 km/h plan drift in M5 C0.</summary>
+    public const double DefaultRoverSpeedKmh = 8.0;
+
+    /// <summary>Full-health default for a new rover.</summary>
+    public const double DefaultRoverHealth = 100.0;
+
+    /// <summary>Keeps the persisted event history bounded.</summary>
+    public const int MaxEventLogEntries = 50;
+
     /// <summary>
     /// Fills credits, stockpile and RNG state for a campaign that has no
     /// authoritative values yet. Existing values win, so this is safe to call on

@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 148` — 148 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 153` — 153 passed, 0 failed, 0 skipped on a machine with
 `data/moon` and `data/mars` present. Tests that need a real bake **skip** when it
 is absent — do not make them fail. Set `SPM_REQUIRE_DATA=1` to turn those skips
 into failures (intended for CI).
@@ -40,7 +40,7 @@ installs.
 | File | Tests | Covers |
 |---|---:|---|
 | `BuildingTests.cs` | 20 | Registry consistency, placement rejection paths, footprint shape, tech filtering, per-body catalogues, Mars biome restrictions, real-bake biome ids |
-| `CampaignStoreTests.cs` | 26 | Meta/shard round-trip, v1 meta + v1/v2 → v3 shard migration, v3 two-installation sites, fingerprint + cross-body + version + format rejection, backups, corrupt quarantine, missing-shard delete, unknown ids, state value filtering, site view state |
+| `CampaignStoreTests.cs` | 31 | Meta/shard round-trip, v1 meta + v1/v2/v3 → v4 migration, v4 contracts/events/rovers + typed failure round-trip, fingerprint + cross-body + version + format rejection, backups, corrupt quarantine, missing-shard delete, unknown ids, state value filtering, site view state |
 | `CampaignSlotTests.cs` | 16 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/cross-body/unreadable states, delete safety, view-state round-trip |
 | `CampaignTests.cs` | 16 | Site-scoped place/remove/clear, local preview footprint, two installations in one hex, independent sites, local overlap/clipping, install-from-save validation, visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
@@ -114,7 +114,7 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
 | `--place=<q>,<r>` | Place at a local grid cell. Repeat the flag for more installations; requires `--view=site`. |
 | `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals. |
-| `--speed=<km/h>` | Rover base speed (default `10`). |
+| `--speed=<km/h>` | Rover base speed (default `8`). |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera. |
 | `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
 | `--continue` | Open the last-played slot directly. |

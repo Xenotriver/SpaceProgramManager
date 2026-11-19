@@ -36,6 +36,21 @@ public sealed class CampaignMeta
     /// <summary>Technologies unlocked for this campaign. The tree UI is M5.</summary>
     public HashSet<string> UnlockedTechs { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Accepted, completed and failed contracts in one state list.</summary>
+    public List<CampaignContract> Contracts { get; } = new();
+
+    /// <summary>Events waiting for a player choice.</summary>
+    public List<PendingCampaignEvent> PendingEvents { get; } = new();
+
+    /// <summary>Bounded history of resolved events.</summary>
+    public List<CampaignEventLogEntry> EventLog { get; } = new();
+
+    /// <summary>Earliest game hour at which a new random event may be raised.</summary>
+    public double? EventCooldownGameHour { get; set; }
+
+    /// <summary>Campaign-wide rover fleet, including rovers between regions.</summary>
+    public List<RoverState> Rovers { get; } = new();
+
     /// <summary>Seed the campaign RNG was created with.</summary>
     public ulong RngSeed { get; set; }
 
@@ -47,6 +62,16 @@ public sealed class CampaignMeta
 
     /// <summary>Region that was open when the campaign was last saved, if any.</summary>
     public ulong? ActiveRegionIndex { get; set; }
+
+    /// <summary>Appends an event-history entry, trimming to the save cap.</summary>
+    public void AppendEventLog(CampaignEventLogEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        EventLog.Add(entry);
+        while (EventLog.Count > CampaignDefaults.MaxEventLogEntries)
+            EventLog.RemoveAt(0);
+    }
 
     /// <summary>Campaign creation timestamp (UTC).</summary>
     public DateTimeOffset CreatedUtc { get; init; } = DateTimeOffset.UtcNow;
