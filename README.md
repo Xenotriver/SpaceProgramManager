@@ -127,14 +127,16 @@ mouse for the same actions.
 | Hover | Outline a region and describe the rover or region under the cursor |
 | Left click a rover | Select it as the source of the next dispatch |
 | Left click a region | Open that region, or dispatch the selected rover to its centre |
-| `G` | Toggle faceted terrain-slope shading across the visible region tiles |
+| `Tab` | Toggle faceted terrain-slope shading across the visible region tiles |
+| `G` | Open the colony view for the centred region |
 | `R` | Open the fleet screen to buy rovers or choose a rover |
 | Esc | Clear the selected rover, then back to the globe |
 
 The experimental navigation order is **globe → area → region → site**: clicking a
 region on the globe or starting with `--region` lands in the area view; clicking a
-region there drills into the region view. `--view=region`, `--view=management`,
-`--view=site` and `--view=globe` still open those views directly.
+region there drills into the region view. `G` opens the colony view from either
+area or region view. `--view=region`, `--view=management`, `--view=site` and
+`--view=globe` still open those views directly.
 
 **Colony view (isometric)**
 
@@ -200,7 +202,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
 | `--overlay=biome\|terrain\|score\|buildings\|color` | Select the overlay; `color`, `colour`, `imagery` and `surface` are aliases, globe accepts `color`/`biome`, and area accepts `terrain` for slope shading |
-| `--slope` | Toggle area-scale terrain-slope shading (same action as `G` in the area view) |
+| `--slope` | Toggle area-scale terrain-slope shading (same action as `Tab` in the area view) |
 | `--rot=<degrees>` | Colony camera angle, quantised to the nearest 60° |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`) |
 | `--active=<defId>` | Select the building definition to place; site view only |

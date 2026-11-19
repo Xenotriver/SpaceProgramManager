@@ -330,10 +330,11 @@ between regions, rover fleet state, failure/repair.
   Clean build, 167/167 C# tests, no push.
   - **Experimental follow-up (2026-11-19): area-first navigation.** Globe clicks
     and `--region` now open `AreaView`; a region click there drills into the old
-    region view. `G`/`--slope` toggles faceted terrain-slope shading across the
-    seven visible tiles, with a smoothstep relief curve for readable contrast on
-    broad ramps. Explicit view flags still win. D40 records the test; it remains
-    reversible and no save contract changed.
+    region view. `G` opens colony view from both area and region; `Tab`/`--slope`
+    toggles faceted terrain-slope shading across the seven visible tiles, with a
+    smoothstep relief curve for readable contrast on broad ramps. Explicit view
+    flags still win. D40 records the test; it remains reversible and no save
+    contract changed.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**

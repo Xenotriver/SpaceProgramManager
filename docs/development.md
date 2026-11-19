@@ -110,7 +110,7 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
 | `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; area accepts `terrain` for slope shading; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
-| `--slope` | Toggle area-scale terrain-slope shading; same action as `G` in the area view. |
+| `--slope` | Toggle area-scale terrain-slope shading; same action as `Tab` in the area view. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
@@ -153,11 +153,11 @@ Notes:
 - `M` toggles the Solar System Map from any view; `A` opens the area view and `R`
   the fleet screen from any gameplay view. Globe clicks and `--region` open the
   area view by default; clicking a region there drills into the region view.
-  `G` enters the colony view from the region view, but toggles faceted
-  terrain-slope shading from the area view.
-- `Tab` toggles surface imagery/biome on the globe and cycles overlays in region
-  and colony views; `1`–`5` select an overlay directly. With a valid sidecar,
-  true colour is the default for every slot unless `--overlay` is passed.
+  `G` enters the colony view from both area and region view.
+- `Tab` toggles surface imagery/biome on the globe, toggles faceted terrain-slope
+  shading in the area view, and cycles overlays in region and colony views;
+  `1`–`5` select an overlay directly in region and colony views. With a valid
+  sidecar, true colour is the default for every slot unless `--overlay` is passed.
 - Screenshot and save scratch space for this repo:
   `C:\Users\xenot\AppData\Local\Temp\opencode\spm`.
 - `F12` writes `user://moon_overview.png`.

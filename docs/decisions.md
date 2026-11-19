@@ -797,8 +797,10 @@ No save-schema, fingerprint or tile-format change was needed.
 **Decision.** An experiment makes the multi-region area view the default drill-in
 from the globe: clicking a body region or starting with `--region` lands in
 `AreaView`, and clicking a region there opens the old single-region view. The
-intended hierarchy is planet → area → region → site. `G` in the area view toggles
-a faceted terrain-slope presentation over the visible region tiles, using shared
+intended hierarchy is planet → area → region → site. `G` opens the colony view
+from both area and region; from area it first loads the centred region because
+`ManagementView` requires a loaded `RegionView`. `Tab` in the area view toggles a
+faceted terrain-slope presentation over the visible region tiles, using shared
 corner-height averages and the same fixed light as the colony terrain; `--slope`
 and `--overlay=terrain` expose the same path to automation. Explicit
 `--view=region|management|site|globe` flags still win.

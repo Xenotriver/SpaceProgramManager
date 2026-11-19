@@ -39,9 +39,9 @@ public partial class Main : Node2D
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
     private const string AreaStatus =
-        "Wheel zoom · right-drag pan · click region to zoom in · G terrain slope · R fleet · M map · T tech · Esc globe";
+        "Wheel zoom · right-drag pan · click region to zoom in · G colony · Tab terrain slope · R fleet · M map · T tech · Esc globe";
     private const string AreaSlopeStatus =
-        "Area terrain slope · G biome colours · click region to zoom in · R fleet · M map · T tech · Esc globe";
+        "Area terrain slope · Tab biome colours · G colony · click region to zoom in · R fleet · M map · T tech · Esc globe";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -1152,6 +1152,12 @@ public partial class Main : Node2D
                 QueueRedraw();
                 break;
 
+            case Key.Tab when _mode == Mode.Area:
+                _areaView.ToggleSlope();
+                _status = AreaStatusText();
+                QueueRedraw();
+                break;
+
             case Key.Tab when _mode == Mode.Region:
                 _regionView.CycleViewMode();
                 break;
@@ -1181,9 +1187,8 @@ public partial class Main : Node2D
                 break;
 
             case Key.G when _mode == Mode.Area:
-                _areaView.ToggleSlope();
-                _status = AreaStatusText();
-                QueueRedraw();
+                ShowRegion(_areaView.CenterRegion);
+                ShowManagement();
                 break;
 
             case Key.A when !_shell.IsOpen:
@@ -1385,6 +1390,7 @@ public partial class Main : Node2D
 
     private void OnRegionSelected(ulong regionIndex, string biomeId, int hexCount)
     {
+        GD.Print($"globe region selected: {regionIndex} → area");
         ShowArea(regionIndex);
     }
 
