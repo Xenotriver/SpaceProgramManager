@@ -8,7 +8,7 @@ state is engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M5 C0 save v4, **153 C# tests + 5 pipeline tests passing**.
+Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4 and C1 tech tree, **160 C# tests + 5 pipeline tests passing**.
 
 | Area | State |
 |---|---|
@@ -18,11 +18,12 @@ Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M
 | Godot runtime | **Done** — main menu, slots, body selection, system map, globe, region/colony inspectors, site placement, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
+| Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
 | Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
-| CI and performance gate | **Done (M4, extended M4.5)** — synthetic tile + imagery bakes, 11 headless Godot smokes, 20 ms p95 frame budget |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 12 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -180,6 +181,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--continue` | Open the last-played slot directly |
 | `--menu` | Force the main menu (pair with `--shot` to capture it) |
 | `--map` | Open the Solar System Map after startup |
+| `--tech` | Open the tech tree after startup |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |

@@ -73,6 +73,42 @@ public sealed class CampaignState
     public bool IsTechUnlocked(string techId)
         => string.IsNullOrEmpty(techId) || Meta.UnlockedTechs.Contains(techId);
 
+    /// <summary>
+    /// Researches a tech immediately by spending accumulated science points.
+    /// This is the only gameplay path that charges for tech; <see cref="UnlockTech"/>
+    /// stays as the low-level marker used by code, tests and migrations.
+    /// </summary>
+    public TechPurchaseResult TryPurchaseTech(string techId)
+    {
+        if (!TechCatalogue.TryGet(techId, out var def) || def is null)
+            return new TechPurchaseResult(
+                TechPurchaseStatus.UnknownTech, $"unknown tech: {techId}");
+
+        if (IsTechUnlocked(techId))
+            return new TechPurchaseResult(
+                TechPurchaseStatus.AlreadyUnlocked, $"{def.DisplayName} already researched");
+
+        var missing = def.Prerequisites.Where(id => !IsTechUnlocked(id)).ToList();
+        if (missing.Count > 0)
+        {
+            return new TechPurchaseResult(
+                TechPurchaseStatus.PrerequisitesMissing,
+                $"requires tech: {string.Join(", ", missing)}");
+        }
+
+        if (Meta.SciencePoints + 1e-9 < def.ScienceCost)
+        {
+            return new TechPurchaseResult(
+                TechPurchaseStatus.InsufficientScience,
+                $"need {def.ScienceCost:0.#} science (have {Meta.SciencePoints:0.#})");
+        }
+
+        Meta.SciencePoints = Math.Max(0.0, Meta.SciencePoints - def.ScienceCost);
+        UnlockTech(techId);
+        return new TechPurchaseResult(
+            TechPurchaseStatus.Purchased, $"{def.DisplayName} researched");
+    }
+
     /// <summary>Scoring configuration used for placement validation.</summary>
     public SiteScorerConfig SiteConfig => _siteConfig;
 

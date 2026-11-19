@@ -227,7 +227,8 @@ projected cell centre within a radius, not polygon containment.
   `AverageDrawMs`), and `--redraw` forces continuous redraws for benchmarking.
 - `--frame-budget=<ms>` forces redraws, compares p95 frame time with the 20.00 ms
   limit and exits 0/1; `--frames` selects the measured-frame count (30–3600). CI
-  runs 11 smokes covering colour and biome across both bodies.
+  runs 12 smokes covering colour and biome across both bodies, the site view and
+  the tech screen.
 
 ## 8. Extension points
 
@@ -251,8 +252,10 @@ projected cell centre within a radius, not polygon containment.
 - Installations may share a fine hex only if their local footprints are disjoint
   inside its 37-cell site grid (plan §2.5, resolved in M3). H3-scale footprints
   are no longer used for placement.
-- `RequiredTech` and `Cost` are enforced at placement; the tech *selection* UI is
-  still M5, so `UnlockTech` is currently only reachable from code/tests.
+- `RequiredTech` and `Cost` are enforced at placement. M5 C1 adds the tech screen:
+  `TechCatalogue` holds static definitions and `CampaignState.TryPurchaseTech`
+  spends `sciencePoints` immediately to set an unlocked id. `UnlockTech` remains
+  the low-level marker used by code, tests and migration.
 - Building models are still procedural prisms. 3D assets and the fixed 2.5D art
   pipeline remain deferred (roadmap questions 11–12).
 - `Main.cs` owns world HUD/input, simulation clock, mode wiring and startup;

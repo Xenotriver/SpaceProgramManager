@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M5 C0 save v4, **153 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4 and C1 tech tree, **160 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -19,9 +19,10 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain and M5 
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
+| Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 11 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 12 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -307,7 +308,13 @@ between regions, rover fleet state, failure/repair.
   and typed per-installation failure/repair; `slot.json` stays version 1 and
   rebuildable. Added D35–D37, including the 8 km/h rover default. Clean build,
   153/153 C# tests, no push.
-- [ ] **C1 — tech tree UI.**
+- [x] **C1 — tech tree UI (complete 2026-11-19).** Added a static `TechCatalogue`
+  covering all seven existing `RequiredTech` ids, with costs, prerequisites and
+  unlock descriptions. `CampaignState.TryPurchaseTech` spends science points
+  immediately and refuses unknown, duplicate, locked or unaffordable techs. The
+  `T` screen (also in the pause menu and `--tech`) shows live state and saves on
+  success. No save schema change; D38 records the design. Clean build, 160/160
+  C# tests, no push.
 - [ ] **C2 — rover logistics + fleet state** (AreaView decision point).
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**

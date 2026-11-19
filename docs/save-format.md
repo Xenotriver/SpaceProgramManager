@@ -116,9 +116,9 @@ integer range).
 | `createdUtc`, `updatedUtc` | Campaign timestamps (UTC, ISO 8601) |
 | `gameTimeHours` | Authoritative in-game clock in hours; advanced in 0.25 h steps by `CampaignState.Tick` |
 | `credits`, `stockpile` | Authoritative treasury and global resources; charged at placement, consumed by maintenance and changed by production |
-| `sciencePoints` | Accumulated science from operational labs |
+| `sciencePoints` | Accumulated science from operational labs; spent immediately by `CampaignState.TryPurchaseTech` in M5 C1 |
 | `rngSeed`, `rngState` | SplitMix64 seed and opaque current state (unsigned JSON numbers); the state advances with each random draw and is restored exactly |
-| `unlockedTechs` | Technology ids available to `CampaignState.Preview`; empty at game start |
+| `unlockedTechs` | Technology ids available to `CampaignState.Preview`; empty at game start, extended by tech purchases |
 | `visitedRegions` | Regions opened at least once (decimal H3 strings, sorted) |
 | `activeRegion` | Region to reopen on launch, or omitted |
 | `contracts` | Accepted/completed/failed contracts; each record carries a stable id, definition id, status, timestamps, progress counters and reward flag |

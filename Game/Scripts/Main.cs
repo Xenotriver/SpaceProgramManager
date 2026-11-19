@@ -31,13 +31,13 @@ public partial class Main : Node2D
     private const int MaximumBenchmarkFrames = 3600;
 
     private const string GlobeStatus =
-        "Drag to rotate · wheel zoom · right-drag pan · Tab surface/biome · click a region · / search · M map · Esc pause";
+        "Drag to rotate · wheel zoom · right-drag pan · Tab surface/biome · click a region · / search · M map · T tech · Esc pause";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-5 mode · click hex · Enter site · G colony · M map · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-5 mode · click hex · Enter site · G colony · M map · T tech · Esc back";
     private const string ManagementStatus =
-        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-5 overlay · Tab cycle · [ ] relief · Enter site · M map · Esc back";
+        "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-5 overlay · Tab cycle · [ ] relief · Enter site · M map · T tech · Esc back";
     private const string SiteStatus =
-        "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · Esc back";
+        "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -54,6 +54,8 @@ public partial class Main : Node2D
     private BodyWorld _world = null!;
     private SurfaceImagery? _imagery;
     private BuildingRegistry _registry = null!;
+    private IReadOnlyDictionary<string, string> _buildingNames =
+        new Dictionary<string, string>(StringComparer.Ordinal);
     private CampaignState _campaign = null!;
     private CampaignService _campaignService = null!;
     private MoonGlobe _globe = null!;
@@ -163,6 +165,10 @@ public partial class Main : Node2D
         _regionView.BaseSpeedKmh = FloatArgument("--speed", (float)CampaignDefaults.DefaultRoverSpeedKmh);
 
         _registry = BuildingCatalogue.RegistryFor(_world.BodyKey);
+        _buildingNames = _registry.All.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.DisplayName,
+            StringComparer.Ordinal);
 
         _managementView = new ManagementView { Visible = false };
         _managementView.SetImagery(_imagery);
@@ -188,6 +194,7 @@ public partial class Main : Node2D
         };
         AddChild(_shell);
         _shell.Command += OnShellCommand;
+        _shell.TechViewProvider = CurrentTechView;
 
         GD.Print($"{KnownBodies.DisplayName(_world.BodyKey)} loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
@@ -256,6 +263,9 @@ public partial class Main : Node2D
 
         if (HasArgument("--map"))
             _shell.ToggleSystemMap();
+
+        if (HasArgument("--tech"))
+            _shell.OpenTechTree();
 
         var shotPath = FindShotPath();
         if (shotPath is not null)
@@ -396,6 +406,13 @@ public partial class Main : Node2D
         QueueRedraw();
     }
 
+    private ShellOverlay.TechTreeView CurrentTechView()
+        => !_started || _campaign is null
+            ? new ShellOverlay.TechTreeView(
+                0.0, new HashSet<string>(StringComparer.Ordinal), _buildingNames)
+            : new ShellOverlay.TechTreeView(
+                _campaign.Meta.SciencePoints, _campaign.Meta.UnlockedTechs, _buildingNames);
+
     private void OnShellCommand(ShellCommand command, string? payload)
     {
         switch (command)
@@ -468,6 +485,20 @@ public partial class Main : Node2D
 
             case ShellCommand.SwitchBody:
                 SwitchBody(payload ?? KnownBodies.Moon);
+                return;
+
+            case ShellCommand.UnlockTech:
+                if (payload is null || _campaign is null)
+                    return;
+
+                var purchase = _campaign.TryPurchaseTech(payload);
+                if (purchase.Success)
+                {
+                    _campaignService.SetViewState(CaptureView());
+                    _campaignService.SaveSimulation();
+                }
+
+                _shell.PushToast(purchase.Message, error: !purchase.Success);
                 return;
 
             case ShellCommand.OpenSaveFolder:
@@ -977,6 +1008,10 @@ public partial class Main : Node2D
 
             case Key.M:
                 _shell.ToggleSystemMap();
+                break;
+
+            case Key.T when !_shell.IsOpen:
+                _shell.OpenTechTree();
                 break;
 
             case Key.G when _mode == Mode.Region:

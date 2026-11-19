@@ -107,3 +107,6 @@ jobs:
           run_smoke moon moon-site --view=site --region=589971619905011711 --hex=0
           run_smoke mars mars-globe-biome --view=globe --overlay=biome
           run_smoke mars mars-region-biome --view=region --region=589971619905011711 --overlay=biome
+
+          # M5 C1 tech screen.
+          run_smoke moon moon-tech --tech

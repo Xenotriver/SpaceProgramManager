@@ -731,6 +731,34 @@ exists, so old fleets do not silently change.
 
 ---
 
+## D38 — Static tech catalogue with immediate science purchases
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** `Sim/Campaign/TechCatalogue.cs` holds the seven tech ids already
+referenced by `BuildingDef.RequiredTech`, each with a display name, tier,
+science cost, prerequisites and the building ids it unlocks. Definitions are
+static; the v4 save continues to store only `sciencePoints` and `unlockedTechs`.
+`CampaignState.TryPurchaseTech` spends science immediately, checks prerequisites
+and refuses unknown/duplicate/unaffordable techs. The `T` screen in
+`ShellOverlay` renders live state and saves the campaign after a successful
+purchase; `--tech` opens it for automation.
+
+**Why.** C0 deliberately rejected timed research and a new save field, so C1
+needed the smallest rule set that makes the existing `RequiredTech` gates
+reachable from gameplay. A static catalogue is testable in `Sim`, keeps all
+content in one place, and lets a test prove that no building can require an
+unresearchable tech. The row-based immediate-mode screen matches the existing
+menu/pause UI instead of introducing a new widget hierarchy.
+
+**Cost.** Tech costs (40–150 science) and the three-tier prerequisite graph are
+new design numbers, not derived from the original design docs; they are easy to
+tune in one file. Saves that already contain an unlocked id outside the catalogue
+keep working — placement still honours it — but the screen does not display it.
+No schema, fingerprint or tile-format change was needed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -739,4 +767,5 @@ hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
-D33–D34, and the M5 C0 save contract, typed failures and rover speed by D35–D37.
+D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, and
+the M5 C1 tech catalogue and purchase rule by D38.

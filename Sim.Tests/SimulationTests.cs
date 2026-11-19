@@ -168,6 +168,77 @@ public class SimulationTests
     }
 
     [Fact]
+    public void TechPurchase_SpendsScienceAndUnlocksTech()
+    {
+        using var fixture = new Fixture();
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        campaign.Meta.SciencePoints = 100.0;
+
+        var result = campaign.TryPurchaseTech("nuclear_power");
+
+        Assert.Equal(TechPurchaseStatus.Purchased, result.Status);
+        Assert.True(result.Success);
+        Assert.Equal(60.0, campaign.Meta.SciencePoints);
+        Assert.True(campaign.IsTechUnlocked("nuclear_power"));
+        Assert.Contains("Nuclear Power", result.Message);
+    }
+
+    [Fact]
+    public void TechPurchase_RefusesUnknownAndDuplicateTechs()
+    {
+        using var fixture = new Fixture();
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        campaign.Meta.SciencePoints = 500.0;
+
+        var unknown = campaign.TryPurchaseTech("not_a_tech");
+        Assert.Equal(TechPurchaseStatus.UnknownTech, unknown.Status);
+        Assert.Equal(500.0, campaign.Meta.SciencePoints);
+
+        Assert.True(campaign.TryPurchaseTech("nuclear_power").Success);
+        var duplicate = campaign.TryPurchaseTech("nuclear_power");
+        Assert.Equal(TechPurchaseStatus.AlreadyUnlocked, duplicate.Status);
+        Assert.Equal(460.0, campaign.Meta.SciencePoints);
+    }
+
+    [Fact]
+    public void TechPurchase_RequiresPrerequisitesBeforeSpendingScience()
+    {
+        using var fixture = new Fixture();
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        campaign.Meta.SciencePoints = 500.0;
+
+        var locked = campaign.TryPurchaseTech("deep_space_comms");
+        Assert.Equal(TechPurchaseStatus.PrerequisitesMissing, locked.Status);
+        Assert.Contains("radio_astronomy", locked.Message);
+        Assert.Equal(500.0, campaign.Meta.SciencePoints);
+        Assert.False(campaign.IsTechUnlocked("deep_space_comms"));
+
+        Assert.True(campaign.TryPurchaseTech("nuclear_power").Success);
+        Assert.True(campaign.TryPurchaseTech("radio_astronomy").Success);
+        Assert.True(campaign.TryPurchaseTech("deep_space_comms").Success);
+        Assert.Equal(190.0, campaign.Meta.SciencePoints);
+    }
+
+    [Fact]
+    public void TechPurchase_RefusesInsufficientScienceWithoutChangingState()
+    {
+        using var fixture = new Fixture();
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        campaign.Meta.SciencePoints = 39.5;
+
+        var result = campaign.TryPurchaseTech("nuclear_power");
+
+        Assert.Equal(TechPurchaseStatus.InsufficientScience, result.Status);
+        Assert.Contains("40", result.Message);
+        Assert.Equal(39.5, campaign.Meta.SciencePoints);
+        Assert.False(campaign.IsTechUnlocked("nuclear_power"));
+    }
+
+    [Fact]
     public void SameSeedAndTickSequence_ProducesSameState()
     {
         using var fixture = new Fixture();

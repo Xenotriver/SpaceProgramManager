@@ -23,6 +23,7 @@ public enum ShellCommand
     Speed2,
     Speed4,
     SwitchBody,
+    UnlockTech,
 }
 
 /// <summary>
@@ -42,6 +43,7 @@ public partial class ShellOverlay : Node2D
         ConfirmDelete,
         Search,
         SystemMap,
+        TechTree,
     }
 
     private const float RowHeight = 46f;
@@ -127,6 +129,21 @@ public partial class ShellOverlay : Node2D
     /// <summary>True while the slot list is showing (used to refresh it).</summary>
     public bool IsShowingSlots => _screen == Screen.Slots;
 
+    /// <summary>Live campaign values rendered by the tech screen.</summary>
+    public sealed record TechTreeView(
+        double SciencePoints,
+        IReadOnlySet<string> UnlockedTechs,
+        IReadOnlyDictionary<string, string> BuildingNames);
+
+    /// <summary>Supplies tech state on every draw; the shell owns no game state.</summary>
+    public Func<TechTreeView>? TechViewProvider { get; set; }
+
+    private TechTreeView CurrentTechView() => TechViewProvider?.Invoke()
+        ?? new TechTreeView(
+            0.0,
+            new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
     /// <summary>Current simulation multiplier shown by the pause-screen buttons.</summary>
     public int TimeSpeed { get; private set; }
 
@@ -187,6 +204,21 @@ public partial class ShellOverlay : Node2D
         _screen = Screen.SystemMap;
         var current = Array.FindIndex(MapBodies, body => body.Key == BodyKey);
         _selected = current >= 0 ? current : 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the tech tree from gameplay or the <c>--tech</c> flag.</summary>
+    public void OpenTechTree()
+    {
+        if (_screen == Screen.TechTree)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.TechTree;
+        _selected = 0;
         QueueRedraw();
     }
 
@@ -507,6 +539,10 @@ public partial class ShellOverlay : Node2D
                 Close();
                 return;
 
+            case Key.T when _screen == Screen.TechTree:
+                Back();
+                return;
+
             case Key.Enter or Key.KpEnter or Key.Space:
                 ActivateSelected();
                 return;
@@ -604,6 +640,7 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.MainMenu:
             case ShellCommand.Quit:
             case ShellCommand.SwitchBody:
+            case ShellCommand.UnlockTech:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -633,6 +670,13 @@ public partial class ShellOverlay : Node2D
             case "screen:settings":
                 _returnScreen = _screen;
                 _screen = Screen.Settings;
+                _selected = 0;
+                QueueRedraw();
+                break;
+
+            case "screen:tech":
+                _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
+                _screen = Screen.TechTree;
                 _selected = 0;
                 QueueRedraw();
                 break;
@@ -669,6 +713,10 @@ public partial class ShellOverlay : Node2D
 
             case Screen.Search:
                 _search = string.Empty;
+                _screen = _returnScreen;
+                break;
+
+            case Screen.TechTree:
                 _screen = _returnScreen;
                 break;
 
@@ -776,7 +824,7 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · M system map · G colony · Home active region", null,
+                    "F5 save · Esc pause/back · / search · M system map · T tech tree · G colony · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -788,6 +836,8 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Resume", null, "Esc", true, ShellCommand.None, "close"));
                 specs.Add(new RowSpec("Save now", "Campaign is also autosaved on every change", "F5",
                     true, ShellCommand.SaveNow, null));
+                specs.Add(new RowSpec("Tech tree", "Spend science points on new technology", "T",
+                    true, ShellCommand.None, "screen:tech"));
                 specs.Add(new RowSpec("Load campaign", "Switch slot and reload the scene", null,
                     true, ShellCommand.None, "screen:slots"));
                 specs.Add(new RowSpec("Settings", null, null, true, ShellCommand.None, "screen:settings"));
@@ -830,6 +880,49 @@ public partial class ShellOverlay : Node2D
                         body.Key,
                         false,
                         $"{body.Name} has no baked terrain yet"));
+                }
+                break;
+
+            case Screen.TechTree:
+                var techView = CurrentTechView();
+                title = "TECH TREE";
+                subtitle = $"Science available: {techView.SciencePoints:0.#} · research is immediate";
+                hint = "↑↓ select · Enter research · T/Esc close";
+                foreach (var tech in TechCatalogue.All)
+                {
+                    var unlocked = techView.UnlockedTechs.Contains(tech.Id);
+                    var missing = tech.Prerequisites
+                        .Where(id => !techView.UnlockedTechs.Contains(id))
+                        .ToList();
+                    var ready = techView.SciencePoints + 1e-9 >= tech.ScienceCost;
+
+                    string right;
+                    string? reason;
+                    if (unlocked)
+                    {
+                        right = "researched";
+                        reason = $"{tech.DisplayName} is already researched";
+                    }
+                    else if (missing.Count > 0)
+                    {
+                        right = $"needs {string.Join(", ", MissingTechNames(missing))}";
+                        reason = right;
+                    }
+                    else
+                    {
+                        right = $"{tech.ScienceCost:0.#} science";
+                        reason = $"need {tech.ScienceCost:0.#} science";
+                    }
+
+                    specs.Add(new RowSpec(
+                        tech.DisplayName,
+                        TechDetail(tech, techView),
+                        right,
+                        !unlocked && missing.Count == 0 && ready,
+                        ShellCommand.UnlockTech,
+                        tech.Id,
+                        false,
+                        reason));
                 }
                 break;
 
@@ -956,6 +1049,22 @@ public partial class ShellOverlay : Node2D
             y -= 30f;
         }
     }
+
+    private static string TechDetail(TechDefinition tech, TechTreeView view)
+    {
+        var buildings = tech.UnlockedBuildingIds
+            .Select(id => view.BuildingNames.TryGetValue(id, out var name) ? name : id)
+            .ToList();
+        var unlocks = buildings.Count == 0
+            ? "no direct unlocks"
+            : $"unlocks {string.Join(", ", buildings)}";
+        return $"tier {tech.Tier} · {tech.Description} · {unlocks}";
+    }
+
+    private static IEnumerable<string> MissingTechNames(IEnumerable<string> ids)
+        => ids.Select(id => TechCatalogue.TryGet(id, out var def) && def is not null
+            ? def.DisplayName
+            : id);
 
     private string SaveRootLine()
         => ProjectSettings.GlobalizePath(SaveRootLabel);

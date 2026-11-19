@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 153` — 153 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 160` — 160 passed, 0 failed, 0 skipped on a machine with
 `data/moon` and `data/mars` present. Tests that need a real bake **skip** when it
 is absent — do not make them fail. Set `SPM_REQUIRE_DATA=1` to turn those skips
 into failures (intended for CI).
@@ -50,8 +50,9 @@ installs.
 | `LocalGridTests.cs` | 7 | 37-cell disk, centre-first order, boundary rejection, axial distance, local footprint sizes and ring-3 clipping |
 | `MovementModelTests.cs` | 6 | Uphill/downhill multipliers, crater penalties, non-stacking rule |
 | `RoutePlannerTests.cs` | 6 | Cheapest-time path, crater on destination, unreachable goal, empty route, leg totals |
-| `SimulationTests.cs` | 8 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, deterministic replay, 5-neighbour pentagon |
+| `SimulationTests.cs` | 12 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, science-point purchases, deterministic replay, 5-neighbour pentagon |
 | `SiteScoringTests.cs` | 6 | Composite factors, viability threshold, weight presets, resource deposit, config defaults |
+| `TechCatalogueTests.cs` | 3 | Tech ids/prerequisites/unlocks, coverage of every building tech requirement, deterministic display order |
 | `WorldLoaderTests.cs` | 18 | Data-root resolution, manifest + tile-header validation, synthetic bake (343 + 286), real Moon and Mars bakes, sampled Mars empty-hex elevation |
 
 ## 3. Run the game
@@ -120,6 +121,7 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--continue` | Open the last-played slot directly. |
 | `--menu` | Force the main menu even with other arguments (useful with `--shot`). |
 | `--map` | Open the Solar System Map after startup. |
+| `--tech` | Open the tech tree after startup. |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign. |
 | `--nosave` | Disable persistence for this run. |
@@ -168,8 +170,8 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-11 smokes: colour and biome for globe/region, colour for colony on both bodies,
-plus both globes and the unchanged Moon site view.
+12 smokes: colour and biome for globe/region, colour for colony on both bodies,
+plus both globes, the unchanged Moon site view and the tech tree screen.
 
 ## 5. Data pipeline
 
