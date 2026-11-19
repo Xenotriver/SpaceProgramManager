@@ -1,5 +1,7 @@
 # Space Program Manager
 
+## Per aspera ad astra, infinitum
+
 A space-agency management game built in **Godot 4.7 (.NET / C#)**. Real Solar
 System bodies are baked offline into an **H3** hexagonal grid; the runtime renders
 a globe, a multi-region **area view** for situational awareness and rover logistics,
