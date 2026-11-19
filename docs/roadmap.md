@@ -24,7 +24,7 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Area-first navigation | **Experimental** | Globe click/`--region` opens area; `G` toggles flat/isometric area; five overlays area-wide; D40 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 16 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 21 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -337,6 +337,10 @@ between regions, rover fleet state, failure/repair.
     terrain. `Q`/`E` orbit and `[`/`]` adjust relief; `--projection`, `--rot` and
     `--relief` expose the same paths to automation. Explicit view flags still win.
     D40 records the test; it remains reversible and no save contract changed.
+    The centred region's yellow outline is gone and the hover outline is a subtle
+    shade rather than a highlight. **Deferred, not implemented today:** selecting
+    a region should make it the centre and load a new area around it instead of
+    opening the single-region view; D40 records that intent.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**

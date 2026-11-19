@@ -31,7 +31,7 @@ public enum AreaProjectionMode
 ///
 /// This is the M5 AreaView decision: cross-region logistics needs a scale between
 /// the globe and one region, but it deliberately loads only seven region tiles.
-/// Hovering outlines the whole region without hiding the terrain grid.
+/// Hovering draws a subdued shade around the whole region without hiding the terrain grid.
 /// </summary>
 public partial class AreaView : Node2D
 {
@@ -66,8 +66,7 @@ public partial class AreaView : Node2D
     }
 
     private static readonly Color BorderColor = new(0f, 0f, 0f, 0.28f);
-    private static readonly Color ActiveColor = new(1f, 0.92f, 0.45f, 0.95f);
-    private static readonly Color HoverColor = new(1f, 1f, 1f, 0.9f);
+    private static readonly Color HoverShade = new(0.06f, 0.08f, 0.12f, 0.42f);
     private static readonly Color RouteColor = new(0.35f, 0.85f, 1f, 0.95f);
     private static readonly Color RoverColor = new(1f, 0.62f, 0.28f, 1f);
     private static readonly Color SelectedColor = new(0.35f, 1f, 0.62f, 1f);
@@ -728,15 +727,11 @@ public partial class AreaView : Node2D
 
         DrawMultiline(grid, BorderColor, 1f, false);
 
-        if (_areaByIndex.TryGetValue(_centerRegion, out var active)
-            && borders.TryGetValue(active.Index, out var activeBorder))
-            DrawMultiline(activeBorder, ActiveColor, 2.5f, false);
-
         if (_hoverRegionIndex >= 0 && _hoverRegionIndex < _areas.Count)
         {
             var hovered = _areas[_hoverRegionIndex];
             if (borders.TryGetValue(hovered.Index, out var hoverBorder))
-                DrawMultiline(hoverBorder, HoverColor, 2f, false);
+                DrawMultiline(hoverBorder, HoverShade, 1.5f, false);
         }
 
         DrawRoverTracks();

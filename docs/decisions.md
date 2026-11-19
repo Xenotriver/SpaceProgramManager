@@ -827,6 +827,14 @@ is retained for readable slope contrast, and all palettes come from the existing
 `RegionPalettes` helpers. No save-schema, fingerprint or tile-format change was
 needed. The experiment stays experimental until visual review.
 
+**Deferred, not implemented.** Selecting a region in `AreaView` should make that
+region the centre and load a new area around it. Today a region click still opens
+the single-region view, and a rover click still dispatches when a rover is
+selected; this note records the intended default for a later pass without
+changing behaviour now. The centred region's yellow outline has been removed and
+the hover outline is now a subdued dark shade, so neither marking reads as a
+highlight.
+
 ---
 
 ## Open decisions

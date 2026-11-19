@@ -124,7 +124,7 @@ mouse for the same actions.
 | Input | Action |
 |---|---|
 | Wheel / right drag | Zoom / pan |
-| Hover | Outline a region and describe the rover or region under the cursor |
+| Hover | Shade a region outline and describe the rover or region under the cursor |
 | Left click a rover | Select it as the source of the next dispatch |
 | Left click a region | Open that region, or dispatch the selected rover to its centre |
 | `G` | Toggle flat tangent-plane map ↔ isometric seven-region diorama |
@@ -142,6 +142,10 @@ presentation renders all seven tiles as one faceted slab with the same five
 overlays as region and colony, normalised across the whole area.
 `--view=region`, `--view=management`, `--view=site` and `--view=globe` still open
 those views directly.
+
+**Deferred, not implemented today:** selecting a region in the area view should
+make it the centred region and load a new area around it, rather than opening the
+single-region view. D40 records the intent; current behaviour is unchanged.
 
 **Colony view (isometric)**
 
