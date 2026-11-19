@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree and C2 rover logistics, **167 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics and experimental area-first navigation, **167 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -21,17 +21,19 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
 | Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
+| Area-first navigation | **Experimental** | Globe click/`--region` opens area; `G`/`--slope` toggles area-scale slope shading; D40 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 15 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 16 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
 
 The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
-an H3 index, open a region, inspect hexes across five overlays, plan a rover route,
-buy rovers from a finished garage, watch them cross regions in the area view,
+an H3 index, open the area around a region by default, drill into the region view,
+inspect hexes across five overlays, plan a rover route, buy rovers from a finished
+garage, watch them cross regions in the area view, toggle area-scale slope shading,
 press `Enter` to open a fine hex as a site, place several installations on its
 37-cell local grid, and have all of it persist across launches against a
 fingerprinted bake. The player can start on Moon or Mars directly with `--body`
@@ -326,6 +328,12 @@ between regions, rover fleet state, failure/repair.
   screen buys/dispatches with live garage status. Cargo stays persisted/displayed
   only. No save-schema, fingerprint or tile-format change; D39 records the design.
   Clean build, 167/167 C# tests, no push.
+  - **Experimental follow-up (2026-11-19): area-first navigation.** Globe clicks
+    and `--region` now open `AreaView`; a region click there drills into the old
+    region view. `G`/`--slope` toggles faceted terrain-slope shading across the
+    seven visible tiles, with a smoothstep relief curve for readable contrast on
+    broad ramps. Explicit view flags still win. D40 records the test; it remains
+    reversible and no save contract changed.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**

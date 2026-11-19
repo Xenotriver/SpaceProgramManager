@@ -2,10 +2,10 @@
 
 A space-agency management game built in **Godot 4.7 (.NET / C#)**. Real Solar
 System bodies are baked offline into an **H3** hexagonal grid; the runtime renders
-a globe, a per-region hex map, a multi-region **area view** for rover logistics,
-a region-scale isometric colony view, and a close-up per-hex **site view** where
-installations are placed on a local grid. Campaign state is engine-free and saved
-as JSON. Moon and Mars are playable.
+a globe, a multi-region **area view** for situational awareness and rover logistics,
+a per-region hex map, a region-scale isometric colony view, and a close-up per-hex
+**site view** where installations are placed on a local grid. Campaign state is
+engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
@@ -21,6 +21,7 @@ Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
 | Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
+| Area-first navigation | **Experimental** — globe click/`--region` opens area view; `G` toggles area-scale faceted slope shading; D40 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
@@ -87,7 +88,7 @@ mouse for the same actions.
 | `/` on the globe | Search a region or fine-hex H3 index |
 | `M` | Open/close the schematic Solar System Map (Moon and Mars are ready) |
 | `T` | Open/close the tech tree |
-| `A` | Open the area view |
+| `A` | Open the area view (the default drill-in from the globe) |
 | `R` | Open the rover fleet / garage screen |
 
 **Globe**
@@ -97,7 +98,7 @@ mouse for the same actions.
 | Left drag | Rotate the active body |
 | Wheel | Zoom |
 | Right drag | Pan |
-| Left click | Open the region under the cursor |
+| Left click | Open the area around the region under the cursor |
 | `Tab` | Toggle surface imagery / biome colours (when a sidecar is available) |
 | `/` | Jump to an H3 index |
 | `Home` | Focus the active region |
@@ -118,7 +119,7 @@ mouse for the same actions.
 | `M` | Open the Solar System Map |
 | Esc | Back to the globe |
 
-**Area view (rover logistics)**
+**Area view (rover logistics and terrain slope)**
 
 | Input | Action |
 |---|---|
@@ -126,8 +127,14 @@ mouse for the same actions.
 | Hover | Outline a region and describe the rover or region under the cursor |
 | Left click a rover | Select it as the source of the next dispatch |
 | Left click a region | Open that region, or dispatch the selected rover to its centre |
+| `G` | Toggle faceted terrain-slope shading across the visible region tiles |
 | `R` | Open the fleet screen to buy rovers or choose a rover |
 | Esc | Clear the selected rover, then back to the globe |
+
+The experimental navigation order is **globe → area → region → site**: clicking a
+region on the globe or starting with `--region` lands in the area view; clicking a
+region there drills into the region view. `--view=region`, `--view=management`,
+`--view=site` and `--view=globe` still open those views directly.
 
 **Colony view (isometric)**
 
@@ -189,10 +196,11 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | Flag | Meaning |
 |---|---|
 | `--body=<moon\|mars>` | Select the baked body to load (default `moon`) |
-| `--region=<h3>` | Open a region by H3 index (restores the last active region when omitted) |
+| `--region=<h3>` | Open the area around a region by H3 index (restores the last active region when omitted) |
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
-| `--overlay=biome\|terrain\|score\|buildings\|color` | Select the overlay; `color`, `colour`, `imagery` and `surface` are aliases, and globe accepts `color`/`biome` |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Select the overlay; `color`, `colour`, `imagery` and `surface` are aliases, globe accepts `color`/`biome`, and area accepts `terrain` for slope shading |
+| `--slope` | Toggle area-scale terrain-slope shading (same action as `G` in the area view) |
 | `--rot=<degrees>` | Colony camera angle, quantised to the nearest 60° |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`) |
 | `--active=<defId>` | Select the building definition to place; site view only |

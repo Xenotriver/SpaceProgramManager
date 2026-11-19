@@ -106,10 +106,11 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | Flag | Meaning |
 |---|---|
 | `--body=<moon\|mars>` | Select the baked body (default `moon`). |
-| `--region=<h3>` | Open a region by H3 index. Without it the last active region is restored. |
+| `--region=<h3>` | Open the area around a region by H3 index. Without it the last active region is restored. |
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
-| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for region/colony views; area accepts `terrain` for slope shading; `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
+| `--slope` | Toggle area-scale terrain-slope shading; same action as `G` in the area view. |
 | `--rot=<deg>` | Colony camera angle, quantised to the nearest 60°. |
 | `--relief=<scale>` | Colony relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
@@ -149,9 +150,11 @@ Notes:
   `--place` places several installations in the same site in command order.
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
-- `M` toggles the Solar System Map from any view; `G` enters the colony view only
-  from the region view; `A` opens the area view and `R` the fleet screen from any
-  gameplay view. In the area view, click a rover and then a region to dispatch it.
+- `M` toggles the Solar System Map from any view; `A` opens the area view and `R`
+  the fleet screen from any gameplay view. Globe clicks and `--region` open the
+  area view by default; clicking a region there drills into the region view.
+  `G` enters the colony view from the region view, but toggles faceted
+  terrain-slope shading from the area view.
 - `Tab` toggles surface imagery/biome on the globe and cycles overlays in region
   and colony views; `1`–`5` select an overlay directly. With a valid sidecar,
   true colour is the default for every slot unless `--overlay` is passed.
@@ -173,9 +176,9 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-15 smokes: colour and biome for globe/region, colour for colony on both bodies,
+16 smokes: colour and biome for globe/region, colour for colony on both bodies,
 plus both globes, the unchanged Moon site view, the tech tree screen, the area view
-on both bodies and the fleet screen.
+on both bodies, the fleet screen and the area terrain-slope toggle.
 
 ## 5. Data pipeline
 
@@ -268,9 +271,10 @@ not the library version. Bump both together.
 Mars tile fixtures plus imagery sidecars, runs the Python imagery unit tests,
 builds and tests .NET, then downloads the pinned Godot 4.7.2 mono Linux archive
 (SHA-256 `129f82db7bafd54ae14bb5bb284041c73860e8c7a009a3a026ca5e946cbff247`).
-The Godot step runs fifteen `--frame-budget=20 --frames=30` smokes: colour and
+The Godot step runs sixteen `--frame-budget=20 --frames=30` smokes: colour and
 biome coverage for globe/region, colour for colony on both bodies, the unchanged
-Moon site view, the tech screen, the area view on both bodies and the fleet screen.
+Moon site view, the tech screen, the area view on both bodies, the fleet screen and
+the area terrain-slope toggle.
 Headless `--shot` is deliberately not used because it
 hangs in automation; the frame-gate run is the smoke and exit-code check. No
 `data/` is committed.

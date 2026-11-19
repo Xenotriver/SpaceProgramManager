@@ -79,11 +79,11 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 
 | Class | Role |
 |---|---|
-| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Region` / `Area` / `Management` / `Site`), HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
+| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
 | `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
 | `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), hover/select, rover route, aggregate site markers (read-only) |
-| `AreaView` | Active region plus present H3 neighbours on one tangent plane; region hover/outlines, rover markers and cross-region track rendering; click-to-dispatch (read-only) |
+| `AreaView` | Active region plus present H3 neighbours on one tangent plane; region hover/outlines, rover markers, cross-region tracks and optional faceted terrain-slope shading; click-to-dispatch (read-only) |
 | `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief, overlays, pan/zoom/pick, 60° orbit, aggregate site markers (read-only) |
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |

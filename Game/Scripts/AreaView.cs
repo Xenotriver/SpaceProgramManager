@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Godot;
 using H3;
@@ -35,12 +36,55 @@ public partial class AreaView : Node2D
     private const float MaxZoom = 8f;
     private const float DragThresholdPixels = 4f;
 
+    /// <summary>Fraction of the area span the full elevation range should rise.</summary>
+    private const float ReliefFraction = 0.18f;
+
+    /// <summary>
+    /// Presentation-only vertical contrast curve. Smoothstep keeps the endpoints
+    /// and ordering of the baked elevations while making broad, nearly planar
+    /// ramps readable as slope facets at area scale.
+    /// </summary>
+    private static float ReliefCurve(float normalizedElevation)
+    {
+        var t = Mathf.Clamp(normalizedElevation, 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
+
     private static readonly Color BorderColor = new(0f, 0f, 0f, 0.28f);
     private static readonly Color ActiveColor = new(1f, 0.92f, 0.45f, 0.95f);
     private static readonly Color HoverColor = new(1f, 1f, 1f, 0.9f);
     private static readonly Color RouteColor = new(0.35f, 0.85f, 1f, 0.95f);
     private static readonly Color RoverColor = new(1f, 0.62f, 0.28f, 1f);
     private static readonly Color SelectedColor = new(0.35f, 1f, 0.62f, 1f);
+    private static readonly Vector2 LightDirection = new Vector2(-0.45f, 0.55f).Normalized();
+
+    private static string CornerKey(Vector2 plane)
+        => $"{plane.X.ToString("F6", CultureInfo.InvariantCulture)}:" +
+           $"{plane.Y.ToString("F6", CultureInfo.InvariantCulture)}";
+
+    /// <summary>Flat-shades one facet from its plane normal and the fixed light.</summary>
+    private static Color FacetShade(
+        Color fill, Vector2 center, Vector2 a, Vector2 b,
+        float centerHeight, float aHeight, float bHeight)
+    {
+        var ab = new Vector3(a.X - center.X, a.Y - center.Y, aHeight - centerHeight);
+        var ac = new Vector3(b.X - center.X, b.Y - center.Y, bHeight - centerHeight);
+        var normal = ab.Cross(ac);
+        if (normal.Z < 0f)
+            normal = -normal;
+
+        if (normal.LengthSquared() < 1e-12f)
+            return fill;
+
+        var light = new Vector3(LightDirection.X, LightDirection.Y, 1.6f).Normalized();
+        var diffuse = Mathf.Clamp(normal.Normalized().Dot(light), 0f, 1f);
+        var factor = 0.70f + 0.34f * diffuse;
+        return new Color(
+            Mathf.Min(1f, fill.R * factor),
+            Mathf.Min(1f, fill.G * factor),
+            Mathf.Min(1f, fill.B * factor),
+            fill.A);
+    }
 
     private sealed class RegionArea
     {
@@ -65,6 +109,11 @@ public partial class AreaView : Node2D
     private Vector2[] _centers = Array.Empty<Vector2>();
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private Color[] _fills = Array.Empty<Color>();
+    private Color[] _terrainFills = Array.Empty<Color>();
+    private float[] _elevations = Array.Empty<float>();
+    private float[] _heights = Array.Empty<float>();
+    private string[][] _cornerKeys = Array.Empty<string[]>();
+    private float[][] _cornerHeights = Array.Empty<float[]>();
     private Vector2[] _borders = Array.Empty<Vector2>();
     private Vector2[] _screenBorders = Array.Empty<Vector2>();
 
@@ -83,9 +132,16 @@ public partial class AreaView : Node2D
     private ulong _centerRegion;
     private int _hoverRegionIndex = -1;
     private string? _hoverRoverId;
+    private RegionViewMode _overlay = RegionViewMode.Biome;
 
     /// <summary>Currently centred region.</summary>
     public ulong CenterRegion => _centerRegion;
+
+    /// <summary>Current colour/relief mode.</summary>
+    public RegionViewMode Overlay => _overlay;
+
+    /// <summary>True when faceted terrain-slope shading is active.</summary>
+    public bool UsesSlope => _overlay == RegionViewMode.Terrain;
 
     /// <summary>Rover chosen as the source of the next destination click.</summary>
     public string? SelectedRoverId { get; private set; }
@@ -136,9 +192,13 @@ public partial class AreaView : Node2D
         var centers = new List<Vector2>();
         var corners = new List<Vector2[]>();
         var fills = new List<Color>();
+        var elevations = new List<float>();
+        var cornerKeys = new List<string[]>();
         var borderPoints = new List<Vector2>();
         var min = new Vector2(float.MaxValue, float.MaxValue);
         var max = new Vector2(float.MinValue, float.MinValue);
+        var minElevation = float.MaxValue;
+        var maxElevation = float.MinValue;
 
         foreach (var regionIndex in regionIndices)
         {
@@ -163,9 +223,11 @@ public partial class AreaView : Node2D
 
                 var boundary = cell.GetCellBoundaryVertices().ToList();
                 var polygon = new Vector2[boundary.Count];
+                var keys = new string[boundary.Count];
                 for (var v = 0; v < boundary.Count; v++)
                 {
                     polygon[v] = Project(ToUnitVector(boundary[v]), east, north);
+                    keys[v] = CornerKey(polygon[v]);
                     min = new Vector2(Mathf.Min(min.X, polygon[v].X), Mathf.Min(min.Y, polygon[v].Y));
                     max = new Vector2(Mathf.Max(max.X, polygon[v].X), Mathf.Max(max.Y, polygon[v].Y));
                 }
@@ -173,6 +235,7 @@ public partial class AreaView : Node2D
                 var globalIndex = centers.Count;
                 centers.Add(Project(cellCenter, east, north));
                 corners.Add(polygon);
+                cornerKeys.Add(keys);
                 _cellByKey[(regionIndex, (ulong)cell)] = globalIndex;
                 cells.Add(globalIndex);
 
@@ -181,6 +244,11 @@ public partial class AreaView : Node2D
                 if (regionIndex != centerRegion)
                     color = new Color(color.R * 0.72f, color.G * 0.72f, color.B * 0.72f, 1f);
                 fills.Add(color);
+
+                var elevation = tile.ElevationM(ordinal);
+                elevations.Add(elevation);
+                minElevation = Mathf.Min(minElevation, elevation);
+                maxElevation = Mathf.Max(maxElevation, elevation);
 
                 for (var v = 0; v < polygon.Length; v++)
                 {
@@ -206,7 +274,53 @@ public partial class AreaView : Node2D
         _centers = centers.ToArray();
         _corners = corners.ToArray();
         _fills = fills.ToArray();
+        _cornerKeys = cornerKeys.ToArray();
         _borders = borderPoints.ToArray();
+
+        _elevations = elevations.ToArray();
+        var elevationSpan = Mathf.Max(1f, maxElevation - minElevation);
+        _terrainFills = elevations
+            .Select(elevation => TerrainPalette.For((elevation - minElevation) / elevationSpan))
+            .ToArray();
+
+        var radiusMetres = Math.Max(1.0, world.Manifest.Body.RadiusKm * 1000.0);
+        var spanPlane = Mathf.Max(max.X - min.X, max.Y - min.Y);
+        var elevationSpanPlane = (maxElevation - minElevation) / radiusMetres;
+        var relief = elevationSpanPlane > 1e-9
+            ? ReliefFraction * spanPlane / elevationSpanPlane
+            : 0f;
+
+        _heights = new float[_elevations.Length];
+        var cornerSums = new Dictionary<string, (double Sum, int Count)>(StringComparer.Ordinal);
+        var heightScale = (float)(elevationSpan / radiusMetres * relief);
+        for (var i = 0; i < _elevations.Length; i++)
+        {
+            var normalized = (_elevations[i] - minElevation) / elevationSpan;
+            _heights[i] = ReliefCurve(normalized) * heightScale;
+            foreach (var vertex in _cornerKeys[i])
+            {
+                cornerSums.TryGetValue(vertex, out var entry);
+                cornerSums[vertex] = (entry.Sum + _heights[i], entry.Count + 1);
+            }
+        }
+
+        _cornerHeights = new float[_centers.Length][];
+        for (var i = 0; i < _centers.Length; i++)
+        {
+            var heights = new float[_cornerKeys[i].Length];
+            for (var v = 0; v < heights.Length; v++)
+            {
+                heights[v] = cornerSums.TryGetValue(_cornerKeys[i][v], out var entry) && entry.Count > 0
+                    ? (float)(entry.Sum / entry.Count)
+                    : _heights[i];
+            }
+
+            _cornerHeights[i] = heights;
+        }
+
+        GD.Print($"area: {_areas.Count} regions · {_centers.Length} hexes · " +
+                 $"elev {minElevation:F0}..{maxElevation:F0} m · relief {relief:F2}");
+
         _origin = -((min + max) * 0.5f);
 
         var size = GetViewportRect().Size;
@@ -228,6 +342,26 @@ public partial class AreaView : Node2D
 
     /// <summary>Refreshes rover markers after a tick or an action.</summary>
     public void Refresh() => QueueRedraw();
+
+    /// <summary>Switches between biome colour and faceted terrain-slope shading.</summary>
+    public void SetOverlay(RegionViewMode mode)
+    {
+        var next = mode == RegionViewMode.Terrain ? RegionViewMode.Terrain : RegionViewMode.Biome;
+        if (next == _overlay)
+            return;
+
+        _overlay = next;
+        if (!IsLoaded)
+            return;
+
+        BuildFillMesh();
+        GD.Print($"area overlay: {_overlay}");
+        QueueRedraw();
+    }
+
+    /// <summary>Toggles the area-scale terrain-slope presentation.</summary>
+    public void ToggleSlope()
+        => SetOverlay(_overlay == RegionViewMode.Terrain ? RegionViewMode.Biome : RegionViewMode.Terrain);
 
     /// <summary>Clears a selected rover so the next click opens a region again.</summary>
     public void ClearSelection()
@@ -486,22 +620,42 @@ public partial class AreaView : Node2D
         var colors = new Color[vertexCount];
         var index = 0;
 
+        var terrain = UsesSlope;
+        var minShade = float.MaxValue;
+        var maxShade = float.MinValue;
         for (var i = 0; i < _corners.Length; i++)
         {
             var center = _centers[i];
             var polygon = _corners[i];
-            var color = _fills[i];
+            var color = terrain ? _terrainFills[i] : _fills[i];
+            var baseLuma = Mathf.Max(1e-4f, color.R + color.G + color.B);
 
             for (var v = 0; v < polygon.Length; v++)
             {
+                var next = (v + 1) % polygon.Length;
+                var facetColor = terrain
+                    ? FacetShade(color, center, polygon[v], polygon[next],
+                        _heights[i], _cornerHeights[i][v], _cornerHeights[i][next])
+                    : color;
+
+                if (terrain)
+                {
+                    var shade = (facetColor.R + facetColor.G + facetColor.B) / baseLuma;
+                    minShade = Mathf.Min(minShade, shade);
+                    maxShade = Mathf.Max(maxShade, shade);
+                }
+
                 vertices[index] = center;
-                colors[index++] = color;
+                colors[index++] = facetColor;
                 vertices[index] = polygon[v];
-                colors[index++] = color;
-                vertices[index] = polygon[(v + 1) % polygon.Length];
-                colors[index++] = color;
+                colors[index++] = facetColor;
+                vertices[index] = polygon[next];
+                colors[index++] = facetColor;
             }
         }
+
+        if (terrain)
+            GD.Print($"area slope facets: shade x{minShade:F2}..{maxShade:F2}");
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);

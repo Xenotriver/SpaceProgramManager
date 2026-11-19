@@ -39,7 +39,9 @@ public partial class Main : Node2D
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
     private const string AreaStatus =
-        "Wheel zoom · right-drag pan · click rover then region to dispatch · A fleet · M map · T tech · Esc back";
+        "Wheel zoom · right-drag pan · click region to zoom in · G terrain slope · R fleet · M map · T tech · Esc globe";
+    private const string AreaSlopeStatus =
+        "Area terrain slope · G biome colours · click region to zoom in · R fleet · M map · T tech · Esc globe";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -351,37 +353,43 @@ public partial class Main : Node2D
         var view = _campaignService.ViewState;
         _globe.SetView(view.GlobeYawDegrees, view.GlobePitchDegrees, view.GlobeZoom);
 
-        var region = skipCliView ? 0UL : UlongArgument("--region");
-        if (region == 0 && _campaign.Meta.ActiveRegionIndex is { } restored)
-            region = restored;
+        var cliRegion = skipCliView ? 0UL : UlongArgument("--region");
+        var region = cliRegion != 0 ? cliRegion : _campaign.Meta.ActiveRegionIndex ?? 0UL;
 
         var areaRegion = region != 0 ? region : _world.Regions[0].Index;
         _areaView.Load(_world, _campaign, areaRegion);
 
+        // Area is the default drill-in from the globe; region is one step smaller.
         if (region != 0)
-            ShowRegion(region);
+            ShowArea(region);
         else
             ShowGlobe();
 
-        if (string.Equals(view.Mode, "management", StringComparison.OrdinalIgnoreCase)
-            && _mode == Mode.Region)
+        if (cliRegion == 0 && string.Equals(view.Mode, "globe", StringComparison.OrdinalIgnoreCase))
         {
+            ShowGlobe();
+        }
+        else if (string.Equals(view.Mode, "management", StringComparison.OrdinalIgnoreCase)
+                 && region != 0)
+        {
+            ShowRegion(region);
             ShowManagement();
         }
         else if (string.Equals(view.Mode, "region", StringComparison.OrdinalIgnoreCase)
-                 && _mode == Mode.Globe
-                 && _campaign.Meta.ActiveRegionIndex is { } activeRegion)
+                 && region != 0)
         {
-            ShowRegion(activeRegion);
+            ShowRegion(region);
         }
         else if (string.Equals(view.Mode, "area", StringComparison.OrdinalIgnoreCase)
-                 && _areaView.IsLoaded)
+                 && region != 0)
         {
-            ShowArea(_areaView.CenterRegion);
+            ShowArea(region);
         }
         else if (string.Equals(view.Mode, "site", StringComparison.OrdinalIgnoreCase)
+                 && region != 0
                  && view.SelectedHexOrdinal is { } restoredHex)
         {
+            ShowRegion(region);
             ShowSite(restoredHex);
         }
 
@@ -436,6 +444,14 @@ public partial class Main : Node2D
                 0.0, new HashSet<string>(StringComparer.Ordinal), _buildingNames)
             : new ShellOverlay.TechTreeView(
                 _campaign.Meta.SciencePoints, _campaign.Meta.UnlockedTechs, _buildingNames);
+
+    private string AreaStatusText()
+        => _areaView.UsesSlope ? AreaSlopeStatus : AreaStatus;
+
+    private ulong CurrentRegionIndex()
+        => _areaView.IsLoaded
+            ? _areaView.CenterRegion
+            : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index;
 
     private ShellOverlay.RoverFleetView CurrentFleetView()
     {
@@ -711,24 +727,28 @@ public partial class Main : Node2D
         if (string.Equals(view, "site", StringComparison.OrdinalIgnoreCase))
         {
             var hex = IntArgument("--hex", 0);
+            ShowRegion(CurrentRegionIndex());
             ShowSite(hex);
         }
         else if (string.Equals(view, "region", StringComparison.OrdinalIgnoreCase))
         {
-            if (_regionView.IsLoaded)
-                ShowRegion(_regionView.RegionIndex);
+            ShowRegion(CurrentRegionIndex());
         }
         else if (string.Equals(view, "area", StringComparison.OrdinalIgnoreCase))
         {
             if (_areaView.IsLoaded)
                 ShowArea(_areaView.CenterRegion);
         }
+        else if (string.Equals(view, "globe", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowGlobe();
+        }
         else if (HasArgument("--iso")
                  || string.Equals(view, "management", StringComparison.OrdinalIgnoreCase))
         {
             // The CLI view overrides the slot's restored mode, including site.
-            if (_regionView.IsLoaded)
-                ShowManagement();
+            ShowRegion(CurrentRegionIndex());
+            ShowManagement();
         }
 
         var route = ArgumentValue("--route");
@@ -763,6 +783,13 @@ public partial class Main : Node2D
         var overlay = ArgumentValue("--overlay");
         if (overlay is not null)
             SetOverlay(ParseOverlay(overlay));
+
+        // Exercises the same toggle as G in the area view.
+        if (HasArgument("--slope") && _mode == Mode.Area)
+        {
+            _areaView.ToggleSlope();
+            _status = AreaStatusText();
+        }
 
         var rot = ArgumentValue("--rot");
         if (rot is not null
@@ -1153,6 +1180,12 @@ public partial class Main : Node2D
                 ShowManagement();
                 break;
 
+            case Key.G when _mode == Mode.Area:
+                _areaView.ToggleSlope();
+                _status = AreaStatusText();
+                QueueRedraw();
+                break;
+
             case Key.A when !_shell.IsOpen:
                 ShowArea(_areaView.IsLoaded
                     ? _areaView.CenterRegion
@@ -1240,14 +1273,18 @@ public partial class Main : Node2D
             return;
         }
 
-        _areaView.Load(_world, _campaign, regionIndex);
+        if (!_areaView.IsLoaded || _areaView.CenterRegion != regionIndex)
+            _areaView.Load(_world, _campaign, regionIndex);
+        else
+            _areaView.Refresh();
+
         _areaView.Visible = true;
         _regionView.Visible = false;
         _managementView.Visible = false;
         _siteView.Visible = false;
         _globe.Visible = false;
         _mode = Mode.Area;
-        _status = AreaStatus;
+        _status = AreaStatusText();
         _campaignService.SetActiveRegion(regionIndex);
         RefreshMarkers();
         QueueRedraw();
@@ -1341,14 +1378,14 @@ public partial class Main : Node2D
 
         _status = regionIndex == 0 || string.IsNullOrEmpty(biomeId)
             ? GlobeStatus
-            : $"{DisplayName(biomeId)} · {hexCount} hexes · click to zoom in";
+            : $"{DisplayName(biomeId)} · {hexCount} hexes · click to open area";
 
         QueueRedraw();
     }
 
     private void OnRegionSelected(ulong regionIndex, string biomeId, int hexCount)
     {
-        ShowRegion(regionIndex);
+        ShowArea(regionIndex);
     }
 
     private void OnAreaRegionOpened(ulong regionIndex)
@@ -1360,7 +1397,7 @@ public partial class Main : Node2D
     {
         if (string.IsNullOrWhiteSpace(detail))
         {
-            _status = AreaStatus;
+            _status = AreaStatusText();
             QueueRedraw();
             return;
         }
@@ -1522,6 +1559,11 @@ public partial class Main : Node2D
         else if (_mode == Mode.Management)
         {
             _managementView.SetOverlay(mode);
+        }
+        else if (_mode == Mode.Area)
+        {
+            _areaView.SetOverlay(mode);
+            _status = AreaStatusText();
         }
         else
         {

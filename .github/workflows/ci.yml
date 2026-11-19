@@ -115,3 +115,6 @@ jobs:
           run_smoke moon moon-area --view=area
           run_smoke mars mars-area --view=area
           run_smoke moon moon-fleet --view=area --fleet
+
+          # Experimental area-first navigation: faceted slope shading.
+          run_smoke moon moon-area-slope --region=589971619905011711 --slope

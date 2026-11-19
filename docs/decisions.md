@@ -790,6 +790,38 @@ No save-schema, fingerprint or tile-format change was needed.
 
 ---
 
+## D40 — Experimental area-first navigation
+
+**Commit:** 2026-11-19 · **Status:** experimental
+
+**Decision.** An experiment makes the multi-region area view the default drill-in
+from the globe: clicking a body region or starting with `--region` lands in
+`AreaView`, and clicking a region there opens the old single-region view. The
+intended hierarchy is planet → area → region → site. `G` in the area view toggles
+a faceted terrain-slope presentation over the visible region tiles, using shared
+corner-height averages and the same fixed light as the colony terrain; `--slope`
+and `--overlay=terrain` expose the same path to automation. Explicit
+`--view=region|management|site|globe` flags still win.
+
+**Why.** The area scale gives better situational awareness than jumping straight
+to one region, and the user specifically asked whether the existing terrain-slope
+idea survives at that scale. Reusing `AreaView`'s tangent-plane geometry and the
+already baked per-hex elevations tests this without a new view, new save field or
+change to `Sim`.
+
+**Cost.** The mesh now covers up to 2,401 fine hexes instead of 343 and rebuilds
+when the overlay changes; corner heights are averaged by formatted projected
+position because `GetCellBoundaryVertices()` returns `LatLng`, not an H3 index.
+This is still a flat map with shaded facets, not a full 2.5D diorama over seven
+tiles, and it stays experimental until visual review. Automation confirmed the
+toggle and mesh rebuild on both bodies. The first Moon pass read as a single
+tilted plane, so a presentation-only smoothstep relief curve now redistributes
+vertical contrast without changing elevation ordering or the hypsometric palette;
+both tested bodies then showed facet shade `0.70–1.00`. No save-schema,
+fingerprint or tile-format change was needed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -799,5 +831,5 @@ tech/cost enforcement and time scale are settled by D18 and D17; the slot metada
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
-M5 C1 tech catalogue and purchase rule by D38, and the M5 C2 AreaView/garage
-choice by D39.
+M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
+by D39, and the experimental area-first navigation/slope test by D40.
