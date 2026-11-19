@@ -316,6 +316,7 @@ Not tied to a milestone; pull in when they start hurting.
 | Save-corruption fuzz tests | The store already quarantines; prove it under garbage |
 | Globe performance budget | **Done in M4** — 20 ms p95 gate; keep it before adding more bodies |
 | Real-life surface overlay | **Done in M4.5 (D30–D32)** — optional `color.bin` sidecar, real Moon/Mars imagery, biome fallback, no save/fingerprint change |
+| Low-poly terrain test | **Done 2026-11-19 (D33)** — chamfered prisms plus neighbour-gradient top shading; no raster heightmap, no save/tile change |
 | Replay/determinism harness | M1 covers same-seed ticks; extend it to longer event sequences |
 | `.editorconfig` + analyzers | Current tree is consistent by convention only |
 | Localization, audio, LICENSE, changelog | Release hygiene |
@@ -336,3 +337,4 @@ Not tied to a milestone; pull in when they start hurting.
 | 10 | Site-view build-grid dimensions | **Decided in M3:** radius-3 axial disk, 37 local cells |
 | 11 | 3D building layer: migrate the colony view to 3D vs. hybrid 2D terrain + 3D buildings (plan §2.7) | **Open** — deferred until 3D assets are integrated; M3 kept procedural prisms |
 | 12 | Art source/licence policy for committed models (plan §2.7) | CC0 preferred; decide before the first asset |
+| 13 | Terrain presentation: raised hex vs heightmap vs faceted hex terrain vs multi-region | **Test done 2026-11-19:** chamfer + slope shading shipped; no heightmap. Faceted terrain and AreaView stay deferred unless the test is judged insufficient |

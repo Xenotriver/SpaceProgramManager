@@ -615,6 +615,31 @@ remain (biome for globe/region, terrain for colony).
 
 ---
 
+## D33 — Cheap chamfer-and-slope test before any terrain redesign
+
+**Commit:** 2026-11-19 · **Status:** active
+
+**Decision.** The colony view keeps H3 fine hexes as the only authoritative
+terrain cells. Each prism now has a small chamfered rim and a directional
+vertex-colour multiplier computed from neighbouring hex elevations. The gradient
+is presentation-only: picking, placement, movement costs, site scoring and the
+rover route still read the original per-hex elevation from `RegionTile`. No
+raster heightmap, corner-averaged faceted mesh or multi-region terrain view was
+added.
+
+**Why.** Flat prisms read as stairs when imagining rover movement. A test that
+changes only mesh shading and a small rim is cheap, keeps the hex grid legible as
+building slots, and answers whether the blockiness is actually a problem before
+a larger geometry rewrite. It also avoids inventing interpolated elevation data
+that the bake does not contain.
+
+**Cost.** Top shading varies with relief exaggeration and camera orbit, and
+border hexes use fewer neighbours. If the result is still too blocky, the next
+candidate is a non-authoritative faceted hex surface shared at corners; that
+remains deferred, as does an AreaView for cross-region routes.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): rover speed default,
@@ -622,4 +647,5 @@ bake-change save migration, and 3D building assets/presentation. Multi-installat
 hexes, the site/colony split and the local grid size are settled by D20–D22;
 tech/cost enforcement and time scale are settled by D18 and D17; the slot metadata
 layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
-choices are settled by D23–D29; M4.5 imagery choices are settled by D30–D32.
+choices are settled by D23–D29; M4.5 imagery choices are settled by D30–D32, and
+the terrain-presentation test by D33.
