@@ -37,6 +37,12 @@ public static class CampaignDefaults
     /// <summary>Keeps the persisted event history bounded.</summary>
     public const int MaxEventLogEntries = 50;
 
+    /// <summary>No random events before the first full day of a campaign.</summary>
+    public const double EventEarliestGameHour = 24.0;
+
+    /// <summary>Minimum spacing between random events after one is raised.</summary>
+    public const double EventCooldownHours = 72.0;
+
     /// <summary>
     /// Fills credits, stockpile and RNG state for a campaign that has no
     /// authoritative values yet. Existing values win, so this is safe to call on

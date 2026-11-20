@@ -144,7 +144,12 @@ are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
   `departureGameHour` and `arrivalGameHour`; `Tick` moves the rover on arrival.
   The fine-hex route itself is derived from the save fields and is never persisted.
 - IDs in these blocks are stable strings; definition data, rewards and event
-  text live in static registries, not in the save.
+  text live in static registries, not in the save. M5 C3 adds no fields:
+  `contracts.progress` is filled by partial deliveries, `rewardClaimed` is set
+  when a contract is settled (including at its deadline) and prevents a second
+  payout, and `events.pending` is filled from the campaign RNG before choices
+  move records into the log. Unknown definition ids remain readable but cannot be
+  acted on until the static catalogue knows them.
 
 ### Migration from v1
 

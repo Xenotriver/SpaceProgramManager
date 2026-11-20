@@ -125,3 +125,7 @@ jobs:
           run_smoke moon moon-area-iso-score --view=area --region=589971619905011711 --projection=iso --overlay=score
           run_smoke moon moon-area-iso-buildings --view=area --region=589971619905011711 --projection=iso --overlay=buildings
           run_smoke moon moon-area-iso-color --view=area --region=589971619905011711 --projection=iso --overlay=color
+
+          # M5 C3 missions: contract offers and event choices on both bodies.
+          run_smoke moon moon-missions --missions
+          run_smoke mars mars-missions --missions

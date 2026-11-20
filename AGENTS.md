@@ -13,7 +13,7 @@ Godot 4.7 .NET project (`Game`) renders it. Moon and Mars are baked and playable
 
 ```powershell
 dotnet build SpaceProgramManager.slnx
-dotnet test Sim.Tests/Sim.Tests.csproj     # expect 167 passing
+dotnet test Sim.Tests/Sim.Tests.csproj     # expect 179 passing
 ```
 
 Godot (machine-specific path):

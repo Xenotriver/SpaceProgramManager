@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-19** (area review 2026-11-20), M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics and area-first navigation, **167 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation and C3 missions, **179 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -22,9 +22,10 @@ Anchor: **2026-11-19** (area review 2026-11-20), M4.5 true-colour overlay, facet
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
 | Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
 | Area-first navigation | **Done** | Globe click/`--region` opens area; region click recentres the area; `Enter` drills into the centred region; `G` toggles flat/isometric area; five overlays area-wide; D40 |
+| Missions and events | **Done (M5 C3)** | Static contract/event catalogues, partial-delivery payouts, deadline settlement, seeded events, `C`/`--missions` screen; D41 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 21 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 23 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -340,7 +341,17 @@ between regions, rover fleet state, failure/repair.
     confirmed the diorama, so D40 is no longer experimental; no save contract
     changed. The centred region's yellow outline is gone and the hover outline is
     a subtle shade rather than a highlight.
-- [ ] **C3 — contracts, missions, events and science rewards.**
+- [x] **C3 — contracts, missions, events and science rewards.**
+  - `ContractCatalogue` and `EventCatalogue` hold all static content: three
+    contracts with stockpile targets, credit/science rewards and completion
+    bonuses, plus three seeded events with two choices each. `CampaignState`
+    accepts, delivers against, and settles contracts; partial delivery pays
+    proportionally, a missed deadline closes the contract once, and a full
+    delivery adds the completion bonus. Events roll from the persisted RNG after
+    hour 24 with a 72-hour cooldown, pin an optional visited region, and append a
+    bounded 50-entry log. `C` or `--missions` opens a shell screen for all of it.
+    No save-schema, fingerprint or tile-format change; v4 already carried the
+    fields (D41). Clean build, 179/179 C# tests, no push.
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**
 

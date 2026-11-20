@@ -27,6 +27,10 @@ public enum ShellCommand
     PurchaseRover,
     SelectRover,
     OpenArea,
+    AcceptContract,
+    DeliverContract,
+    ClaimReward,
+    ResolveEvent,
 }
 
 /// <summary>
@@ -48,6 +52,7 @@ public partial class ShellOverlay : Node2D
         SystemMap,
         TechTree,
         Fleet,
+        Missions,
     }
 
     private const float RowHeight = 46f;
@@ -171,6 +176,52 @@ public partial class ShellOverlay : Node2D
             new HashSet<string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal));
 
+    /// <summary>One unaccepted contract offer in the missions screen.</summary>
+    public sealed record MissionOfferRow(
+        string DefId,
+        string DisplayName,
+        string Detail,
+        string Right,
+        bool Available,
+        string? DisabledReason);
+
+    /// <summary>One accepted contract in the missions screen.</summary>
+    public sealed record MissionActiveRow(
+        string Id,
+        string DisplayName,
+        string Detail,
+        string Right,
+        bool Deliverable,
+        bool Claimable);
+
+    /// <summary>One event option; the payload encodes "eventId|choiceId".</summary>
+    public sealed record MissionChoiceRow(string Label, string Detail, string Payload);
+
+    /// <summary>One pending event with its presented choices.</summary>
+    public sealed record MissionEventRow(
+        string DisplayName,
+        string Description,
+        IReadOnlyList<MissionChoiceRow> Choices);
+
+    /// <summary>Live contract and event values rendered by the missions screen.</summary>
+    public sealed record MissionView(
+        double Credits,
+        double Science,
+        IReadOnlyList<MissionOfferRow> Offers,
+        IReadOnlyList<MissionActiveRow> Active,
+        IReadOnlyList<MissionEventRow> Events);
+
+    /// <summary>Supplies missions state on every draw; the shell owns no game state.</summary>
+    public Func<MissionView>? MissionViewProvider { get; set; }
+
+    private MissionView CurrentMissionsView() => MissionViewProvider?.Invoke()
+        ?? new MissionView(
+            0.0,
+            0.0,
+            Array.Empty<MissionOfferRow>(),
+            Array.Empty<MissionActiveRow>(),
+            Array.Empty<MissionEventRow>());
+
     /// <summary>Current simulation multiplier shown by the pause-screen buttons.</summary>
     public int TimeSpeed { get; private set; }
 
@@ -260,6 +311,21 @@ public partial class ShellOverlay : Node2D
 
         _returnScreen = Screen.Closed;
         _screen = Screen.Fleet;
+        _selected = 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the contracts and events screen from gameplay or <c>--missions</c>.</summary>
+    public void OpenMissions()
+    {
+        if (_screen == Screen.Missions)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.Missions;
         _selected = 0;
         QueueRedraw();
     }
@@ -589,6 +655,10 @@ public partial class ShellOverlay : Node2D
                 Back();
                 return;
 
+            case Key.C when _screen == Screen.Missions:
+                Back();
+                return;
+
             case Key.Enter or Key.KpEnter or Key.Space:
                 ActivateSelected();
                 return;
@@ -690,6 +760,10 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.PurchaseRover:
             case ShellCommand.SelectRover:
             case ShellCommand.OpenArea:
+            case ShellCommand.AcceptContract:
+            case ShellCommand.DeliverContract:
+            case ShellCommand.ClaimReward:
+            case ShellCommand.ResolveEvent:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -737,6 +811,13 @@ public partial class ShellOverlay : Node2D
                 QueueRedraw();
                 break;
 
+            case "screen:missions":
+                _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
+                _screen = Screen.Missions;
+                _selected = 0;
+                QueueRedraw();
+                break;
+
             case "screen:main":
                 _screen = Screen.Main;
                 _selected = 0;
@@ -774,6 +855,7 @@ public partial class ShellOverlay : Node2D
 
             case Screen.TechTree:
             case Screen.Fleet:
+            case Screen.Missions:
                 _screen = _returnScreen;
                 break;
 
@@ -881,7 +963,7 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · M system map · T tech · A area · R fleet · G colony · Home active region", null,
+                    "F5 save · Esc pause/back · / search · M system map · T tech · C missions · A area · R fleet · G colony · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -897,6 +979,8 @@ public partial class ShellOverlay : Node2D
                     true, ShellCommand.None, "screen:tech"));
                 specs.Add(new RowSpec("Rover fleet", "Buy rovers and plan cross-region trips", "R",
                     true, ShellCommand.None, "screen:fleet"));
+                specs.Add(new RowSpec("Missions", "Accept contracts, deliver cargo and answer events", "C",
+                    true, ShellCommand.None, "screen:missions"));
                 specs.Add(new RowSpec("Load campaign", "Switch slot and reload the scene", null,
                     true, ShellCommand.None, "screen:slots"));
                 specs.Add(new RowSpec("Settings", null, null, true, ShellCommand.None, "screen:settings"));
@@ -1032,6 +1116,87 @@ public partial class ShellOverlay : Node2D
                         false,
                         ShellCommand.None,
                         null));
+                }
+
+                specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));
+                break;
+
+            case Screen.Missions:
+                var missions = CurrentMissionsView();
+                title = "MISSIONS";
+                subtitle = $"{missions.Credits:N0} cr · {missions.Science:0.#} science · partial delivery pays proportionally";
+                hint = "↑↓ select · Enter act · C/Esc close";
+
+                if (missions.Events.Count == 0)
+                {
+                    specs.Add(new RowSpec("No pending events", "Telemetry is quiet", null,
+                        false, ShellCommand.None, null));
+                }
+
+                foreach (var item in missions.Events.Take(1))
+                {
+                    specs.Add(new RowSpec(item.DisplayName, item.Description, "event",
+                        false, ShellCommand.None, null));
+                    foreach (var choice in item.Choices)
+                    {
+                        specs.Add(new RowSpec(choice.Label, choice.Detail, null,
+                            true, ShellCommand.ResolveEvent, choice.Payload));
+                    }
+                }
+
+                if (missions.Events.Count > 1)
+                {
+                    specs.Add(new RowSpec($"+ {missions.Events.Count - 1} more event(s)",
+                        "Resolve the first one to see the next", null,
+                        false, ShellCommand.None, null));
+                }
+
+                specs.Add(new RowSpec("CONTRACTS — OFFERS", null, null, false, ShellCommand.None, null));
+                if (missions.Offers.Count == 0)
+                {
+                    specs.Add(new RowSpec("No new offers", "Every contract is already on the books", null,
+                        false, ShellCommand.None, null));
+                }
+
+                foreach (var offer in missions.Offers.Take(2))
+                {
+                    specs.Add(new RowSpec(offer.DisplayName, offer.Detail, offer.Right,
+                        offer.Available, ShellCommand.AcceptContract, offer.DefId,
+                        false, offer.DisabledReason));
+                }
+
+                if (missions.Offers.Count > 2)
+                {
+                    specs.Add(new RowSpec($"+ {missions.Offers.Count - 2} more offer(s)",
+                        "Accept current work to see the next", null,
+                        false, ShellCommand.None, null));
+                }
+
+                specs.Add(new RowSpec("CONTRACTS — ACTIVE", null, null, false, ShellCommand.None, null));
+                if (missions.Active.Count == 0)
+                {
+                    specs.Add(new RowSpec("No active contracts", "Accept an offer above", null,
+                        false, ShellCommand.None, null));
+                }
+
+                foreach (var active in missions.Active.Take(2))
+                {
+                    specs.Add(new RowSpec(active.DisplayName, active.Detail, active.Right,
+                        active.Deliverable, ShellCommand.DeliverContract, active.Id,
+                        false, "nothing left to deliver or no stock available"));
+                    if (active.Claimable)
+                    {
+                        specs.Add(new RowSpec("Settle and claim",
+                            "Close now; partial delivery reduces the payout", null,
+                            true, ShellCommand.ClaimReward, active.Id));
+                    }
+                }
+
+                if (missions.Active.Count > 2)
+                {
+                    specs.Add(new RowSpec($"+ {missions.Active.Count - 2} more contract(s)",
+                        "More space is needed for the full list", null,
+                        false, ShellCommand.None, null));
                 }
 
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));

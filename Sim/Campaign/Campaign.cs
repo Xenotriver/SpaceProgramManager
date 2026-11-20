@@ -15,7 +15,7 @@ namespace Sim.Campaign;
 ///
 /// Engine-free: no Godot types, no file I/O (that is <c>CampaignStore</c>).
 /// </summary>
-public sealed class CampaignState
+public sealed partial class CampaignState
 {
     private readonly BodyWorld _world;
     private readonly BuildingRegistry _registry;
@@ -686,6 +686,8 @@ public sealed class CampaignState
         }
 
         arrived += CompleteRoverArrivals();
+        SettleExpiredContracts();
+        TryRaiseRandomEvent();
 
         return new TickReport(hours, steps, completed, idled, arrived);
     }

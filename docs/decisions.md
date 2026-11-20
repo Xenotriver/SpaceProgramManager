@@ -838,6 +838,39 @@ so neither marking reads as a highlight.
 
 ---
 
+## D41 — Missions use the v4 shell and static definitions
+
+**Commit:** 2026-11-20 · **Status:** active
+
+**Decision.** M5 C3 puts all contract and event content in two static catalogues:
+`ContractCatalogue` defines three delivery contracts with stockpile targets,
+durations, credit/science rewards and a completion bonus; `EventCatalogue`
+defines three weighted events with two choices each. `CampaignState` accepts,
+delivers against and settles contracts, and raises/resolves seeded events from
+the campaign RNG. Delivery is partial and proportional: any delivered fraction
+pays that fraction of the credits and science on settlement, a fully met target
+set adds the completion bonus, and a deadline closes the contract exactly once.
+Events cannot start before hour 24, are spaced by a 72-hour cooldown, may pin a
+visited region, and append to the bounded 50-entry log. `C` and `--missions`
+open a shell screen driven by a provider; successful actions save immediately.
+
+**Why.** C0 deliberately froze save v4 with the *fields* for contracts and events
+but no definitions. Keeping rewards, text and cooldowns in code means gameplay
+tuning never touches the schema, fingerprint or tile format. Proportional partial
+payouts make an incomplete contract useful rather than a dead end, and the
+deadline settlement keeps the v4 `RewardClaimed` flag authoritative so a claim
+cannot pay twice.
+
+**Cost.** Content changes require a code change and a new build rather than a
+data file, and unknown definition ids in old saves are only displayed, not
+resolved. Contract targets are single stockpile counters with no bandwidth or
+rover-cargo transport requirement yet; event choices apply simple flat effects
+rather than a condition system. The missions screen shows at most two offers and
+two active contracts at a time, and only the first pending event. No save-schema,
+fingerprint or tile-format change was needed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -848,4 +881,5 @@ layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
 M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
-by D39, and the area-first navigation/slope test by D40.
+by D39, the area-first navigation/slope test by D40, and the M5 C3 static-catalogue
+mission rule by D41.

@@ -209,6 +209,7 @@ public partial class Main : Node2D
         _shell.Command += OnShellCommand;
         _shell.TechViewProvider = CurrentTechView;
         _shell.FleetViewProvider = CurrentFleetView;
+        _shell.MissionViewProvider = CurrentMissionsView;
 
         GD.Print($"{KnownBodies.DisplayName(_world.BodyKey)} loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
@@ -283,6 +284,9 @@ public partial class Main : Node2D
 
         if (HasArgument("--fleet"))
             _shell.OpenFleet();
+
+        if (HasArgument("--missions"))
+            _shell.OpenMissions();
 
         var shotPath = FindShotPath();
         if (shotPath is not null)
@@ -514,6 +518,74 @@ public partial class Main : Node2D
             regionIndex, ready, capacity, stationed, rows);
     }
 
+    private ShellOverlay.MissionView CurrentMissionsView()
+    {
+        if (!_started || _campaign is null)
+            return new ShellOverlay.MissionView(
+                0.0, 0.0,
+                Array.Empty<ShellOverlay.MissionOfferRow>(),
+                Array.Empty<ShellOverlay.MissionActiveRow>(),
+                Array.Empty<ShellOverlay.MissionEventRow>());
+
+        var meta = _campaign.Meta;
+        var offers = _campaign.AvailableContracts
+            .Select(def => new ShellOverlay.MissionOfferRow(
+                def.Id,
+                def.DisplayName,
+                $"{def.Client} · {ContractGoals(def.Targets)} · {def.DurationHours:0.#} h",
+                $"{def.CreditsReward:N0} cr · {def.ScienceReward:0.#} sci",
+                true,
+                null))
+            .ToArray();
+
+        var active = _campaign.ActiveContracts
+            .Select(contract =>
+            {
+                if (!ContractCatalogue.TryGet(contract.DefId, out var def) || def is null)
+                    return new ShellOverlay.MissionActiveRow(
+                        contract.Id, contract.DefId, "unknown definition", "?", false, false);
+
+                var fraction = ContractCatalogue.CompletionFraction(contract, def);
+                var next = ContractCatalogue.NextCounter(contract, def);
+                var deliverable = next is not null && meta.Stockpile.GetValueOrDefault(next) > 1e-9;
+                return new ShellOverlay.MissionActiveRow(
+                    contract.Id,
+                    def.DisplayName,
+                    $"{fraction:P0} delivered · next {next ?? "none"} · due h{contract.DeadlineGameHour:0.#}",
+                    $"{def.CreditsReward * fraction:N0} cr accrued",
+                    deliverable,
+                    !contract.RewardClaimed);
+            })
+            .ToArray();
+
+        var events = meta.PendingEvents
+            .Select(pending =>
+            {
+                if (!EventCatalogue.TryGet(pending.DefId, out var def) || def is null)
+                    return new ShellOverlay.MissionEventRow(
+                        pending.DefId, "Unknown event", Array.Empty<ShellOverlay.MissionChoiceRow>());
+
+                var region = pending.TargetRegion is { } index
+                    ? $" · H3 {new H3Index(index)}"
+                    : string.Empty;
+                var choices = def.Choices
+                    .Select(choice => new ShellOverlay.MissionChoiceRow(
+                        choice.Label, choice.Detail, $"{pending.Id}|{choice.Id}"))
+                    .ToArray();
+                return new ShellOverlay.MissionEventRow(
+                    $"{def.DisplayName}{region}", def.Description, choices);
+            })
+            .ToArray();
+
+        return new ShellOverlay.MissionView(
+            meta.Credits, meta.SciencePoints, offers, active, events);
+    }
+
+    private static string ContractGoals(IReadOnlyDictionary<string, double> targets)
+        => string.Join(", ", targets
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => $"{item.Value:0.#} {item.Key}"));
+
     private void OnShellCommand(ShellCommand command, string? payload)
     {
         switch (command)
@@ -625,6 +697,47 @@ public partial class Main : Node2D
                     : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index);
                 return;
 
+            case ShellCommand.AcceptContract:
+                if (payload is null || _campaign is null)
+                    return;
+
+                var accepted = _campaign.TryAcceptContract(payload);
+                if (accepted.Success)
+                    SaveAfterMissionAction();
+                _shell.PushToast(accepted.Message, error: !accepted.Success);
+                return;
+
+            case ShellCommand.DeliverContract:
+                if (payload is null || _campaign is null)
+                    return;
+
+                var delivered = _campaign.TryDeliverContract(payload);
+                if (delivered.Success)
+                    SaveAfterMissionAction();
+                _shell.PushToast(delivered.Message, error: !delivered.Success);
+                return;
+
+            case ShellCommand.ClaimReward:
+                if (payload is null || _campaign is null)
+                    return;
+
+                var claimed = _campaign.TryClaimReward(payload);
+                if (claimed.Success)
+                    SaveAfterMissionAction();
+                _shell.PushToast(claimed.Message, error: !claimed.Success);
+                return;
+
+            case ShellCommand.ResolveEvent:
+                var parts = (payload ?? string.Empty).Split('|', 2);
+                if (parts.Length != 2 || _campaign is null)
+                    return;
+
+                var resolved = _campaign.TryResolveEvent(parts[0], parts[1]);
+                if (resolved.Success)
+                    SaveAfterMissionAction();
+                _shell.PushToast(resolved.Message, error: !resolved.Success);
+                return;
+
             case ShellCommand.OpenSaveFolder:
                 OS.ShellOpen(_settings.SaveRoot);
                 return;
@@ -645,6 +758,12 @@ public partial class Main : Node2D
                 GetTree().Quit();
                 return;
         }
+    }
+
+    private void SaveAfterMissionAction()
+    {
+        _campaignService.SetViewState(CaptureView());
+        _campaignService.SaveSimulation();
     }
 
     private void ReloadInto(string slotId)
@@ -1226,6 +1345,10 @@ public partial class Main : Node2D
 
             case Key.T when !_shell.IsOpen:
                 _shell.OpenTechTree();
+                break;
+
+            case Key.C when !_shell.IsOpen && _mode != Mode.Site:
+                _shell.OpenMissions();
                 break;
 
             case Key.G when _mode == Mode.Region:
