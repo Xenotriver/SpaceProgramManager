@@ -23,12 +23,12 @@ Snapshot: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
 | Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
-| Area-first navigation | **Experimental** — globe click/`--region` opens area view; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
+| Area-first navigation | **Done** — globe click/`--region` opens area view; region click recentres the area; `Enter` drills into the centred region; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
 | Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 15 headless Godot smokes, 20 ms p95 frame budget |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 21 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -128,7 +128,8 @@ mouse for the same actions.
 | Wheel / right drag | Zoom / pan |
 | Hover | Shade a region outline and describe the rover or region under the cursor |
 | Left click a rover | Select it as the source of the next dispatch |
-| Left click a region | Open that region, or dispatch the selected rover to its centre |
+| Left click a region | Centre the area on that region, or dispatch the selected rover to its centre |
+| `Enter` | Open the centred region's region view |
 | `G` | Toggle flat tangent-plane map ↔ isometric seven-region diorama |
 | `1`–`5` / `Tab` | Biome / terrain / site score / buildings / colour overlay (area-wide ramps) |
 | `Q` / `E` | Rotate the isometric diorama in 60° steps |
@@ -136,18 +137,17 @@ mouse for the same actions.
 | `R` | Open the fleet screen to buy rovers or choose a rover |
 | Esc | Clear the selected rover, then back to the globe |
 
-The experimental navigation order is **globe → area → region → site**: clicking a
-region on the globe or starting with `--region` lands in the area view; clicking a
-region there drills into the region view. `G` toggles the area projection; colony
-view is reached from the region view (or with `--view=management`). The isometric
-presentation renders all seven tiles as one faceted slab with the same five
-overlays as region and colony, normalised across the whole area.
-`--view=region`, `--view=management`, `--view=site` and `--view=globe` still open
-those views directly.
+The navigation order is **globe → area → region → site**: clicking a region on
+the globe or starting with `--region` lands in the area view; clicking a region
+there centres a fresh area on it, and `Enter` opens the centred region's region
+view. `G` toggles the area projection; colony view is reached from the region
+view (or with `--view=management`). The isometric presentation renders all seven
+tiles as one faceted slab with the same five overlays as region and colony,
+normalised across the whole area. `--view=region`, `--view=management`,
+`--view=site` and `--view=globe` still open those views directly.
 
-**Deferred, not implemented today:** selecting a region in the area view should
-make it the centred region and load a new area around it, rather than opening the
-single-region view. D40 records the intent; current behaviour is unchanged.
+Visual review confirmed the seven-region diorama, so D40 is no longer
+experimental.
 
 **Colony view (isometric)**
 

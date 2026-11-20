@@ -1139,6 +1139,11 @@ public partial class Main : Node2D
                 ShowSite(_selectedHex >= 0 ? _selectedHex : 0);
                 break;
 
+            case Key.Enter when _mode == Mode.Area:
+            case Key.KpEnter when _mode == Mode.Area:
+                ShowRegion(CurrentRegionIndex());
+                break;
+
             case Key.Key1 when _mode is Mode.Region or Mode.Management or Mode.Area:
                 SetOverlay(RegionViewMode.Biome);
                 break;
@@ -1438,7 +1443,8 @@ public partial class Main : Node2D
 
     private void OnAreaRegionOpened(ulong regionIndex)
     {
-        ShowRegion(regionIndex);
+        GD.Print($"area region selected: {regionIndex} → recentre area");
+        ShowArea(regionIndex);
     }
 
     private void OnAreaHovered(string detail)
@@ -1845,14 +1851,15 @@ public partial class Main : Node2D
                 $"camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief {_areaView.ReliefScale:F2}",
                 HorizontalAlignment.Left, -1, 12, AccentText);
             DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 136),
-                "one faceted slab · G returns to flat map", HorizontalAlignment.Left, -1, 11, MutedText);
+                "click to recentre · Enter drills in · G returns to flat",
+                HorizontalAlignment.Left, -1, 11, MutedText);
         }
         else
         {
             DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 116),
                 "tangent-plane map · G opens isometric diorama", HorizontalAlignment.Left, -1, 12, AccentText);
             DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 136),
-                "click a region to drill in", HorizontalAlignment.Left, -1, 11, MutedText);
+                "click a region to recentre · Enter drills in", HorizontalAlignment.Left, -1, 11, MutedText);
         }
 
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 160),

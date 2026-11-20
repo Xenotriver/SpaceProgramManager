@@ -1180,7 +1180,7 @@ public partial class AreaView : Node2D
         var tile = _world.GetRegion(area.Index);
         var biome = _world.Biomes[tile.DominantBiomeCode];
         var marker = SelectedRoverId is null
-            ? "click to open · click a rover first to dispatch"
+            ? "click to centre here · Enter opens region · click a rover first to dispatch"
             : "click to dispatch selected rover";
         return $"region {area.Index} · {biome.DisplayName} · {tile.HexCount} hexes · {marker}";
     }

@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics and experimental area-first navigation, **167 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-19** (area review 2026-11-20), M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics and area-first navigation, **167 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -21,7 +21,7 @@ Anchor: **2026-11-19**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
 | Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
-| Area-first navigation | **Experimental** | Globe click/`--region` opens area; `G` toggles flat/isometric area; five overlays area-wide; D40 |
+| Area-first navigation | **Done** | Globe click/`--region` opens area; region click recentres the area; `Enter` drills into the centred region; `G` toggles flat/isometric area; five overlays area-wide; D40 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 21 headless Godot smokes, `--frame-budget=20` p95 gate |
@@ -329,18 +329,17 @@ between regions, rover fleet state, failure/repair.
   screen buys/dispatches with live garage status. Cargo stays persisted/displayed
   only. No save-schema, fingerprint or tile-format change; D39 records the design.
   Clean build, 167/167 C# tests, no push.
-  - **Experimental follow-up (2026-11-19): area-first navigation.** Globe clicks
-    and `--region` now open `AreaView`; a region click there drills into the old
-    region view. `G` toggles the flat tangent-plane map against a seven-region
-    isometric diorama; `1`–`5`/`Tab` apply biome, terrain, site-score, buildings
-    and colour overlays with area-wide normalisation, and `--slope` still selects
-    terrain. `Q`/`E` orbit and `[`/`]` adjust relief; `--projection`, `--rot` and
-    `--relief` expose the same paths to automation. Explicit view flags still win.
-    D40 records the test; it remains reversible and no save contract changed.
-    The centred region's yellow outline is gone and the hover outline is a subtle
-    shade rather than a highlight. **Deferred, not implemented today:** selecting
-    a region should make it the centre and load a new area around it instead of
-    opening the single-region view; D40 records that intent.
+  - **Area-first navigation (2026-11-19, confirmed 2026-11-20).** Globe clicks
+    and `--region` open `AreaView`; a region click now recentres the area on that
+    region, and `Enter` drills into the centred region's single-region view. `G`
+    toggles the flat tangent-plane map against a seven-region isometric diorama;
+    `1`–`5`/`Tab` apply biome, terrain, site-score, buildings and colour overlays
+    with area-wide normalisation, and `--slope` still selects terrain. `Q`/`E`
+    orbit and `[`/`]` adjust relief; `--projection`, `--rot` and `--relief` expose
+    the same paths to automation. Explicit view flags still win. Visual review
+    confirmed the diorama, so D40 is no longer experimental; no save contract
+    changed. The centred region's yellow outline is gone and the hover outline is
+    a subtle shade rather than a highlight.
 - [ ] **C3 — contracts, missions, events and science rewards.**
 - [ ] **C4 — failure/repair loop.**
 - [ ] **C5 — docs, CI and full verification.**

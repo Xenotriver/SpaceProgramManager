@@ -790,14 +790,14 @@ No save-schema, fingerprint or tile-format change was needed.
 
 ---
 
-## D40 — Experimental area-first navigation
+## D40 — Area-first navigation
 
-**Commit:** 2026-11-19 · **Status:** experimental
+**Commit:** 2026-11-19 · **Reviewed:** 2026-11-20 · **Status:** done
 
-**Decision.** An experiment makes the multi-region area view the default drill-in
-from the globe: clicking a body region or starting with `--region` lands in
-`AreaView`, and clicking a region there opens the old single-region view. The
-intended hierarchy is planet → area → region → site. `AreaView` keeps its flat
+**Decision.** The multi-region area view is the default drill-in from the globe:
+clicking a body region or starting with `--region` lands in `AreaView`, and
+clicking a region there recentres the area on it. `Enter` opens the centred
+region's single-region view. The intended hierarchy is planet → area → region → site. `AreaView` keeps its flat
 tangent-plane map but adds an **isometric projection** of all seven tiles as one
 faceted slab, visually matching the colony diorama. `G` toggles flat ↔ isometric
 in area view; colony view is reached from region view. Both projections support
@@ -825,15 +825,16 @@ Moon bake) and cached for the session; the steady-state frame budget stays under
 the 20 ms gate. The presentation-only smoothstep relief curve from the first pass
 is retained for readable slope contrast, and all palettes come from the existing
 `RegionPalettes` helpers. No save-schema, fingerprint or tile-format change was
-needed. The experiment stays experimental until visual review.
+needed. Visual review on 2026-11-20 confirmed the seven-region diorama — the
+Valles Marineris relief on Mars reads especially well — so the experiment is now
+the default navigation path rather than a reversible trial.
 
-**Deferred, not implemented.** Selecting a region in `AreaView` should make that
-region the centre and load a new area around it. Today a region click still opens
-the single-region view, and a rover click still dispatches when a rover is
-selected; this note records the intended default for a later pass without
-changing behaviour now. The centred region's yellow outline has been removed and
-the hover outline is now a subdued dark shade, so neither marking reads as a
-highlight.
+**Recentre behaviour.** Selecting a region in `AreaView` now makes it the centre
+and loads a new seven-region area around it. A rover click still dispatches when
+a rover is selected. `Enter` in area view opens the centred region's single-region
+view, preserving the planet → area → region → site ladder. The centred region's
+yellow outline remains removed and the hover outline stays a subdued dark shade,
+so neither marking reads as a highlight.
 
 ---
 
@@ -847,4 +848,4 @@ layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
 M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
-by D39, and the experimental area-first navigation/slope test by D40.
+by D39, and the area-first navigation/slope test by D40.
