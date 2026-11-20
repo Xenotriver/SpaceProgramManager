@@ -43,6 +43,12 @@ public static class CampaignDefaults
     /// <summary>Minimum spacing between random events after one is raised.</summary>
     public const double EventCooldownHours = 72.0;
 
+    /// <summary>Severity at or above which a failure destroys rather than damages.</summary>
+    public const double FailureDestroyedSeverity = 0.85;
+
+    /// <summary>Per-building, per-game-hour hazard for operational installations.</summary>
+    public const double HazardPerBuildingHour = 0.001;
+
     /// <summary>
     /// Fills credits, stockpile and RNG state for a campaign that has no
     /// authoritative values yet. Existing values win, so this is safe to call on

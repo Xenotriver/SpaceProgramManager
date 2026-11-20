@@ -143,6 +143,11 @@ are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
   at an operational `rover_garage`, and dispatch fills `destination*`,
   `departureGameHour` and `arrivalGameHour`; `Tick` moves the rover on arrival.
   The fine-hex route itself is derived from the save fields and is never persisted.
+- An installation's `failure` record is kept after a completed repair with
+  `repairCompleteGameHour` set; `status` says whether it is currently broken. A
+  later failure replaces the record. M5 C4 uses the existing shard fields only:
+  repair duration is derived from the static cause and severity, so no ETA is
+  persisted.
 - IDs in these blocks are stable strings; definition data, rewards and event
   text live in static registries, not in the save. M5 C3 adds no fields:
   `contracts.progress` is filled by partial deliveries, `rewardClaimed` is set
@@ -295,7 +300,7 @@ makes a save incompatible.
 | `storedResources` | Per-installation resource buffer |
 | `constructionStartTime`, `constructionCompleteTime` | Game hours when construction began and finished; the latter is omitted until complete |
 | `state` | Optional flat string/number/bool bag for future per-installation data |
-| `failure` | Optional typed M5 failure/repair record: `cause`, `severity` (0..1), `startedGameHour`, optional `repairStartGameHour` and `repairCompleteGameHour`; omitted while healthy |
+| `failure` | Optional typed M5 failure/repair record: `cause`, `severity` (0..1), `startedGameHour`, optional `repairStartGameHour` and `repairCompleteGameHour`; omitted until the installation has failed |
 
 `statusReason`, `constructionCompleteTime`, `state` and `failure` are omitted when
 null/empty. **The local footprint is never stored**: it is rebuilt from the

@@ -26,7 +26,7 @@ dotnet build SpaceProgramManager.slnx
 dotnet test Sim.Tests/Sim.Tests.csproj
 ```
 
-Expected: `powodzenie: 179` — 179 passed, 0 failed, 0 skipped on a machine with
+Expected: `powodzenie: 190` — 190 passed, 0 failed, 0 skipped on a machine with
 `data/moon` and `data/mars` present. Tests that need a real bake **skip** when it
 is absent — do not make them fail. Set `SPM_REQUIRE_DATA=1` to turn those skips
 into failures (intended for CI).

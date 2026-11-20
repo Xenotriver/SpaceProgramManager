@@ -681,8 +681,11 @@ public sealed partial class CampaignState
         // Sorted region order makes shared-stockpile updates reproducible.
         foreach (var regionIndex in _loaded.OrderBy(index => index))
         {
-            if (_regions.TryGetValue(regionIndex, out var region))
-                SimulateRegion(region, hours, ref completed, ref idled);
+            if (!_regions.TryGetValue(regionIndex, out var region))
+                continue;
+
+            AdvanceMaintenance(region, hours);
+            SimulateRegion(region, hours, ref completed, ref idled);
         }
 
         arrived += CompleteRoverArrivals();

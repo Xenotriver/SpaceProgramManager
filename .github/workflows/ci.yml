@@ -129,3 +129,7 @@ jobs:
           # M5 C3 missions: contract offers and event choices on both bodies.
           run_smoke moon moon-missions --missions
           run_smoke mars mars-missions --missions
+
+          # M5 C4 maintenance: failure list and repair actions on both bodies.
+          run_smoke moon moon-maintenance --maintenance
+          run_smoke mars mars-maintenance --maintenance

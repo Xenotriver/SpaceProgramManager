@@ -1,3 +1,5 @@
+using Sim.Buildings;
+
 namespace Sim.Campaign;
 
 /// <summary>
@@ -163,16 +165,20 @@ public sealed partial class CampaignState
         foreach (var (resource, delta) in effect.Stockpile)
             Meta.Stockpile[resource] = Math.Max(0.0, Meta.Stockpile.GetValueOrDefault(resource) + delta);
 
+        var damage = string.Empty;
+        if (!string.IsNullOrWhiteSpace(effect.FailureCause))
+            damage = ApplyEventFailure(effect.FailureCause, pending.TargetRegion);
+
         Meta.AppendEventLog(new CampaignEventLogEntry
         {
             GameHour = Meta.GameTimeHours,
             DefId = def.Id,
             Choice = choice.Id,
-            Summary = effect.Summary,
+            Summary = $"{effect.Summary}{damage}",
         });
         Meta.PendingEvents.Remove(pending);
         Meta.UpdatedUtc = DateTimeOffset.UtcNow;
-        return new EventActionResult(EventActionStatus.Resolved, $"{def.DisplayName}: {effect.Summary}");
+        return new EventActionResult(EventActionStatus.Resolved, $"{def.DisplayName}: {effect.Summary}{damage}");
     }
 
     /// <summary>Called from each simulation step; settles contracts past deadline.</summary>
@@ -213,6 +219,30 @@ public sealed partial class CampaignState
                 : $"{def.DisplayName} closed at {fraction:P0} · {credits:N0} cr · {science:0.#} science",
             credits,
             science);
+    }
+
+    /// <summary>
+    /// Applies a choice's failure cause to one eligible installation in the
+    /// event's region (or the active/first loaded region), in stable id order.
+    /// </summary>
+    private string ApplyEventFailure(string causeId, ulong? targetRegion)
+    {
+        var regionIndex = targetRegion
+            ?? Meta.ActiveRegionIndex
+            ?? _loaded.OrderBy(index => index).Cast<ulong?>().FirstOrDefault();
+
+        if (regionIndex is not { } index || !_regions.TryGetValue(index, out var region))
+            return string.Empty;
+
+        var building = region.Buildings
+            .Where(item => item.Failure is null or { RepairCompleteGameHour: not null }
+                && item.Status is BuildingStatus.Operational or BuildingStatus.Idle)
+            .OrderBy(item => item.Id.ToString("D"), StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return building is null
+            ? string.Empty
+            : $" · {TryDamageBuilding(index, building.Id, causeId).Message}";
     }
 
     private CampaignContract? FindContract(string contractId)

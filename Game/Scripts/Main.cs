@@ -210,6 +210,7 @@ public partial class Main : Node2D
         _shell.TechViewProvider = CurrentTechView;
         _shell.FleetViewProvider = CurrentFleetView;
         _shell.MissionViewProvider = CurrentMissionsView;
+        _shell.MaintenanceViewProvider = CurrentMaintenanceView;
 
         GD.Print($"{KnownBodies.DisplayName(_world.BodyKey)} loaded: {_world.Regions.Count} regions, {_world.Biomes.Count} biomes.");
 
@@ -287,6 +288,9 @@ public partial class Main : Node2D
 
         if (HasArgument("--missions"))
             _shell.OpenMissions();
+
+        if (HasArgument("--maintenance"))
+            _shell.OpenMaintenance();
 
         var shotPath = FindShotPath();
         if (shotPath is not null)
@@ -586,6 +590,45 @@ public partial class Main : Node2D
             .OrderBy(item => item.Key, StringComparer.Ordinal)
             .Select(item => $"{item.Value:0.#} {item.Key}"));
 
+    private ShellOverlay.MaintenanceView CurrentMaintenanceView()
+    {
+        if (!_started || _campaign is null)
+            return new ShellOverlay.MaintenanceView(0.0, Array.Empty<ShellOverlay.MaintenanceRow>());
+
+        var rows = _campaign.DamagedInstallations
+            .Select(item =>
+            {
+                var failure = item.Building.Failure!;
+                var known = FailureCatalogue.TryGet(failure.Cause, out var cause) && cause is not null;
+                var repairing = failure.RepairStartGameHour is not null;
+                var detail = $"H3 {item.RegionIndex} · {(known ? cause!.DisplayName : failure.Cause)}"
+                    + $" · {failure.Severity:P0} severity · hp {item.Building.Health:F0}%";
+                var right = repairing
+                    ? "in progress"
+                    : known
+                        ? RepairCostText(FailureCatalogue.RepairCost(cause!, failure))
+                        : "unknown cause";
+                var def = _registry.TryGet(item.Building.DefId, out var found) ? found : null;
+
+                return new ShellOverlay.MaintenanceRow(
+                    $"{item.RegionIndex}|{item.Building.Id}",
+                    def?.DisplayName ?? item.Building.DefId,
+                    detail,
+                    right,
+                    !repairing && known);
+            })
+            .ToArray();
+
+        return new ShellOverlay.MaintenanceView(_campaign.Meta.Credits, rows);
+    }
+
+    private static string RepairCostText(IReadOnlyDictionary<string, double> cost)
+        => string.Join(" · ", cost
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => item.Key == "credits"
+                ? $"{item.Value:N0} cr"
+                : $"{item.Value:0.#} {item.Key}"));
+
     private void OnShellCommand(ShellCommand command, string? payload)
     {
         switch (command)
@@ -736,6 +779,20 @@ public partial class Main : Node2D
                 if (resolved.Success)
                     SaveAfterMissionAction();
                 _shell.PushToast(resolved.Message, error: !resolved.Success);
+                return;
+
+            case ShellCommand.StartRepair:
+                var repairParts = (payload ?? string.Empty).Split('|', 2);
+                if (repairParts.Length != 2
+                    || !ulong.TryParse(repairParts[0], out var repairRegion)
+                    || !Guid.TryParse(repairParts[1], out var repairBuilding)
+                    || _campaign is null)
+                    return;
+
+                var repair = _campaign.TryStartRepair(repairRegion, repairBuilding);
+                if (repair.Success)
+                    SaveAfterMissionAction();
+                _shell.PushToast(repair.Message, error: !repair.Success);
                 return;
 
             case ShellCommand.OpenSaveFolder:
@@ -1349,6 +1406,10 @@ public partial class Main : Node2D
 
             case Key.C when !_shell.IsOpen && _mode != Mode.Site:
                 _shell.OpenMissions();
+                break;
+
+            case Key.X when !_shell.IsOpen:
+                _shell.OpenMaintenance();
                 break;
 
             case Key.G when _mode == Mode.Region:

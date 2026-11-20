@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation and C3 missions, **179 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions and C4 failures/repairs, **190 C# tests + 5 pipeline tests passing**.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -23,9 +23,10 @@ Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
 | Area-first navigation | **Done** | Globe click/`--region` opens area; region click recentres the area; `Enter` drills into the centred region; `G` toggles flat/isometric area; five overlays area-wide; D40 |
 | Missions and events | **Done (M5 C3)** | Static contract/event catalogues, partial-delivery payouts, deadline settlement, seeded events, `C`/`--missions` screen; D41 |
+| Failures and repairs | **Done (M5 C4)** | Static failure causes, severity-scaled bills, timed repairs, hazard/event damage, `X`/`--maintenance` screen; D42 |
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 23 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 25 headless Godot smokes, `--frame-budget=20` p95 gate |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -352,8 +353,23 @@ between regions, rover fleet state, failure/repair.
     bounded 50-entry log. `C` or `--missions` opens a shell screen for all of it.
     No save-schema, fingerprint or tile-format change; v4 already carried the
     fields (D41). Clean build, 179/179 C# tests, no push.
-- [ ] **C4 — failure/repair loop.**
+- [x] **C4 — failure/repair loop.**
+  - `FailureCatalogue` defines four causes with severity ranges, repair hours and
+    severity-scaled credit/material bills. `CampaignState.TryDamageBuilding`
+    records typed failures on operational installations; severity ≥ 0.85 sets
+    `Destroyed`, otherwise `Damaged`. `TryStartRepair` pays the bill and marks the
+    start hour; `Tick` completes the repair after the derived duration, restores
+    health and status and keeps the typed record with a completion hour. A low
+    per-hour hazard rolls from the campaign RNG for active installations, and
+    event choices can pin a failure to a region. `X` or `--maintenance` opens the
+    repair screen. No save-schema, fingerprint or tile-format change; v4 already
+    carried the typed record (D42). Clean build, 190/190 C# tests, no push.
 - [ ] **C5 — docs, CI and full verification.**
+
+**After M5:** add Earth as the third baked body before starting the seamless H3
+LOD experiment. The LOD work stays in a separate worktree until M5 and Earth are
+done (user decision 2026-11-20; brief in
+`C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`).
 
 ### M6 — Hardware designer
 

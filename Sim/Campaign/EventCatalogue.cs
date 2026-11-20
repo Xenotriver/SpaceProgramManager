@@ -10,6 +10,9 @@ public sealed record EventEffect
     public IReadOnlyDictionary<string, double> Stockpile { get; init; }
         = new Dictionary<string, double>(StringComparer.Ordinal);
 
+    /// <summary>Optional static failure cause applied to an installation in the region.</summary>
+    public string? FailureCause { get; init; }
+
     public required string Summary { get; init; }
 }
 
@@ -99,6 +102,7 @@ public static class EventCatalogue
                 {
                     Stockpile = Stockpile(("electronics", -5.0)),
                     Science = 2.0,
+                    FailureCause = FailureCatalogue.DustIntrusionId,
                     Summary = "Dust fouled the arrays",
                 },
             },
@@ -173,11 +177,49 @@ public static class EventCatalogue
         },
     };
 
+    public const string EquipmentFaultId = "equipment_fault";
+
+    public static EventDefinition EquipmentFault { get; } = new()
+    {
+        Id = EquipmentFaultId,
+        DisplayName = "Equipment Fault",
+        Description = "Telemetry shows a distribution fault in one of the region's installations.",
+        Weight = 1.0,
+        TargetsRegion = true,
+        Choices = new[]
+        {
+            new EventChoiceDefinition
+            {
+                Id = "inspect",
+                Label = "Stop and inspect",
+                Detail = "Pay field costs for a clean diagnosis; no damage is done.",
+                Effect = new EventEffect
+                {
+                    Credits = -40_000.0,
+                    Science = 3.0,
+                    Summary = "Inspection caught the fault early",
+                },
+            },
+            new EventChoiceDefinition
+            {
+                Id = "push_on",
+                Label = "Keep operating",
+                Detail = "Save the credits and risk taking an installation offline.",
+                Effect = new EventEffect
+                {
+                    FailureCause = FailureCatalogue.PowerSurgeId,
+                    Summary = "A power surge took an installation offline",
+                },
+            },
+        },
+    };
+
     public static IReadOnlyList<EventDefinition> All { get; } = new[]
     {
         DustStorm,
         SupplyDrop,
         SurveyOpportunity,
+        EquipmentFault,
     };
 
     public static bool TryGet(string? id, out EventDefinition? definition)

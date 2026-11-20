@@ -31,6 +31,7 @@ public enum ShellCommand
     DeliverContract,
     ClaimReward,
     ResolveEvent,
+    StartRepair,
 }
 
 /// <summary>
@@ -53,6 +54,7 @@ public partial class ShellOverlay : Node2D
         TechTree,
         Fleet,
         Missions,
+        Maintenance,
     }
 
     private const float RowHeight = 46f;
@@ -222,6 +224,23 @@ public partial class ShellOverlay : Node2D
             Array.Empty<MissionActiveRow>(),
             Array.Empty<MissionEventRow>());
 
+    /// <summary>One open failure; the payload encodes "regionIndex|buildingId".</summary>
+    public sealed record MaintenanceRow(
+        string Payload,
+        string DisplayName,
+        string Detail,
+        string Right,
+        bool Repairable);
+
+    /// <summary>Live maintenance values rendered by the repair screen.</summary>
+    public sealed record MaintenanceView(double Credits, IReadOnlyList<MaintenanceRow> Rows);
+
+    /// <summary>Supplies maintenance state on every draw; the shell owns no game state.</summary>
+    public Func<MaintenanceView>? MaintenanceViewProvider { get; set; }
+
+    private MaintenanceView CurrentMaintenanceView() => MaintenanceViewProvider?.Invoke()
+        ?? new MaintenanceView(0.0, Array.Empty<MaintenanceRow>());
+
     /// <summary>Current simulation multiplier shown by the pause-screen buttons.</summary>
     public int TimeSpeed { get; private set; }
 
@@ -326,6 +345,21 @@ public partial class ShellOverlay : Node2D
 
         _returnScreen = Screen.Closed;
         _screen = Screen.Missions;
+        _selected = 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the failure/repair screen from gameplay or <c>--maintenance</c>.</summary>
+    public void OpenMaintenance()
+    {
+        if (_screen == Screen.Maintenance)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.Maintenance;
         _selected = 0;
         QueueRedraw();
     }
@@ -659,6 +693,10 @@ public partial class ShellOverlay : Node2D
                 Back();
                 return;
 
+            case Key.X when _screen == Screen.Maintenance:
+                Back();
+                return;
+
             case Key.Enter or Key.KpEnter or Key.Space:
                 ActivateSelected();
                 return;
@@ -764,6 +802,7 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.DeliverContract:
             case ShellCommand.ClaimReward:
             case ShellCommand.ResolveEvent:
+            case ShellCommand.StartRepair:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -818,6 +857,13 @@ public partial class ShellOverlay : Node2D
                 QueueRedraw();
                 break;
 
+            case "screen:maintenance":
+                _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
+                _screen = Screen.Maintenance;
+                _selected = 0;
+                QueueRedraw();
+                break;
+
             case "screen:main":
                 _screen = Screen.Main;
                 _selected = 0;
@@ -856,6 +902,7 @@ public partial class ShellOverlay : Node2D
             case Screen.TechTree:
             case Screen.Fleet:
             case Screen.Missions:
+            case Screen.Maintenance:
                 _screen = _returnScreen;
                 break;
 
@@ -963,7 +1010,7 @@ public partial class ShellOverlay : Node2D
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · M system map · T tech · C missions · A area · R fleet · G colony · Home active region", null,
+                    "F5 save · Esc pause/back · / search · M system map · T tech · C missions · X maintenance · A area · R fleet · G colony · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -981,6 +1028,8 @@ public partial class ShellOverlay : Node2D
                     true, ShellCommand.None, "screen:fleet"));
                 specs.Add(new RowSpec("Missions", "Accept contracts, deliver cargo and answer events", "C",
                     true, ShellCommand.None, "screen:missions"));
+                specs.Add(new RowSpec("Maintenance", "Repair damaged installations", "X",
+                    true, ShellCommand.None, "screen:maintenance"));
                 specs.Add(new RowSpec("Load campaign", "Switch slot and reload the scene", null,
                     true, ShellCommand.None, "screen:slots"));
                 specs.Add(new RowSpec("Settings", null, null, true, ShellCommand.None, "screen:settings"));
@@ -1196,6 +1245,35 @@ public partial class ShellOverlay : Node2D
                 {
                     specs.Add(new RowSpec($"+ {missions.Active.Count - 2} more contract(s)",
                         "More space is needed for the full list", null,
+                        false, ShellCommand.None, null));
+                }
+
+                specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));
+                break;
+
+            case Screen.Maintenance:
+                var maintenance = CurrentMaintenanceView();
+                title = "MAINTENANCE";
+                subtitle = $"{maintenance.Credits:N0} cr · repairs finish in game time";
+                hint = "↑↓ select · Enter start repair · X/Esc close";
+
+                if (maintenance.Rows.Count == 0)
+                {
+                    specs.Add(new RowSpec("No open failures", "All installations are healthy", null,
+                        false, ShellCommand.None, null));
+                }
+
+                foreach (var row in maintenance.Rows.Take(8))
+                {
+                    specs.Add(new RowSpec(row.DisplayName, row.Detail, row.Right,
+                        row.Repairable, ShellCommand.StartRepair, row.Payload,
+                        false, row.Repairable ? null : "repair already in progress or unknown cause"));
+                }
+
+                if (maintenance.Rows.Count > 8)
+                {
+                    specs.Add(new RowSpec($"+ {maintenance.Rows.Count - 8} more failure(s)",
+                        "Repair the first ones to see the rest", null,
                         false, ShellCommand.None, null));
                 }
 

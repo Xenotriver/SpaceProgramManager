@@ -711,7 +711,9 @@ leaving v1–v3 shards readable with a simple "no failure" default.
 
 **Cost.** Region shards are rewritten as v4 on the next save even when their site
 shape did not change. Unknown or invalid failure values are clamped/skipped
-rather than corrupting the live campaign.
+rather than corrupting the live campaign. M5 C4 keeps the record after a finished
+repair with `repairCompleteGameHour` set, so the completion is observable without
+a second save field; a later failure replaces it with a fresh record.
 
 ---
 
@@ -871,6 +873,37 @@ fingerprint or tile-format change was needed.
 
 ---
 
+## D42 — Failures are static causes with timed, paid repairs
+
+**Commit:** 2026-11-20 · **Status:** active
+
+**Decision.** M5 C4 adds `FailureCatalogue` with four static causes: each has a
+severity range, repair hours and a credit/material bill. `TryDamageBuilding`
+writes a typed v4 failure to an operational installation and sets `Damaged`, or
+`Destroyed` at severity ≥ 0.85. `TryStartRepair` charges the severity-scaled bill
+and records the start hour; `Tick` finishes the repair after the derived duration,
+restores health and status, and leaves the completion hour on the record. An
+active installation can also fail from a low per-hour hazard rolled from the
+persisted RNG; paused ones are skipped. Event choices may pin one failure to the
+event's region. `X` and `--maintenance` expose the loop in the shell.
+
+**Why.** C0 froze the shard fields but not the rules. Keeping causes, bills and
+repair times in a static catalogue means tuning never changes the save schema or
+bake fingerprint, and deriving the duration from cause + severity means no ETA
+field is needed. Severity-scaled partial damage makes a failure a setback with a
+cost rather than a permanent loss, while the destroyed tier keeps the stakes
+real without a dead end. Pausing is respected so the player's explicit choice is
+never overridden by a random roll.
+
+**Cost.** A repaired installation keeps its typed record with a completion hour,
+so code must treat a non-null `Failure` as "has failed before" and use `Status`
+to decide whether it is currently broken. Repairs occupy no crew or factory and
+consume no bandwidth, so the loop is deliberately shallow. Only loaded regions
+are hazarded or listed in the maintenance screen, matching the existing tick
+limitation. No save-schema, fingerprint or tile-format change was needed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -882,4 +915,4 @@ choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentatio
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
 M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
 by D39, the area-first navigation/slope test by D40, and the M5 C3 static-catalogue
-mission rule by D41.
+mission rule by D41, and the M5 C4 static-cause repair loop by D42.

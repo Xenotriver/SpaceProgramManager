@@ -11,7 +11,7 @@ engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics and C3 missions, **179 C# tests + 5 pipeline tests passing**.
+Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, C3 missions and C4 failures/repairs, **190 C# tests + 5 pipeline tests passing**.
 
 | Area | State |
 |---|---|
@@ -24,12 +24,13 @@ Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
 | Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
 | Missions and events | **Done (M5 C3)** — contract offers, partial-delivery payouts, deadlines, seeded events, `C`/`--missions` screen; D41 |
+| Failures and repairs | **Done (M5 C4)** — static failure causes, severity-scaled repair bills, timed repairs, hazard and event-linked damage, `X`/`--maintenance` screen; D42 |
 | Area-first navigation | **Done** — globe click/`--region` opens area view; region click recentres the area; `Enter` drills into the centred region; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
 | Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 23 headless Godot smokes, 20 ms p95 frame budget |
+| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 25 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -87,11 +88,12 @@ mouse for the same actions.
 | New campaign | Create an auto-named slot and start immediately |
 | Load campaign | Pick a slot; `×` deletes after confirmation |
 | Settings | Save root, keybind reference, open save folder |
-| Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), tech, missions, fleet, load, settings, main menu, quit |
+| Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), tech, missions, maintenance, fleet, load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
 | `M` | Open/close the schematic Solar System Map (Moon and Mars are ready) |
 | `T` | Open/close the tech tree |
 | `C` | Open/close missions (contracts and events) |
+| `X` | Open/close maintenance (failures and repairs) |
 | `A` | Open the area view (the default drill-in from the globe) |
 | `R` | Open the rover fleet / garage screen |
 
@@ -122,7 +124,21 @@ mouse for the same actions.
 Contracts deliver from the global stockpile. A full delivery earns the credit
 bonus; a partial one still pays proportionally when it is settled or when its
 deadline passes. Event choices apply credits, science and stockpile effects and
-append the bounded campaign log.
+append the bounded campaign log. Some choices can damage an installation in the
+event's region.
+
+**Maintenance (`X`)**
+
+| Input | Action |
+|---|---|
+| `↑` `↓` / mouse | Select an open failure |
+| `Enter` | Start the repair, paying credits and materials |
+| `X` / Esc | Close the screen |
+
+Severe failures destroy an installation but can still be repaired. Repairs finish
+in game time, so switching screens or saving mid-repair is safe. An operational
+installation can also fail spontaneously at a low per-hour hazard rate; paused
+ones are skipped.
 
 **Region view**
 
@@ -245,6 +261,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--tech` | Open the tech tree after startup |
 | `--fleet` | Open the rover fleet/garage screen after startup |
 | `--missions` | Open the contracts and events screen after startup |
+| `--maintenance` | Open the failures and repairs screen after startup |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign |
 | `--nosave` | Disable persistence for this run |
