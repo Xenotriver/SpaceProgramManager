@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions and C4 failures/repairs, **190 C# tests + 5 pipeline tests passing**.
+Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, **190 C# tests + 5 pipeline tests + 25 headless Godot smokes passing**. M5 is complete.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -27,6 +27,7 @@ Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
 | Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 25 headless Godot smokes, `--frame-budget=20` p95 gate |
+| M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43 |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -38,9 +39,11 @@ inspect hexes across five overlays, plan a rover route, buy rovers from a finish
 garage, watch them cross regions in the area view, switch that view between a flat
 map and an isometric seven-region diorama with the same five overlays as a region,
 press `Enter` to open a fine hex as a site, place several installations on its
-37-cell local grid, and have all of it persist across launches against a
-fingerprinted bake. The player can start on Moon or Mars directly with `--body`
-or travel between them with the `M` Solar System Map.
+37-cell local grid, buy tech upgrades in the `T` tree, accept contracts and answer
+events in the `C` missions screen, pay for repairs in the `X` maintenance screen,
+and have all of it persist across launches against a fingerprinted bake. The
+player can start on Moon or Mars directly with `--body` or travel between them
+with the `M` Solar System Map.
 
 With a valid imagery sidecar the player sees real Moon or Mars colour by default in
 the globe, region and colony views; `Tab` (or `--overlay=biome`) switches to the
@@ -51,8 +54,8 @@ construction, earn/spend credits and stockpile resources, see power or life-supp
 shortfalls called out in the HUD, and find occupied hexes as aggregate markers in
 every region and colony overlay.
 
-The player cannot: pick a tech in the UI, rename a campaign, or play Earth or
-another body yet.
+The player cannot: rename a campaign, play Earth or another body yet, or design
+hardware (M6).
 
 ### Naming (locked)
 
@@ -364,7 +367,17 @@ between regions, rover fleet state, failure/repair.
     event choices can pin a failure to a region. `X` or `--maintenance` opens the
     repair screen. No save-schema, fingerprint or tile-format change; v4 already
     carried the typed record (D42). Clean build, 190/190 C# tests, no push.
-- [ ] **C5 — docs, CI and full verification.**
+- [x] **C5 — docs, CI and full verification.**
+  - Audited and synchronised the docs: corrected the test inventory to include
+    `MissionTests`, `RoverTests` and `FailureTests` (190 cases total), added
+    `--missions`/`--maintenance` and the `C`/`X` keys to the automation notes,
+    described static M5 catalogues versus persisted v4 state in the architecture
+    doc, and removed the stale "cannot pick a tech in the UI" claim.
+  - CI now runs 25 frame-gate smokes (Moon/Mars `--maintenance` joined the C3
+    missions smokes); `docs/development.md` records the complete local gate.
+  - Verified: clean build (0 warnings/errors), 190/190 C# tests, 5/5 pipeline
+    tests, 25/25 headless smokes PASS (worst p95 7.14 ms vs the 20 ms limit),
+    `git diff --check` clean, no push. M5 is complete; D43 records the gate.
 
 **After M5:** add Earth as the third baked body before starting the seamless H3
 LOD experiment. The LOD work stays in a separate worktree until M5 and Earth are

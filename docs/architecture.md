@@ -56,7 +56,13 @@ Projects: `SpaceProgramManager.slnx` → `Sim`, `Sim.Tests`, `Game`.
 | `Sim/World` | `BodyManifest`, `BodyWorld`, `KnownBodies`, `RegionTile`, `HexRecord`, `TileFormat`, `BiomeRegistry` |
 | `Sim/Site` | `LocalGrid` (37-cell axial disk), `SiteScore`, `SiteFactors`, `SiteScorerConfig`, `RegionTileScoring` (sunlight, comms, terrain, resources, crater clearance) |
 | `Sim/Buildings` | `BuildingDef` (17 body-independent IDs), `BuildingCatalogue`, `BuildingRegistry`, `BuildingInstance` (`ParentHex` + `LocalCenter`), `BuildingStatus`, per-body biome restrictions and local placement validation |
-| `Sim/Campaign` | `CampaignState`, `RegionState`, `SiteState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint`, `RoverCatalogue`, rover purchase/dispatch APIs |
+| `Sim/Campaign` | `CampaignState`, `RegionState`, `SiteState`, `CampaignMeta`, `CampaignStore`, `CampaignSlotStore`, `SlotSummary`, `BakeFingerprint`, `RoverCatalogue`, `TechCatalogue`, `ContractCatalogue`, `EventCatalogue`, `FailureCatalogue`, `CampaignMissions`, `CampaignMaintenance`, rover purchase/dispatch, contract/event and damage/repair APIs |
+
+M5 gameplay definitions (tech, contracts, events, failure causes) are static
+catalogues in `Sim`; only generated or player-owned state — unlocks, contracts,
+pending events, rover fleet and typed failure records — is persisted in save v4.
+Derived values such as repair duration and cost come from the static cause plus
+severity, so tuning never changes the save contract or bake fingerprint.
 
 ### World loading
 
@@ -79,7 +85,7 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 
 | Class | Role |
 |---|---|
-| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
+| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, shell commands (tech, missions, maintenance, fleet), CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
 | `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
 | `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), hover/select, rover route, aggregate site markers (read-only) |
@@ -88,7 +94,7 @@ little-endian, crater `u8`. Pentagons have 286 children instead of 343.
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
 | `GameSettings` | `user://settings.json`: save root, last slot, relief default, FPS flag. Never inside a slot |
-| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search, tech tree, rover fleet/garage and toasts. Owns no game state; emits `Command` to `Main` and takes exclusive input while open |
+| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search, tech tree, missions/events, maintenance/repairs, rover fleet/garage and toasts. Views are supplied by `Main` through providers; the shell owns no game state, emits `Command` to `Main` and takes exclusive input while open |
 | `IsoProjection` | Pure helpers for the isometric projection, inverse projection, painter depth and plane rotation |
 
 ### Startup and slot flow

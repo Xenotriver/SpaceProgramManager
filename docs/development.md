@@ -40,20 +40,26 @@ installs.
 | File | Tests | Covers |
 |---|---:|---|
 | `BuildingTests.cs` | 20 | Registry consistency, placement rejection paths, footprint shape, tech filtering, per-body catalogues, Mars biome restrictions, real-bake biome ids |
-| `CampaignStoreTests.cs` | 31 | Meta/shard round-trip, v1 meta + v1/v2/v3 → v4 migration, v4 contracts/events/rovers + typed failure round-trip, fingerprint + cross-body + version + format rejection, backups, corrupt quarantine, missing-shard delete, unknown ids, state value filtering, site view state |
 | `CampaignSlotTests.cs` | 16 | Slot discovery/ordering, `slot.json` creation + rebuild, fingerprint/cross-body/unreadable states, delete safety, view-state round-trip |
+| `CampaignStoreTests.cs` | 31 | Meta/shard round-trip, v1 meta + v1/v2/v3 → v4 migration, v4 contracts/events/rovers + typed failure round-trip, fingerprint + cross-body + version + format rejection, backups, corrupt quarantine, missing-shard delete, unknown ids, state value filtering, site view state |
 | `CampaignTests.cs` | 16 | Site-scoped place/remove/clear, local preview footprint, two installations in one hex, independent sites, local overlap/clipping, install-from-save validation, visited tracking, change events |
 | `ChildOrderTests.cs` | 2 | H3 child enumeration order matches h3-py (343 and 286 cells) |
 | `DominantBiomeResolverTests.cs` | 7 | Area share, neighbour majority, distance fallback, priority order |
+| `FailureTests.cs` | 11 | Static cause catalogue, damaged/destroyed thresholds, repair bills and timing, event-linked damage, hazard guards, v4 shard round-trip |
 | `HexGridTests.cs` | 5 | H3 index ↔ lat/long round-trip, 6 neighbours on a normal cell, region parent/children, canonical H3 example |
 | `KnownBodiesTests.cs` | 5 | Ready bodies are Moon + Mars; case-insensitive normalization rejects unknown keys |
 | `LocalGridTests.cs` | 7 | 37-cell disk, centre-first order, boundary rejection, axial distance, local footprint sizes and ring-3 clipping |
+| `MissionTests.cs` | 12 | Contract catalogue, accept/deliver/partial payouts, deadline settlement, event cooldowns, v4 persistence |
 | `MovementModelTests.cs` | 6 | Uphill/downhill multipliers, crater penalties, non-stacking rule |
 | `RoutePlannerTests.cs` | 6 | Cheapest-time path, crater on destination, unreachable goal, empty route, leg totals |
+| `RoverTests.cs` | 7 | Garage purchases, cross-region routing, travel progress and persisted fleet state |
 | `SimulationTests.cs` | 12 | Clock steps/pause, seeded RNG, construction lifecycle, power idling, exact cost, tech gate, science-point purchases, deterministic replay, 5-neighbour pentagon |
 | `SiteScoringTests.cs` | 6 | Composite factors, viability threshold, weight presets, resource deposit, config defaults |
 | `TechCatalogueTests.cs` | 3 | Tech ids/prerequisites/unlocks, coverage of every building tech requirement, deterministic display order |
 | `WorldLoaderTests.cs` | 18 | Data-root resolution, manifest + tile-header validation, synthetic bake (343 + 286), real Moon and Mars bakes, sampled Mars empty-hex elevation |
+
+**Total: 190 test cases.** Real-bake tests skip gracefully when `data/` is
+absent (see §2); CI sets `SPM_REQUIRE_DATA=1` so those skips become failures.
 
 ## 3. Run the game
 
@@ -125,6 +131,8 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 | `--menu` | Force the main menu even with other arguments (useful with `--shot`). |
 | `--map` | Open the Solar System Map after startup. |
 | `--tech` | Open the tech tree after startup. |
+| `--missions` | Open the contracts and events screen after startup. |
+| `--maintenance` | Open the failures and repairs screen after startup. |
 | `--fleet` | Open the rover fleet/garage screen after startup. |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`). |
 | `--fresh` | Clear the selected slot's region shards and start a new campaign. |
@@ -151,11 +159,12 @@ Notes:
   `--place` places several installations in the same site in command order.
 - `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
   effective `camera: <n>°` afterwards. That is expected.
-- `M` toggles the Solar System Map from any view; `A` opens the area view and `R`
-  the fleet screen from any gameplay view. Globe clicks and `--region` open the
-  area view by default; clicking a region there drills into the region view.
-  `G` toggles the area between its flat tangent-plane map and a seven-region
-  isometric diorama; colony view is entered from region view.
+- `M` toggles the Solar System Map from any view; `C` and `X` open the missions
+  and maintenance screens, `A` opens the area view and `R` the fleet screen from
+  any gameplay view. Globe clicks and `--region` open the area view by default;
+  clicking a region there drills into the region view. `G` toggles the area
+  between its flat tangent-plane map and a seven-region isometric diorama;
+  colony view is entered from region view.
 - `Tab` toggles surface imagery/biome on the globe and cycles overlays in area,
   region and colony views; `1`–`5` select an overlay directly in those views.
   In isometric area view `Q`/`E` rotate the slab and `[`/`]` adjust relief.
@@ -179,10 +188,32 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-21 smokes: colour and biome for globe/region, colour for colony on both bodies,
-plus both globes, the unchanged Moon site view, the tech tree screen, the area view
-on both bodies, the fleet screen, the area terrain-slope toggle and five isometric
-area-overlay runs.
+25 smokes: colour and biome for globe/region on both bodies, colour for colony on
+both bodies, the unchanged Moon site view, the tech tree, the missions and
+maintenance screens on both bodies, the area view on both bodies, the fleet screen,
+the area terrain-slope toggle and five isometric area-overlay runs.
+
+### Full verification
+
+Run these before closing an M5 milestone; CI runs the same set in
+`.github/workflows/ci.yml` with synthetic fixtures:
+
+```powershell
+dotnet build SpaceProgramManager.slnx
+dotnet test Sim.Tests/Sim.Tests.csproj
+pipeline/.venv/Scripts/python.exe -m unittest discover -s pipeline/tests -p 'test_imagery.py' -v
+git diff --check
+```
+
+Use the Python 3.13 environment with `pipeline/requirements.txt` installed (the
+`pipeline/.venv` path above on this machine); the system Python may lack `numpy`.
+
+Expected: clean build (0 warnings, 0 errors), 190/190 C# tests, 5/5 pipeline
+tests and no whitespace errors (Git may warn about LF → CRLF on checkout, which
+is not a diff error). Then run all 25 headless smokes with `--frame-budget=20
+--frames=30` and `--save` pointed at a scratch directory, using the same
+argument sets as the CI step. Each must exit 0 and print `PASS`; any `FAIL`
+means the milestone is not done.
 
 ## 5. Data pipeline
 

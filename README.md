@@ -11,7 +11,7 @@ engine-free and saved as JSON. Moon and Mars are playable.
 
 ## Status at a glance
 
-Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, C3 missions and C4 failures/repairs, **190 C# tests + 5 pipeline tests passing**.
+Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), **190 C# tests + 5 pipeline tests + 25 headless Godot smokes passing**.
 
 | Area | State |
 |---|---|
@@ -25,6 +25,7 @@ Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C
 | Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
 | Missions and events | **Done (M5 C3)** — contract offers, partial-delivery payouts, deadlines, seeded events, `C`/`--missions` screen; D41 |
 | Failures and repairs | **Done (M5 C4)** — static failure causes, severity-scaled repair bills, timed repairs, hazard and event-linked damage, `X`/`--maintenance` screen; D42 |
+| M5 verification | **Done (M5 C5)** — synced docs, 25 CI smokes, clean build/tests/diff; D43 |
 | Area-first navigation | **Done** — globe click/`--region` opens area view; region click recentres the area; `Enter` drills into the centred region; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |

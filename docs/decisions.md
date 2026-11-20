@@ -904,6 +904,30 @@ limitation. No save-schema, fingerprint or tile-format change was needed.
 
 ---
 
+## D43 — M5 closes on a reproducible verification gate
+
+**Commit:** 2026-11-20 · **Status:** active
+
+**Decision.** M5 C5 defines "done" as a clean solution build, 190/190 C# tests,
+5/5 pipeline tests, 25/25 headless Godot frame-gate smokes at 20 ms p95, a clean
+`git diff --check`, and docs/roadmap/decisions/plan snapshot in sync. CI runs the
+same smoke matrix on synthetic Moon/Mars fixtures; local verification uses the
+real baked data with scratch save roots. No save-schema, fingerprint or tile
+format was changed, and nothing was pushed.
+
+**Why.** C0–C4 added contracts, events, rovers, tech and failures without
+changing the v4 save contract, so the drift risk now lives in documentation and
+automation rather than in persisted state. One gate catches stale test counts,
+missing CLI flags and view regressions before Earth and the LOD experiment branch
+away from `main`.
+
+**Cost.** Full local verification takes a few minutes and needs both Godot 4.7.2
+mono and a Python 3.13 pipeline environment; CI downloads Godot and pins its
+SHA-256. The matrix is deliberately broad (25 runs across both bodies and every
+shell screen) instead of minimal, so adding a view requires adding its smoke.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -914,5 +938,6 @@ layout is settled by D15. M4 body, catalogue, save-isolation, frame-gate and CI
 choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentation by
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
 M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
-by D39, the area-first navigation/slope test by D40, and the M5 C3 static-catalogue
-mission rule by D41, and the M5 C4 static-cause repair loop by D42.
+by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
+mission rule by D41, the M5 C4 static-cause repair loop by D42, and the M5 C5
+verification gate by D43.
