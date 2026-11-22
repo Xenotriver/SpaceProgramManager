@@ -419,9 +419,9 @@ between regions, rover fleet state, failure/repair.
 **Next:** the seamless H3 LOD experiment lives in a separate worktree until Earth
 is merged (user decision 2026-11-20; brief in
 `C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`). Stages A and B are
-now implemented and measured in `experiment/seamless-h3-lod`; see
-[`lod-experiment.md`](lod-experiment.md). Nothing ports to `main` without a
-separate decision.
+now implemented and measured in `experiment/seamless-h3-lod`. D49 records the
+REVISE verdict; see [`lod-experiment.md`](lod-experiment.md). Nothing ports to
+`main` without a separate decision.
 
 ### M6 — Hardware designer
 

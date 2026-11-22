@@ -91,7 +91,10 @@ crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan.
 VRAM was not measured directly; GPU memory needs an external tool. The 8 GB RAM
 ceiling is met by the working-set figure, but that excludes GPU allocations.
 
-## Next
+## Stage C decision
 
-Stage C writes the numbered keep/revise/kill decision with the measured numbers.
-Nothing ports to `main` without a separate decision.
+**REVISE, do not port** (D49 in [`decisions.md`](decisions.md)). The crossfade,
+mixed-tier seams, load latency and memory gates all pass, but Res 6/7 detail is
+visual-only, the gnomonic anchor is fixed, VRAM is unmeasured and the timings
+include the normal views behind the probe. A further iteration needs real detail
+samples, reprojection and isolated frame measurement before any port.

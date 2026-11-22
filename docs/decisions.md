@@ -1123,6 +1123,44 @@ fallback to biome colours fails the build.
 
 ---
 
+## D49 — Seamless H3 LOD experiment: REVISE, do not port
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main` under this
+decision.
+
+**Verdict: REVISE.** Keep the mechanism, reject the current presentation as
+production-ready.
+
+**Evidence.** Stage A built three tiers from one Res 3 parent
+(`1 / 343 / 2401` cells) with a 220 ms crossfade; 300-frame p95 6.94 ms. Stage B
+drew the focus parent at the zoom tier and its `gridDisk(1)` neighbours one tier
+coarser, with a 16-entry LRU and one shared gnomonic basis; a 1,200-frame
+pan+zoom stress logged two full `0->1->2->0` cycles at p95 6.94 ms, max tile
+load 21 ms at Res 7, 333 loads / 271 evictions, and working set 276-306 MB with
+no growth. Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32
+headless smokes (worst p95 10.01 ms). Shared H3 boundary vertices projected
+through one basis leave no gap between mixed-tier parents; a central 200x200 px
+box contained zero background pixels.
+
+**Why revise, not keep.** Res 6/7 are visual-only: their fills are deterministic
+brightness variants of the parent biome, so the detail tier has no gameplay or
+geography behind it. The gnomonic anchor is fixed, so far panning distorts and
+will need reprojection. VRAM was not measured, the probe overlays the normal
+views (so timings include a constant baseline), and the LRU holds only a
+seven-parent window rather than a globe-wide tile set.
+
+**Why not kill.** Crossfade, mixed-tier seams, tile latency and memory all meet
+the brief's gates on the target-class machine, so the core approach is sound and
+worth one more iteration.
+
+**Next iteration.** Add real Res 6/7 biome/relief samples, reprojection or a
+globe camera, VRAM instrumentation and a no-baseline frame measurement; then
+write a new decision before any port to `main`. Details in
+[`lod-experiment.md`](lod-experiment.md).
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
