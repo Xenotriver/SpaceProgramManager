@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, Earth playable with water rules, a presentation-only fluid overlay and real pinned geography, **212 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**. M5 and Earth are complete; D46 replaces the Earth fixture with real data for local play while CI keeps the synthetic bake.
+Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, Earth playable with water rules, a presentation-only fluid overlay, real pinned geography and a seam-free globe, **212 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**. M5 and Earth are complete; D46 replaces the Earth fixture with real data for local play while CI keeps the synthetic bake, and D48 removes the gaps between globe cells.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -15,7 +15,7 @@ Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Mars data pipeline | **Done (M4)** | `data/mars`: 41,162 regions, 7 biomes, MOLA elevation, USGS geology and Robbins & Hynek craters; `generatedUtc=2026-11-18T19:35:34+00:00` |
 | Earth data pipeline | **Done (D46; D45 fixture remains for CI)** | `data/earth`: 41,162 regions, 13 land/water biomes, real Natural Earth coasts/water, ETOPO1 relief and Blue Marble colour; synthetic fixture still byte-identical for CI |
 | Sim core | **Done** | H3, biomes, water placement, movement, terrain-aware routing, world loader, site scoring, per-body building catalogues, local grid, sites, campaign, save store, slot catalogue; coastal centre scoring fixed in D47 |
-| Godot runtime | **Done** | Globe with map-correct east/west orientation (D47), region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
+| Godot runtime | **Done** | Seam-free globe from real H3 boundaries and map-correct east/west orientation (D47/D48), region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause, search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
@@ -29,7 +29,7 @@ Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Surface imagery | **Done (M4.5, extended for Earth/D46)** | Real Moon/Mars/Earth colour sidecars in globe/region/colony; Earth uses Blue Marble, CI uses a synthetic fixture; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | Water presentation | **Done (Earth)** | Presentation-only `fluid.bin` sidecar, flat water fills, river strokes and water hover text; biome byte stays authoritative |
 | CI and performance gate | **Done (M4, extended M4.5/M5/Earth)** | `.github/workflows/ci.yml`; synthetic tile + imagery + fluid bakes, 32 headless Godot smokes, `--frame-budget=20` p95 gate |
-| M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43. Earth verification after D47: 212/212 C#, 22/22 pipeline, 32/32 smokes (worst p95 10.96 ms) |
+| M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43. Earth verification after D48: 212/212 C#, 22/22 pipeline, 32/32 smokes (worst p95 7.14 ms) |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -55,7 +55,8 @@ synthetic fixtures. `Tab` (or `--overlay=biome`) switches to the analytical biom
 map. Missing or corrupt imagery only produces a warning. A valid Earth fluid
 sidecar adds river strokes over the authoritative water biomes; bad sidecars
 never change placement, routing or saves. The globe is oriented west/left and
-east/right after D47.
+east/right after D47, and its cells share real H3 boundaries with no seams after
+D48.
 
 The player can also pass time with pause/1×/2×/4×, watch installations finish
 construction, earn/spend credits and stockpile resources, see power or life-support

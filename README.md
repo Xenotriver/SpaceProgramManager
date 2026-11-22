@@ -20,7 +20,7 @@ Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 c
 | Mars data pipeline | **Done (M4)** — 41,162 regions, 7 biomes, MOLA elevation, geology and craters |
 | Earth data pipeline | **Done (D46; D45 fixture remains for CI)** — 41,162 regions, 13 land/water biomes, real Natural Earth coasts/water, ETOPO1 relief and Blue Marble colour; deterministic synthetic fixtures for CI |
 | Sim core (engine-free) | **Done** — H3, biomes, water placement, movement, routing, tiles, site scoring, per-body building catalogues, sites, campaign, save store, slot catalogue |
-| Godot runtime | **Done** — main menu, slots, body selection, system map, globe, region/colony inspectors, site placement, save/load, CLI automation |
+| Godot runtime | **Done** — main menu, slots, body selection, system map, seam-free H3-boundary globe, region/colony inspectors, site placement, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |

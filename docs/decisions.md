@@ -1087,6 +1087,35 @@ fails on land, and multi-hex water footprints still reject mixed land/water.
 
 ---
 
+## D48 — Seam-free globe from real H3 boundaries
+
+**Date:** 2026-11-22 · **Status:** active
+
+**Decision.** Stop drawing the globe as one flat regular hexagon per res-3
+region. `MoonGlobe` now bakes every region's H3 boundary vertices into a single
+static `ArrayMesh` and rotates that mesh in `Shaders/GlobeCells.gdshader`. Region
+colours remain per-vertex, so imagery/biome toggles rebuild the mesh once with
+new colours; camera changes update four shader uniforms. Fragments with rotated
+`z <= 0` are discarded, giving exact orthographic limb clipping.
+
+**Why.** A flat tangent hex placed at a projected centroid does not share edges
+with its neighbours. The old `SeamFudge = 1.04` hid most small cracks but could
+never make the tiling continuous, especially near the limb or on pentagons. H3
+already returns shared boundary vectors for every cell and `MoonGlobe` already
+cached them for hover outlines; using the same vertices as filled geometry makes
+adjacent cells abut exactly. This is body-agnostic: Moon, Mars, Earth and future
+bakes all carry H3 region boundaries, so no per-body rule or pipeline change is
+needed.
+
+**Cost.** One new shader resource and a one-time mesh build at globe
+initialisation. Picking still uses projected centroids, so hover/select behaviour
+is unchanged. No bake, save schema, fingerprint, manifest or CI-fixture change.
+Verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless smokes
+(worst p95 7.14 ms); a non-headless Earth capture has zero background pixels
+inside the globe disc, so no seams remain.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1101,4 +1130,4 @@ by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
 mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
 and the organic per-hex Earth surface by D45. Globe handedness and coastal water
-sites are settled by D47.
+sites are settled by D47; the seam-free boundary mesh by D48.

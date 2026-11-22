@@ -7,13 +7,13 @@ using H3.Extensions;
 using Sim.World;
 
 /// <summary>
-/// Planetary map: an orthographic globe of a body's regions, one flat hex per
-/// region, coloured by dominant biome.
+/// Planetary map: an orthographic globe of a body's H3 regions, coloured by
+/// dominant biome or mean imagery.
 ///
 /// This is the navigation/site-selection view (design doc §2.6), so it is 2D:
-/// every region is projected onto the sphere, rotated, and drawn as one instance
-/// of a shared hex mesh. The whole globe is a single MultiMesh draw call; instance
-/// transforms are only rebuilt when the camera or the hover changes.
+/// every region's real H3 boundary is baked into one static mesh and rotated in
+/// a canvas-item shader. Adjacent cells share boundary vectors, so the globe has
+/// no seams; camera changes only update four shader uniforms.
 /// </summary>
 public partial class MoonGlobe : Node2D
 {
@@ -40,15 +40,15 @@ public partial class MoonGlobe : Node2D
     private const float MaxZoom = 12f;
     private const float DragThresholdPixels = 5f;
     private const float MaxPitch = 1.35f;
-    private const float SeamFudge = 1.04f;
 
     private BodyWorld _world = null!;
     private RegionShape[] _regions = Array.Empty<RegionShape>();
     private SurfaceImagery? _imagery;
     private bool _imageryEnabled;
-    private MultiMesh _multimesh = null!;
-    private MultiMeshInstance2D _instances = null!;
-    private float _hexRadiusRadians;
+    private ArrayMesh _cellMesh = null!;
+    private MeshInstance2D _cells = null!;
+    private ShaderMaterial _material = null!;
+    private Color[] _vertexColors = Array.Empty<Color>();
 
     private Vector2 _center;
     private float _radius = 300f;
@@ -109,7 +109,7 @@ public partial class MoonGlobe : Node2D
         _selected = index;
         _hovered = -1;
 
-        UpdateInstances();
+        UpdateShader();
         QueueRedraw();
     }
 
@@ -119,7 +119,7 @@ public partial class MoonGlobe : Node2D
         _yaw = Mathf.DegToRad(yawDegrees);
         _pitch = Mathf.DegToRad(pitchDegrees);
         _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
-        UpdateInstances();
+        UpdateShader();
         QueueRedraw();
     }
 
@@ -130,8 +130,8 @@ public partial class MoonGlobe : Node2D
 
     /// <summary>
     /// Binds optional imagery and precomputes one mean colour per region. The
-    /// colours are uploaded once; toggling only swaps the MultiMesh instance
-    /// colour buffer and never rebuilds geometry.
+    /// static cell mesh is recoloured once here and when the overlay toggles;
+    /// camera changes never rebuild geometry.
     /// </summary>
     public void SetImagery(SurfaceImagery? imagery, bool enabled)
     {
@@ -146,7 +146,7 @@ public partial class MoonGlobe : Node2D
                 : imagery.MeanFor(entry.Index);
         }
 
-        ApplyInstanceColors();
+        ApplyCellColors();
         QueueRedraw();
     }
 
@@ -158,7 +158,7 @@ public partial class MoonGlobe : Node2D
             return;
 
         _imageryEnabled = next;
-        ApplyInstanceColors();
+        ApplyCellColors();
         QueueRedraw();
     }
 
@@ -166,7 +166,7 @@ public partial class MoonGlobe : Node2D
     {
         _world = world;
         BuildShapes();
-        BuildMultiMesh();
+        BuildCells();
         UpdateViewportMetrics();
     }
 
@@ -182,7 +182,7 @@ public partial class MoonGlobe : Node2D
             return;
 
         _yaw += (float)delta * 0.5f;
-        UpdateInstances();
+        UpdateShader();
         QueueRedraw();
     }
 
@@ -268,7 +268,7 @@ public partial class MoonGlobe : Node2D
         {
             _pan += motion.Position - _lastMouse;
             _lastMouse = motion.Position;
-            UpdateInstances();
+            UpdateShader();
             QueueRedraw();
             return;
         }
@@ -282,7 +282,7 @@ public partial class MoonGlobe : Node2D
             _pitch = Mathf.Clamp(_pitch + delta.Y * 0.006f, -MaxPitch, MaxPitch);
 
             _hovered = -1;
-            UpdateInstances();
+            UpdateShader();
             QueueRedraw();
             return;
         }
@@ -302,7 +302,7 @@ public partial class MoonGlobe : Node2D
         var offset = anchor - origin;
         _pan += offset * (1f - _zoom / before);
 
-        UpdateInstances();
+        UpdateShader();
         QueueRedraw();
     }
 
@@ -374,40 +374,15 @@ public partial class MoonGlobe : Node2D
         return best;
     }
 
-    private void UpdateInstances()
+    private void UpdateShader()
     {
-        if (_multimesh is null || _regions.Length == 0)
+        if (_material is null)
             return;
 
-        var cosYaw = Mathf.Cos(_yaw);
-        var sinYaw = Mathf.Sin(_yaw);
-        var cosPitch = Mathf.Cos(_pitch);
-        var sinPitch = Mathf.Sin(_pitch);
-        var scale = _radius * _zoom;
-        var origin = _center + _pan;
-        var hexRadius = _hexRadiusRadians * scale * SeamFudge;
-        var collapsed = new Transform2D(0f, Vector2.Zero, 0f, Vector2.Zero);
-
-        for (var i = 0; i < _regions.Length; i++)
-        {
-            Rotate(_regions[i].Centroid, cosYaw, sinYaw, cosPitch, sinPitch, out var x, out var y, out var z);
-
-            if (z <= 0.02f)
-            {
-                // Back of the globe: collapse the instance (zero scale).
-                _multimesh.SetInstanceTransform2D(i, collapsed);
-                continue;
-            }
-
-            // Compress along the radial direction to fake foreshortening at the limb.
-            var angle = Mathf.Atan2(-y, x);
-            var radiusX = hexRadius * Mathf.Max(z, 0.15f);
-
-            _multimesh.SetInstanceTransform2D(
-                i,
-                new Transform2D(angle, new Vector2(radiusX, hexRadius), 0f,
-                    new Vector2(origin.X + x * scale, origin.Y - y * scale)));
-        }
+        _material.SetShaderParameter("yaw", _yaw);
+        _material.SetShaderParameter("pitch", _pitch);
+        _material.SetShaderParameter("globe_center", _center + _pan);
+        _material.SetShaderParameter("globe_scale", _radius * _zoom);
     }
 
     private void DrawMarkers(
@@ -541,80 +516,98 @@ public partial class MoonGlobe : Node2D
         _indexLookup.Clear();
         for (var i = 0; i < shapes.Length; i++)
             _indexLookup[shapes[i].Index] = i;
-
-        // Res-3 cells are near-equal-area, so one hex size fits all: derive the
-        // angular circumradius from the number of cells on the sphere.
-        _hexRadiusRadians = Mathf.Sqrt(4f * Mathf.Pi / shapes.Length / 2.598f);
     }
 
-    private void BuildMultiMesh()
+    private void BuildCells()
     {
-        var white = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
-        white.Fill(Colors.White);
-        var texture = ImageTexture.CreateFromImage(white);
-
-        _multimesh = new MultiMesh
+        _material = new ShaderMaterial
         {
-            TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
-            UseColors = true,
-            Mesh = BuildHexMesh(),
-            InstanceCount = _regions.Length,
+            Shader = GD.Load<Shader>("res://Shaders/GlobeCells.gdshader"),
         };
 
-        // Colours only change when the player toggles the overlay. Transforms
-        // follow the camera and are updated separately.
-        ApplyInstanceColors();
-
-        _instances = new MultiMeshInstance2D
+        _cells = new MeshInstance2D
         {
-            Multimesh = _multimesh,
-            Texture = texture,
+            // Behind the parent's outlines, markers and limb arc.
+            ZIndex = -1,
+            Mesh = BuildCellMesh(),
+            Material = _material,
+            Texture = WhiteTexture(),
         };
 
-        AddChild(_instances);
-        UpdateInstances();
+        AddChild(_cells);
+        UpdateShader();
     }
 
-    private void ApplyInstanceColors()
+    private void ApplyCellColors()
     {
-        if (_multimesh is null)
+        if (_cells is null || _cellMesh is null)
             return;
 
-        for (var i = 0; i < _regions.Length; i++)
-        {
-            _multimesh.SetInstanceColor(
-                i, UsesImagery ? _regions[i].ImageryColor : _regions[i].BiomeColor);
-        }
+        var previous = _cellMesh;
+        _cellMesh = BuildCellMesh();
+        _cells.Mesh = _cellMesh;
+        _cells.QueueRedraw();
+        previous?.Dispose();
     }
 
-    private static ArrayMesh BuildHexMesh()
+    private ArrayMesh BuildCellMesh()
     {
-        // Flat-top hexagon with circumradius 1, as a triangle fan.
-        var vertices = new Vector2[18];
-        var colors = new Color[18];
+        var vertexCount = 0;
+        foreach (var region in _regions)
+            vertexCount += region.Boundary.Length * 3;
 
-        for (var i = 0; i < 6; i++)
+        var vertices = new Vector3[vertexCount];
+        var uvs = new Vector2[vertexCount];
+        _vertexColors = new Color[vertexCount];
+
+        var cursor = 0;
+        for (var i = 0; i < _regions.Length; i++)
         {
-            var angle = Mathf.Pi / 3f * i;
-            var current = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-            var nextAngle = Mathf.Pi / 3f * (i + 1);
-            var next = new Vector2(Mathf.Cos(nextAngle), Mathf.Sin(nextAngle));
+            var region = _regions[i];
+            var color = UsesImagery ? region.ImageryColor : region.BiomeColor;
+            var boundary = region.Boundary;
 
-            vertices[i * 3] = Vector2.Zero;
-            vertices[i * 3 + 1] = current;
-            vertices[i * 3 + 2] = next;
+            for (var v = 0; v < boundary.Length; v++)
+            {
+                WriteCellVertex(region.Centroid, color, vertices, uvs, _vertexColors, ref cursor);
+                WriteCellVertex(boundary[v], color, vertices, uvs, _vertexColors, ref cursor);
+                WriteCellVertex(
+                    boundary[(v + 1) % boundary.Length], color, vertices, uvs, _vertexColors, ref cursor);
+            }
         }
-
-        Array.Fill(colors, Colors.White);
 
         var arrays = new Godot.Collections.Array();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = vertices;
-        arrays[(int)Mesh.ArrayType.Color] = colors;
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        arrays[(int)Mesh.ArrayType.Color] = _vertexColors;
 
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         return mesh;
+    }
+
+    private static void WriteCellVertex(
+        Vector3 unit,
+        Color color,
+        Vector3[] vertices,
+        Vector2[] uvs,
+        Color[] colors,
+        ref int cursor)
+    {
+        // CanvasItem mesh vertices are 2D; UV.x carries the sphere's Z so the
+        // shader can rotate the original 3D vector without extra attributes.
+        vertices[cursor] = new Vector3(unit.X, unit.Y, 0f);
+        uvs[cursor] = new Vector2(unit.Z, 0f);
+        colors[cursor] = color;
+        cursor++;
+    }
+
+    private static Texture2D WhiteTexture()
+    {
+        var image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+        image.Fill(Colors.White);
+        return ImageTexture.CreateFromImage(image);
     }
 
     private static Vector3 ToUnitVector(H3.Model.LatLng latLng)
@@ -656,7 +649,7 @@ public partial class MoonGlobe : Node2D
         _center = size * 0.5f;
         _radius = Mathf.Min(size.X, size.Y) * 0.42f;
 
-        UpdateInstances();
+        UpdateShader();
         QueueRedraw();
     }
 }

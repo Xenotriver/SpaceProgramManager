@@ -93,7 +93,7 @@ in the biome byte, bathymetry uses the elevation field, and craters stay `None`.
 | Class | Role |
 |---|---|
 | `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, shell commands (tech, missions, maintenance, fleet), CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
-| `MoonGlobe` | Renders all 41,162 region polygons of the active body as a `MultiMesh`; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
+| `MoonGlobe` | Renders all 41,162 H3 region boundaries of the active body as one static `ArrayMesh` rotated by a canvas-item shader; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
 | `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
 | `FluidOverlay` | Optional presentation-only Earth fluid loader: validates `fluid.json`/`fluid.bin`, builds screen-space river strokes from the low direction/width bits; never touches `Sim`, placement or saves |
 | `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), flat water fills, hover/select, rover/barge route, aggregate site markers (read-only) |
@@ -216,8 +216,12 @@ dividing by the body radius before being used by the isometric view.
 The globe rotates the same east-positive unit vectors in yaw and pitch, then
 maps `(-x1, y)` to screen `(x, -y)`. The screen-X inversion is deliberate: the
 camera looks down `+z1`, so raw `x1` increases westward. Drawing, hover picking,
-outlines and `FocusRegion` all use the same `Rotate` helper, so the flip keeps
-interaction aligned and makes west/left and east/right match a map.
+outlines and `FocusRegion` all use the same `Rotate` convention, so the flip
+keeps interaction aligned and makes west/left and east/right match a map. Region
+fills use the real H3 boundary vertices (already cached for outlines) rather
+than a shared flat regular hexagon; adjacent cells therefore share edges and the
+globe has no seams. The shader discards fragments with rotated `z <= 0`, which
+clips the limb exactly even for cells straddling the horizon.
 
 ### Isometric projection (colony view)
 
@@ -238,9 +242,11 @@ projected cell centre within a radius, not polygon containment.
 
 ## 7. Rendering and performance
 
-- **Globe** — one `MultiMesh` instance per region, plus a boundary polyline for the
-  hovered/selected region. 41k transforms follow the camera; toggling
-  imagery/biome only re-uploads instance colours, never rebuilding geometry.
+- **Globe** — one static `ArrayMesh` of every region's real H3 boundary, rotated
+  by `Shaders/GlobeCells.gdshader` with four uniforms (`yaw`, `pitch`, centre,
+  scale). Camera changes cost no geometry rebuilds; toggling imagery/biome
+  rebuilds the static mesh once with new vertex colours. Hover/selected outlines
+  and markers stay in the parent `_Draw` above the mesh (`ZIndex = -1`).
 - **Region view** — fills are batched into an `ArrayMesh` (rebuilt when the overlay
   changes); outlines, site markers and route are drawn per frame. Imagery colours
   are copied per region at load; site scores are computed once and cached.
