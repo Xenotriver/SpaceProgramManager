@@ -229,7 +229,10 @@ public partial class Main : Node2D
                 UlongArgument("--region"),
                 FloatArgument("--lod-zoom", 1f),
                 FloatArgument("--lod-sweep", 0f),
-                FloatArgument("--lod-fade", -1f));
+                FloatArgument("--lod-fade", -1f),
+                FloatArgument("--lod-stress", 0f),
+                FloatArgument("--lod-pan-x", 0f),
+                FloatArgument("--lod-pan-y", 0f));
         }
 
         _shell = new ShellOverlay

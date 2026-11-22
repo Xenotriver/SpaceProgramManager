@@ -1,22 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Godot;
 using H3;
+using H3.Algorithms;
 using H3.Extensions;
+using H3.Model;
 using Sim.World;
 
 /// <summary>
-/// Experimental seamless-H3 LOD probe. Stage A of the standalone worktree:
-/// one Res 3 parent is drawn at Res 3 (aggregate), Res 6 (shipped fine grid)
-/// and Res 7 (derived detail), with a timed crossfade when camera zoom crosses
-/// a tier boundary. Nothing here is authoritative simulation state.
+/// Experimental seamless-H3 LOD probe. Stage B of the standalone worktree.
+///
+/// The focus Res 3 parent is rendered at the zoom-selected tier (Res 3, 6 or 7)
+/// and its <c>gridDisk(1)</c> neighbours one tier coarser. Panning changes the
+/// focus; new parents load lazily and distant ones are evicted through an LRU.
+/// Every tier is projected through one fixed gnomonic basis, so a boundary
+/// shared by two parents maps to the same screen polyline regardless of the
+/// tier each parent is currently drawn at.
+///
+/// Nothing here is authoritative simulation state: no Sim, save, manifest or
+/// fingerprint changes are involved.
 /// </summary>
-/// <remarks>
-/// The tier meshes are derived at runtime with the same H3 library the bake
-/// uses, so Stage A needs no new fixture, save schema or manifest field. Only
-/// <c>Game/Scripts/</c> is touched; <c>Sim/</c> stays engine-free.
-/// </remarks>
 public partial class LodProbe : Node2D
 {
     private const float CrossfadeSeconds = 0.22f;
@@ -24,80 +29,103 @@ public partial class LodProbe : Node2D
     private const float MaxZoom = 128f;
     private const float Tier1Zoom = 4f;
     private const float Tier2Zoom = 24f;
+    private const int ParentCapacity = 16;
+    private static readonly int[] TierResolutions = { 3, 6, 7 };
 
-    private sealed class Tier
+    private sealed class TierMesh
     {
         public required ArrayMesh Mesh { get; init; }
         public required MeshInstance2D Node { get; init; }
         public required int Cells { get; init; }
+        public required long BuildMs { get; init; }
+    }
+
+    private sealed class ParentTile
+    {
+        public required H3Index Index { get; init; }
+        public required Color BaseColor { get; init; }
+        public TierMesh?[] Tiers { get; } = new TierMesh?[3];
+        public int CurrentTier { get; set; } = -1;
+        public int FromTier { get; set; } = -1;
+        public float FadeElapsed { get; set; } = CrossfadeSeconds;
+        public ulong LastUsed { get; set; }
+        public bool Wanted { get; set; }
     }
 
     private BodyWorld _world = null!;
-    private ulong _parentIndex;
+    private H3Index _anchor;
     private Vector3 _center;
     private Vector3 _east;
     private Vector3 _north;
-
-    private Tier[] _tiers = Array.Empty<Tier>();
     private ImageTexture _white = null!;
+
+    private readonly Dictionary<H3Index, ParentTile> _tiles = new();
+    private ulong _clock;
+    private H3Index _focus;
+    private int _focusTier;
 
     private float _zoom = MinZoom;
     private float _sweepSeconds;
     private float _sweepTime;
-    private int _currentTier;
-    private int _fromTier;
-    private float _fadeElapsed = CrossfadeSeconds;
+    private float _stressSeconds;
+    private float _stressTime;
+    private float _logTime;
 
     private bool _dragging;
     private Vector2 _lastMouse;
     private Vector2 _pan;
     private bool _holdFade;
 
-    /// <summary>Current H3 resolution tier: 0 = Res 3, 1 = Res 6, 2 = Res 7.</summary>
-    public int CurrentTier => _currentTier;
+    private int _loads;
+    private int _evictions;
+    private int _focusChanges;
+    private long _lastLoadMs;
+    private long _maxLoadMs;
+    private long _maxWorkingSetMb;
+
+    /// <summary>Current focus tier: 0 = Res 3, 1 = Res 6, 2 = Res 7.</summary>
+    public int CurrentTier => _focusTier;
 
     /// <summary>Current logarithmic camera zoom.</summary>
     public float Zoom => _zoom;
 
-    /// <summary>Number of H3 cells in one tier.</summary>
-    public int CellCount(int tier) => _tiers[tier].Cells;
+    /// <summary>Cells in the focus parent's currently selected tier.</summary>
+    public int CellCount(int tier) => _tiles[_focus].Tiers[tier]?.Cells ?? 0;
 
-    /// <summary>Binds the probe to one region and builds all three tiers once.</summary>
+    /// <summary>Binds the probe to one region and builds the initial focus neighbourhood.</summary>
     public void Initialize(
         BodyWorld world,
         ulong parentIndex,
         float zoom,
         float sweepSeconds,
-        float holdFadeFraction = -1f)
+        float holdFadeFraction = -1f,
+        float stressSeconds = 0f,
+        float panX = 0f,
+        float panY = 0f)
     {
         _world = world;
-        _parentIndex = parentIndex != 0 ? parentIndex : world.Regions[0].Index;
+        _anchor = parentIndex != 0 ? new H3Index(parentIndex) : new H3Index(world.Regions[0].Index);
         _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
         _sweepSeconds = Mathf.Max(0f, sweepSeconds);
-        _currentTier = TierForZoom(_zoom);
-        _fromTier = _currentTier;
+        _stressSeconds = Mathf.Max(0f, stressSeconds);
+        _pan = new Vector2(panX, panY);
 
         SetProcessUnhandledInput(true);
-        BuildBasis();
+        BuildBasis(_anchor);
+        _focus = CellFor(CameraGround());
+        _focusTier = TierForZoom(_zoom);
         BuildWhiteTexture();
-        BuildTiers();
-        ApplyTransform();
-        ApplyTier(_currentTier);
+        RefreshTiles();
+        ApplyTransforms();
+        TrackMemory();
 
-        GD.Print($"lod probe: parent={_parentIndex} " +
-                 $"tiers={_tiers[0].Cells}/{_tiers[1].Cells}/{_tiers[2].Cells} " +
-                 $"zoom={_zoom:F2}");
-        GD.Print($"lod memory: working set {WorkingSetMegabytes()} MB after mesh build");
+        GD.Print($"lod probe: anchor={_anchor} focus={_focus} zoom={_zoom:F2} " +
+                 $"tiles={_tiles.Count} focusTier={_focusTier} pan={_pan}");
+        GD.Print($"lod memory: working set {WorkingSetMegabytes()} MB after initial build; " +
+                 $"loads={_loads} maxLoad={_maxLoadMs} ms");
 
-        if (holdFadeFraction >= 0f && _currentTier + 1 < _tiers.Length)
-        {
-            _fromTier = _currentTier;
-            _currentTier++;
-            _fadeElapsed = CrossfadeSeconds * Mathf.Clamp(holdFadeFraction, 0f, 1f);
-            _holdFade = true;
-            ApplyFade();
-            GD.Print($"lod hold crossfade: {_fromTier}->{_currentTier} at {holdFadeFraction:F2}");
-        }
+        if (holdFadeFraction >= 0f)
+            HoldFocusCrossfade(holdFadeFraction);
     }
 
     public override void _Process(double delta)
@@ -105,19 +133,52 @@ public partial class LodProbe : Node2D
         if (_holdFade)
             return;
 
+        var step = (float)delta;
+
         if (_sweepSeconds > 0f)
         {
-            _sweepTime += (float)delta;
+            _sweepTime += step;
             var progress = (_sweepTime % _sweepSeconds) / _sweepSeconds;
             SetZoom(MinZoom * Mathf.Pow(MaxZoom / MinZoom, progress));
         }
 
-        if (_fadeElapsed >= CrossfadeSeconds)
-            return;
+        if (_stressSeconds > 0f)
+        {
+            _stressTime += step;
+            var progress = (_stressTime % _stressSeconds) / _stressSeconds;
+            var angle = progress * Mathf.Tau;
+            var radius = Mathf.Min(GetViewportRect().Size.X, GetViewportRect().Size.Y) * 0.42f;
+            var amplitude = radius * 0.8f;
+            _pan = new Vector2(
+                Mathf.Sin(angle) * amplitude,
+                Mathf.Sin(angle * 1.3f + 0.7f) * amplitude * 0.7f);
+            UpdateFocus();
+            ApplyTransforms();
 
-        _fadeElapsed += (float)delta;
-        ApplyFade();
-        QueueRedraw();
+            _logTime += step;
+            if (_logTime >= 1f)
+            {
+                _logTime = 0f;
+                TrackMemory();
+                GD.Print($"lod stress: t={_stressTime:F1}s focus={_focus} tier={_focusTier} " +
+                         $"tiles={_tiles.Count} loads={_loads} evictions={_evictions} " +
+                         $"focusChanges={_focusChanges} maxLoad={_maxLoadMs}ms " +
+                         $"workingSet={WorkingSetMegabytes()}MB");
+            }
+        }
+
+        var fading = false;
+        foreach (var tile in _tiles.Values)
+        {
+            if (tile.FadeElapsed >= CrossfadeSeconds)
+                continue;
+            tile.FadeElapsed += step;
+            ApplyTileAppearance(tile);
+            fading = true;
+        }
+
+        if (fading)
+            QueueRedraw();
     }
 
     public override void _Draw()
@@ -125,12 +186,14 @@ public partial class LodProbe : Node2D
         var size = GetViewportRect().Size;
         DrawRect(new Rect2(Vector2.Zero, size), new Color(0.02f, 0.03f, 0.05f, 1f));
 
-        var tier = _currentTier;
-        var resolution = tier == 0 ? 3 : tier == 1 ? 6 : 7;
-        var text = $"LOD PROBE · Res {resolution} · zoom {_zoom:F1} · " +
-                   $"{_tiers[tier].Cells} cells · wheel to zoom, right-drag to pan";
-        if (_fadeElapsed < CrossfadeSeconds)
-            text += $" · crossfade {_fromTier}→{tier}";
+        var focus = _tiles[_focus];
+        var resolution = TierResolutions[_focusTier];
+        var text = $"LOD PROBE · focus {_focus} · tier {_focusTier} (Res {resolution}) · " +
+                   $"{focus.Tiers[_focusTier]?.Cells ?? 0} cells · " +
+                   $"{_tiles.Count} parents · zoom {_zoom:F1} · " +
+                   $"loads {_loads} / evictions {_evictions} / max {_maxLoadMs} ms · wheel zoom, right-drag pan";
+        if (focus.FadeElapsed < CrossfadeSeconds)
+            text += $" · crossfade {focus.FromTier}→{focus.CurrentTier}";
 
         DrawString(ThemeDB.FallbackFont, new Vector2(18f, 30f), text, fontSize: 15);
     }
@@ -154,7 +217,8 @@ public partial class LodProbe : Node2D
             case InputEventMouseMotion motion when _dragging:
                 _pan += motion.Position - _lastMouse;
                 _lastMouse = motion.Position;
-                ApplyTransform();
+                UpdateFocus();
+                ApplyTransforms();
                 QueueRedraw();
                 break;
         }
@@ -166,77 +230,161 @@ public partial class LodProbe : Node2D
         if (Mathf.IsEqualApprox(next, _zoom))
             return;
 
-        var target = TierForZoom(next);
+        var tier = TierForZoom(next);
         _zoom = next;
-        if (target != _currentTier)
-        {
-            GD.Print($"lod crossfade: {_currentTier}->{target} at zoom {_zoom:F2} · " +
+        if (tier != _focusTier)
+            GD.Print($"lod tier: {_focusTier}->{tier} at zoom {_zoom:F2} · " +
                      $"working set {WorkingSetMegabytes()} MB");
-            _fromTier = _currentTier;
-            _currentTier = target;
-            _fadeElapsed = 0f;
-        }
-
-        ApplyTransform();
-        if (_fadeElapsed >= CrossfadeSeconds)
-            ApplyTier(_currentTier);
+        UpdateFocus();
+        ApplyTransforms();
         QueueRedraw();
     }
 
     private static int TierForZoom(float zoom)
         => zoom < Tier1Zoom ? 0 : zoom < Tier2Zoom ? 1 : 2;
 
-    private void BuildBasis()
+    private void UpdateFocus()
     {
-        var parent = new H3Index(_parentIndex);
-        var boundary = parent.GetCellBoundaryVertices().ToList();
-        var sum = Vector3.Zero;
-        foreach (var vertex in boundary)
-            sum += ToUnitVector(vertex);
+        var cell = CellFor(CameraGround());
+        var tier = TierForZoom(_zoom);
+        if (cell == _focus && tier == _focusTier)
+            return;
 
-        _center = sum.Normalized();
-        _east = _center.Cross(Vector3.Up);
-        if (_east.LengthSquared() < 1e-6f)
-            _east = Vector3.Right;
-        _east = _east.Normalized();
-        _north = _east.Cross(_center).Normalized();
-    }
-
-    private void BuildWhiteTexture()
-    {
-        var image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
-        image.Fill(Colors.White);
-        _white = ImageTexture.CreateFromImage(image);
-    }
-
-    private void BuildTiers()
-    {
-        var parent = new H3Index(_parentIndex);
-        var resolutions = new[] { 3, 6, 7 };
-        _tiers = new Tier[resolutions.Length];
-
-        for (var tier = 0; tier < resolutions.Length; tier++)
+        if (cell != _focus)
         {
-            var cells = tier == 0
-                ? new[] { parent }
-                : parent.GetChildrenForResolution(resolutions[tier]).ToArray();
-            var mesh = BuildMesh(cells, tier);
-            var node = new MeshInstance2D
-            {
-                Mesh = mesh,
-                Texture = _white,
-                ZIndex = tier,
-            };
-            AddChild(node);
-            _tiers[tier] = new Tier { Mesh = mesh, Node = node, Cells = cells.Length };
+            _focus = cell;
+            _focusChanges++;
+            if (_focusChanges % 10 == 0)
+                GD.Print($"lod focus: now {cell} (#{_focusChanges})");
         }
+
+        _focusTier = tier;
+        RefreshTiles();
     }
 
-    private ArrayMesh BuildMesh(H3Index[] cells, int tier)
+    private void RefreshTiles()
     {
-        var vertices = new System.Collections.Generic.List<Vector3>(cells.Length * 18);
-        var colors = new System.Collections.Generic.List<Color>(cells.Length * 18);
-        var baseColor = ParentColor();
+        foreach (var tile in _tiles.Values)
+            tile.Wanted = false;
+
+        foreach (var entry in _focus.GridDiskDistances(1))
+        {
+            if (entry.Distance > 1)
+                continue;
+
+            var cell = entry.Index;
+            if (!_tiles.TryGetValue(cell, out var tile))
+            {
+                tile = new ParentTile { Index = cell, BaseColor = ColorFor(cell) };
+                _tiles.Add(cell, tile);
+            }
+
+            tile.Wanted = true;
+            tile.LastUsed = ++_clock;
+            SetTileTier(tile, cell == _focus ? _focusTier : Math.Max(0, _focusTier - 1));
+        }
+
+        // Keep recently used parents around so a short pan-back is a cache hit.
+        // Only overflow eviction is needed; wanted parents are never victims.
+        while (_tiles.Count > ParentCapacity)
+        {
+            var victim = _tiles.Values
+                .Where(t => !t.Wanted)
+                .OrderBy(t => t.LastUsed)
+                .FirstOrDefault()
+                ?? _tiles.Values
+                    .Where(t => t.Index != _focus)
+                    .OrderBy(t => t.LastUsed)
+                    .FirstOrDefault();
+            if (victim is null)
+                break;
+            Evict(victim);
+        }
+
+        TrackMemory();
+    }
+
+    private void SetTileTier(ParentTile tile, int target)
+    {
+        if (tile.CurrentTier == target)
+            return;
+
+        var from = tile.CurrentTier;
+        if (from < 0)
+        {
+            tile.CurrentTier = target;
+            tile.FromTier = target;
+            tile.FadeElapsed = CrossfadeSeconds;
+            EnsureTier(tile, target);
+            ApplyTileAppearance(tile);
+            return;
+        }
+
+        EnsureTier(tile, from);
+        EnsureTier(tile, target);
+        tile.FromTier = from;
+        tile.CurrentTier = target;
+        tile.FadeElapsed = 0f;
+        ApplyTileAppearance(tile);
+        if (tile.Index == _focus)
+            GD.Print($"lod crossfade: focus {from}->{target} " +
+                     $"cells={tile.Tiers[target]?.Cells ?? 0}");
+    }
+
+    private void EnsureTier(ParentTile tile, int tier)
+    {
+        if (tile.Tiers[tier] is not null)
+            return;
+
+        var stopwatch = Stopwatch.StartNew();
+        var cells = tier == 0
+            ? new[] { tile.Index }
+            : tile.Index.GetChildrenForResolution(TierResolutions[tier]).ToArray();
+        var mesh = BuildMesh(cells, tier, tile.BaseColor);
+        var node = new MeshInstance2D
+        {
+            Mesh = mesh,
+            Texture = _white,
+            ZIndex = 10 + tier,
+        };
+        AddChild(node);
+
+        stopwatch.Stop();
+        tile.Tiers[tier] = new TierMesh
+        {
+            Mesh = mesh,
+            Node = node,
+            Cells = cells.Length,
+            BuildMs = stopwatch.ElapsedMilliseconds,
+        };
+        _loads++;
+        _lastLoadMs = stopwatch.ElapsedMilliseconds;
+        _maxLoadMs = Math.Max(_maxLoadMs, _lastLoadMs);
+        if (tier > 0 || _lastLoadMs >= 5 || _loads <= 7)
+            GD.Print($"lod load: parent={tile.Index} tier={tier} cells={cells.Length} ms={_lastLoadMs}");
+    }
+
+    private void Evict(ParentTile tile)
+    {
+        foreach (var tier in tile.Tiers)
+        {
+            if (tier is null)
+                continue;
+            tier.Node.Mesh = null;
+            tier.Node.QueueFree();
+            tier.Mesh.Dispose();
+        }
+
+        _tiles.Remove(tile.Index);
+        _evictions++;
+        if (_evictions % 10 == 0)
+            GD.Print($"lod evict: parent={tile.Index} (#{_evictions}) tiles={_tiles.Count}");
+    }
+
+    private ArrayMesh BuildMesh(H3Index[] cells, int tier, Color baseColor)
+    {
+        var vertices = new List<Vector3>(cells.Length * 18);
+        var colors = new List<Color>(cells.Length * 18);
 
         for (var i = 0; i < cells.Length; i++)
         {
@@ -266,11 +414,11 @@ public partial class LodProbe : Node2D
         return mesh;
     }
 
-    private Color ParentColor()
+    private Color ColorFor(H3Index cell)
     {
         foreach (var entry in _world.Regions)
         {
-            if (entry.Index == _parentIndex)
+            if (new H3Index(entry.Index) == cell)
                 return BiomePalette.For(_world.Biomes[entry.DominantBiomeCode].Id);
         }
 
@@ -290,23 +438,64 @@ public partial class LodProbe : Node2D
             1f);
     }
 
+    private void BuildBasis(H3Index anchor)
+    {
+        var boundary = anchor.GetCellBoundaryVertices().ToList();
+        var sum = Vector3.Zero;
+        foreach (var vertex in boundary)
+            sum += ToUnitVector(vertex);
+
+        _center = sum.Normalized();
+        _east = _center.Cross(Vector3.Up);
+        if (_east.LengthSquared() < 1e-6f)
+            _east = Vector3.Right;
+        _east = _east.Normalized();
+        _north = _east.Cross(_center).Normalized();
+    }
+
+    private void BuildWhiteTexture()
+    {
+        var image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+        image.Fill(Colors.White);
+        _white = ImageTexture.CreateFromImage(image);
+    }
+
+    // One fixed gnomonic basis for every parent: H3 child vertices on a shared
+    // parent edge are the same points for both sides, so they project to the
+    // same screen positions and there is no seam between differing tiers.
     private Vector2 Project(Vector3 unit)
     {
         var denominator = Mathf.Max(0.2f, unit.Dot(_center));
         return new Vector2(unit.Dot(_east), unit.Dot(_north)) / denominator;
     }
 
+    private Vector3 CameraGround()
+    {
+        var size = GetViewportRect().Size;
+        var radius = Mathf.Min(size.X, size.Y) * 0.42f;
+        var x = -_pan.X / (radius * _zoom);
+        var y = _pan.Y / (radius * _zoom);
+        return (_center + _east * x + _north * y).Normalized();
+    }
+
+    private static H3Index CellFor(Vector3 unit)
+    {
+        var latitude = (float)Math.Asin(Math.Clamp(unit.Y, -1f, 1f));
+        var longitude = (float)Math.Atan2(unit.Z, unit.X);
+        return H3Index.FromLatLng(new LatLng(latitude, longitude), 3);
+    }
+
     private static void WriteVertex(
         Vector2 point,
         Color color,
-        System.Collections.Generic.List<Vector3> vertices,
-        System.Collections.Generic.List<Color> colors)
+        List<Vector3> vertices,
+        List<Color> colors)
     {
         vertices.Add(new Vector3(point.X, point.Y, 0f));
         colors.Add(color);
     }
 
-    private static Vector3 ToUnitVector(H3.Model.LatLng latLng)
+    private static Vector3 ToUnitVector(LatLng latLng)
     {
         var cosLat = Math.Cos(latLng.Latitude);
         return new Vector3(
@@ -315,44 +504,59 @@ public partial class LodProbe : Node2D
             (float)(cosLat * Math.Sin(latLng.Longitude)));
     }
 
-    private void ApplyTransform()
+    private void ApplyTransforms()
     {
         var size = GetViewportRect().Size;
         var radius = Mathf.Min(size.X, size.Y) * 0.42f;
         var scale = new Vector2(radius * _zoom, -radius * _zoom);
         var origin = size * 0.5f + _pan;
 
-        foreach (var tier in _tiers)
+        foreach (var tile in _tiles.Values)
         {
-            tier.Node.Position = origin;
-            tier.Node.Scale = scale;
+            foreach (var tier in tile.Tiers)
+            {
+                if (tier is null)
+                    continue;
+                tier.Node.Position = origin;
+                tier.Node.Scale = scale;
+            }
         }
     }
 
-    private void ApplyTier(int active)
+    private static void ApplyTileAppearance(ParentTile tile)
     {
-        for (var i = 0; i < _tiers.Length; i++)
-        {
-            var visible = i == active;
-            _tiers[i].Node.Visible = visible;
-            _tiers[i].Node.Modulate = Colors.White;
-        }
-    }
-
-    private void ApplyFade()
-    {
-        var t = Mathf.Clamp(_fadeElapsed / CrossfadeSeconds, 0f, 1f);
+        var fading = tile.FromTier != tile.CurrentTier && tile.FadeElapsed < CrossfadeSeconds;
+        var t = fading ? Mathf.Clamp(tile.FadeElapsed / CrossfadeSeconds, 0f, 1f) : 1f;
         var eased = t * t * (3f - 2f * t);
 
-        for (var i = 0; i < _tiers.Length; i++)
+        for (var i = 0; i < tile.Tiers.Length; i++)
         {
-            var alpha = i == _fromTier ? 1f - eased : i == _currentTier ? eased : 0f;
-            _tiers[i].Node.Visible = alpha > 0.001f;
-            _tiers[i].Node.Modulate = new Color(1f, 1f, 1f, alpha);
+            var tier = tile.Tiers[i];
+            if (tier is null)
+                continue;
+            var alpha = fading && i == tile.FromTier ? 1f - eased : i == tile.CurrentTier ? eased : 0f;
+            tier.Node.Visible = alpha > 0.001f;
+            tier.Node.Modulate = new Color(1f, 1f, 1f, alpha);
         }
+    }
 
-        if (_fadeElapsed >= CrossfadeSeconds)
-            ApplyTier(_currentTier);
+    private void HoldFocusCrossfade(float fraction)
+    {
+        var tile = _tiles[_focus];
+        var from = tile.CurrentTier;
+        var to = Math.Min(from + 1, TierResolutions.Length - 1);
+        EnsureTier(tile, to);
+        tile.FromTier = from;
+        tile.CurrentTier = to;
+        tile.FadeElapsed = CrossfadeSeconds * Mathf.Clamp(fraction, 0f, 1f);
+        _holdFade = true;
+        ApplyTileAppearance(tile);
+        GD.Print($"lod hold crossfade: parent={tile.Index} {from}->{to} at {fraction:F2}");
+    }
+
+    private void TrackMemory()
+    {
+        _maxWorkingSetMb = Math.Max(_maxWorkingSetMb, WorkingSetMegabytes());
     }
 
     private static long WorkingSetMegabytes()
