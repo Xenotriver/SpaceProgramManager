@@ -22,6 +22,7 @@ public static class RegionTileScoring
     /// <param name="centerOrdinal">Ordinal index of the center hex in this region's tile.</param>
     /// <param name="world">The parent BodyWorld (for biome registry and body metadata).</param>
     /// <param name="config">Scoring configuration (weights, body radius, resource deposits, etc.).</param>
+    /// <param name="waterPlacement">Water permission for the placement centre; neighbours only need buildable terrain.</param>
     /// <returns>A <see cref="SiteScore"/> with factor breakdown and composite score.</returns>
     public static SiteScore ScoreSite(
         this RegionTile tile,
@@ -40,8 +41,15 @@ public static class RegionTileScoring
         var footprint = BuildFootprint(tile, centerOrdinal, config.FootprintRadius);
         var centerHex = tile.Cells[centerOrdinal];
 
-        // Check buildability across footprint
-        var buildable = footprint.All(h => IsBuildable(tile, world, h, waterPlacement));
+        // Water permission applies to the placement centre. The surrounding
+        // scoring footprint only tests whether its terrain is buildable at all:
+        // a coastal water site can legitimately have land neighbours, and a
+        // land site can have water neighbours. Multi-hex building footprints
+        // enforce their own water rule in BuildingDef.CanPlaceAt.
+        var buildable = world.Biomes.TryGet(tile.BiomeCode(centerOrdinal), out var centerBiome)
+                        && centerBiome.Buildable
+                        && WaterPlacementRules.Allows(waterPlacement, centerBiome)
+                        && footprint.All(h => IsBuildable(tile, world, h));
 
         // Compute factors
         var sunlight = ComputeSunlight(footprint, config);
@@ -116,19 +124,13 @@ public static class RegionTileScoring
         return footprint;
     }
 
-    private static bool IsBuildable(
-        RegionTile tile,
-        BodyWorld world,
-        H3Index hex,
-        WaterPlacement waterPlacement)
+    private static bool IsBuildable(RegionTile tile, BodyWorld world, H3Index hex)
     {
         var ordinal = FindOrdinal(tile, hex);
         if (ordinal < 0) return false;
 
         var biomeCode = tile.BiomeCode(ordinal);
-        return world.Biomes.TryGet(biomeCode, out var biome)
-               && biome.Buildable
-               && WaterPlacementRules.Allows(waterPlacement, biome);
+        return world.Biomes.TryGet(biomeCode, out var biome) && biome.Buildable;
     }
 
     private static int FindOrdinal(RegionTile tile, H3Index hex)

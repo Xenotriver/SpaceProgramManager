@@ -12,7 +12,7 @@ water placement rules, an offshore launch pad and barge/port logistics.
 
 ## Status at a glance
 
-Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), Earth playable with real pinned geography, **209 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**.
+Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), Earth playable with real pinned geography, **212 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**.
 
 | Area | State |
 |---|---|

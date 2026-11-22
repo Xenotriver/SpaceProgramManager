@@ -230,6 +230,63 @@ public class BuildingTests
     }
 
     [Fact]
+    public void Scoring_CoastalWaterCentreIsBuildableForRequiredWater()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1; // water centre, buildable land neighbours
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var forbidden = tile.ScoreSite(fixture.CenterOrdinal, world, Config);
+        var required = tile.ScoreSite(
+            fixture.CenterOrdinal, world, Config, WaterPlacement.Required);
+
+        Assert.False(forbidden.Factors.Buildable);
+        Assert.True(required.Factors.Buildable);
+    }
+
+    [Fact]
+    public void CampaignPreview_RequiredWaterAllowsCoastalWaterCentre()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = new CampaignState(world, new BuildingRegistry(Array.Empty<BuildingDef>()));
+
+        var result = campaign.Preview(
+            MakeDef("barge-port", buildOnWater: WaterPlacement.Required),
+            tile,
+            fixture.CenterOrdinal,
+            LocalGrid.Center);
+
+        Assert.True(result.Success, result.Error);
+    }
+
+    [Fact]
+    public void Placement_RequiredWaterMultiHexStillRejectsLandNeighbour()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var result = MakeDef(
+            "offshore-pad",
+            footprintRadius: 1,
+            buildOnWater: WaterPlacement.Required).CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+
+        Assert.False(result.Success);
+        Assert.Contains("water placement", result.Error);
+    }
+
+    [Fact]
     public void FindBestSites_UsesWaterPlacementPolicy()
     {
         using var fixture = new BuildingFixture(

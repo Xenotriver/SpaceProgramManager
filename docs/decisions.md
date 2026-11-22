@@ -1057,6 +1057,36 @@ rule or `slot.json` contract changed. Verification: see the status snapshot in
 
 ---
 
+## D47 — Correct globe handedness and coastal water sites
+
+**Date:** 2026-11-22 · **Status:** active
+
+**Decision.** Flip only the globe's screen-space X axis in `MoonGlobe.Rotate`
+and apply a building's water permission to the site's centre hex, not to every
+hex in the site-score neighbourhood.
+
+**Why.** Sampling `data/earth` at known lat/lon already returned the right
+geography, so the east/west reversal was in the shared globe projection: with
+the camera looking down `+z1`, the old `x1` screen coordinate grew westward.
+Negating it makes west/left and east/right agree with maps while leaving pitch,
+north/south and all picking paths unchanged.
+
+A site parent is one fine hex, so it is never partly land and partly water. The
+barge port is water-required with a single-hex footprint, but `ScoreSite`
+applied `WaterPlacement.Required` to the radius-1 scoring neighbourhood too.
+That rejected a coastal water hex whenever a neighbour was land, producing the
+catch-22 where land was rejected as land and coastal water as "not buildable".
+Neighbour hexes only need to be buildable terrain now; real multi-hex footprints
+still enforce their full water rule in `BuildingDef.CanPlaceAt`.
+
+**Cost.** No bake, save schema, fingerprint or CI fixture changes. Moon and Mars
+globes are also unmirrored by the shared projection fix, which is correct for
+their source imagery. Verification: 212/212 C#, 22/22 pipeline, 32/32 headless
+smokes; a barge port now places on open ocean and coastal water hexes, still
+fails on land, and multi-hex water footprints still reject mixed land/water.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1070,4 +1100,5 @@ M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
 by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
 mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
-and the organic per-hex Earth surface by D45.
+and the organic per-hex Earth surface by D45. Globe handedness and coastal water
+sites are settled by D47.

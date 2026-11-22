@@ -642,7 +642,12 @@ public partial class MoonGlobe : Node2D
 
         y = v.Y * cosPitch - z1 * sinPitch;
         z = v.Y * sinPitch + z1 * cosPitch;
-        x = x1;
+
+        // Screen X is deliberately inverted: the world uses east-positive
+        // longitude, but the camera looks down +z1, so x1 grows towards the
+        // west. Flipping here keeps drawing, picking and FocusRegion on the
+        // same projection and makes west/left and east/right agree with maps.
+        x = -x1;
     }
 
     private void UpdateViewportMetrics()

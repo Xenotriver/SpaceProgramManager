@@ -211,6 +211,14 @@ centre: `plane = (v·east, v·north) / (v·centre)`, in radians. Screen mapping 
 `center + pan + (x·scale, -y·scale)`. Elevation is converted to plane units by
 dividing by the body radius before being used by the isometric view.
 
+### Globe projection
+
+The globe rotates the same east-positive unit vectors in yaw and pitch, then
+maps `(-x1, y)` to screen `(x, -y)`. The screen-X inversion is deliberate: the
+camera looks down `+z1`, so raw `x1` increases westward. Drawing, hover picking,
+outlines and `FocusRegion` all use the same `Rotate` helper, so the flip keeps
+interaction aligned and makes west/left and east/right match a map.
+
 ### Isometric projection (colony view)
 
 ```csharp

@@ -22,7 +22,10 @@ public readonly record struct SiteFactors
     /// <summary>Absence of crater hazards (1 = no crater, lower = rim/floor).</summary>
     public double CraterClearance { get; init; }
 
-    /// <summary>True if all hexes in the footprint are buildable biomes.</summary>
+    /// <summary>
+    /// True if all footprint hexes are buildable terrain and the centre satisfies
+    /// the requested water permission.
+    /// </summary>
     public bool Buildable { get; init; }
 
     /// <summary>Weighted composite score (0..1). Only valid if <see cref="Buildable"/>.</summary>

@@ -212,7 +212,7 @@ git diff --check
 Use the Python 3.13 environment with `pipeline/requirements.txt` installed (the
 `pipeline/.venv` path above on this machine); the system Python may lack `numpy`.
 
-Expected: clean build (0 warnings, 0 errors), 209/209 C# tests, 22/22 pipeline
+Expected: clean build (0 warnings, 0 errors), 212/212 C# tests, 22/22 pipeline
 tests and no whitespace errors (Git may warn about LF → CRLF on checkout, which
 is not a diff error). Then run all 32 headless smokes with `--frame-budget=20
 --frames=30` and `--save` pointed at a scratch directory, using the same
