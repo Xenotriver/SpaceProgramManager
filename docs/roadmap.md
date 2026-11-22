@@ -416,9 +416,12 @@ between regions, rover fleet state, failure/repair.
   D45: clean build, 209/209 C# tests, 17/17 pipeline tests, 32/32 headless
   smokes (worst p95 7.14 ms).
 
-**Next:** the seamless H3 LOD experiment stays in a separate worktree until Earth
+**Next:** the seamless H3 LOD experiment lives in a separate worktree until Earth
 is merged (user decision 2026-11-20; brief in
-`C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`).
+`C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`). Stage A is now
+implemented and measured in `experiment/seamless-h3-lod`; see
+[`lod-experiment.md`](lod-experiment.md). Nothing ports to `main` without a
+separate decision.
 
 ### M6 — Hardware designer
 

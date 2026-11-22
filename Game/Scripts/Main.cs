@@ -69,6 +69,7 @@ public partial class Main : Node2D
     private AreaView _areaView = null!;
     private ManagementView _managementView = null!;
     private SiteView _siteView = null!;
+    private LodProbe? _lodProbe;
     private ShellOverlay _shell = null!;
     private CanvasLayer _worldLayer = null!;
     private GameSettings _settings = null!;
@@ -217,6 +218,19 @@ public partial class Main : Node2D
         _siteView.ActiveBuildingChanged += OnActiveBuildingChanged;
         _siteView.BuildingsChanged += OnBuildingsChanged;
         _siteView.PlacementFeedback += OnPlacementFeedback;
+
+        if (HasArgument("--lod"))
+        {
+            // Experimental worktree only: an opaque probe over the normal views.
+            _lodProbe = new LodProbe();
+            _worldLayer.AddChild(_lodProbe);
+            _lodProbe.Initialize(
+                _world,
+                UlongArgument("--region"),
+                FloatArgument("--lod-zoom", 1f),
+                FloatArgument("--lod-sweep", 0f),
+                FloatArgument("--lod-fade", -1f));
+        }
 
         _shell = new ShellOverlay
         {
