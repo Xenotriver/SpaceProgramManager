@@ -7,27 +7,29 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, **190 C# tests + 5 pipeline tests + 25 headless Godot smokes passing**. M5 is complete.
+Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, Earth playable with water rules, a presentation-only fluid overlay and real pinned geography, **209 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**. M5 and Earth are complete; D46 replaces the Earth fixture with real data for local play while CI keeps the synthetic bake.
 
 | Area | State | Evidence |
 |---|---|---|
 | Moon data pipeline | **Done** | `data/moon`: 41,162 regions, 14,117,882 fine hexes, 343 hexes/region, 10 biomes, `fine.bin` 54.6 MB; bake fingerprint unchanged |
 | Mars data pipeline | **Done (M4)** | `data/mars`: 41,162 regions, 7 biomes, MOLA elevation, USGS geology and Robbins & Hynek craters; `generatedUtc=2026-11-18T19:35:34+00:00` |
-| Sim core | **Done** | H3, biomes, movement, routing, world loader, site scoring, per-body building catalogues, local grid, sites, campaign, save store, slot catalogue |
+| Earth data pipeline | **Done (D46; D45 fixture remains for CI)** | `data/earth`: 41,162 regions, 13 land/water biomes, real Natural Earth coasts/water, ETOPO1 relief and Blue Marble colour; synthetic fixture still byte-identical for CI |
+| Sim core | **Done** | H3, biomes, water placement, movement, terrain-aware routing, world loader, site scoring, per-body building catalogues, local grid, sites, campaign, save store, slot catalogue |
 | Godot runtime | **Done** | Globe, region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause, search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
-| Rover logistics | **Done (M5 C2)** | Garage purchases, cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
+| Rover logistics | **Done (M5 C2, extended for Earth)** | Garage/rover and port/barge purchases, terrain-aware cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
 | Area-first navigation | **Done** | Globe click/`--region` opens area; region click recentres the area; `Enter` drills into the centred region; `G` toggles flat/isometric area; five overlays area-wide; D40 |
 | Missions and events | **Done (M5 C3)** | Static contract/event catalogues, partial-delivery payouts, deadline settlement, seeded events, `C`/`--missions` screen; D41 |
 | Failures and repairs | **Done (M5 C4)** | Static failure causes, severity-scaled bills, timed repairs, hazard/event damage, `X`/`--maintenance` screen; D42 |
-| Multi-body | **Done (M4)** | Moon + Mars, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation |
-| Surface imagery | **Done (M4.5)** | Real Moon/Mars colour sidecars in globe/region/colony; `Tab` or `--overlay=biome` falls back; no manifest/save change |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** | `.github/workflows/ci.yml`; synthetic tile + imagery bakes, 25 headless Godot smokes, `--frame-budget=20` p95 gate |
-| M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43 |
+| Multi-body | **Done (M4, extended for Earth)** | Moon + Mars + Earth, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation; Earth is the launch default |
+| Surface imagery | **Done (M4.5, extended for Earth/D46)** | Real Moon/Mars/Earth colour sidecars in globe/region/colony; Earth uses Blue Marble, CI uses a synthetic fixture; `Tab` or `--overlay=biome` falls back; no manifest/save change |
+| Water presentation | **Done (Earth)** | Presentation-only `fluid.bin` sidecar, flat water fills, river strokes and water hover text; biome byte stays authoritative |
+| CI and performance gate | **Done (M4, extended M4.5/M5/Earth)** | `.github/workflows/ci.yml`; synthetic tile + imagery + fluid bakes, 32 headless Godot smokes, `--frame-budget=20` p95 gate |
+| M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43. Earth verification after D46: 209/209 C#, 22/22 pipeline, 32/32 smokes (worst p95 7.14 ms) |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
@@ -36,26 +38,32 @@ The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
 an H3 index, open the area around a region by default, drill into the region view,
 inspect hexes across five overlays, plan a rover route, buy rovers from a finished
-garage, watch them cross regions in the area view, switch that view between a flat
-map and an isometric seven-region diorama with the same five overlays as a region,
-press `Enter` to open a fine hex as a site, place several installations on its
-37-cell local grid, buy tech upgrades in the `T` tree, accept contracts and answer
-events in the `C` missions screen, pay for repairs in the `X` maintenance screen,
-and have all of it persist across launches against a fingerprinted bake. The
-player can start on Moon or Mars directly with `--body` or travel between them
-with the `M` Solar System Map.
+garage (or a barge from a finished port on Earth), watch them cross regions in
+the area view, switch that view between a flat map and an isometric seven-region
+diorama with the same five overlays as a region, press `Enter` to open a fine hex
+as a site, place several installations on its 37-cell local grid, buy tech
+upgrades in the `T` tree, accept contracts and answer events in the `C` missions
+screen, pay for repairs in the `X` maintenance screen, and have all of it persist
+across launches against a fingerprinted bake. The player can start on Moon, Mars
+or Earth directly with `--body` or travel between them with the `M` Solar System
+Map. Earth also has water-restricted placement, an immediately available
+offshore launch pad, flat water surfaces and river strokes.
 
-With a valid imagery sidecar the player sees real Moon or Mars colour by default in
-the globe, region and colony views; `Tab` (or `--overlay=biome`) switches to the
-analytical biome map. Missing or corrupt imagery only produces a warning.
+With a valid imagery sidecar the player sees real Moon or Mars colour, or the
+synthetic Earth colour fixture, by default in the globe, region and colony views;
+`Tab` (or `--overlay=biome`) switches to the analytical biome map. Missing or
+corrupt imagery only produces a warning. A valid Earth fluid sidecar adds river
+strokes over the authoritative water biomes; bad sidecars never change placement,
+routing or saves.
 
 The player can also pass time with pause/1×/2×/4×, watch installations finish
 construction, earn/spend credits and stockpile resources, see power or life-support
 shortfalls called out in the HUD, and find occupied hexes as aggregate markers in
 every region and colony overlay.
 
-The player cannot: rename a campaign, play Earth or another body yet, or design
-hardware (M6).
+The player cannot: rename a campaign, build historical Earth scenarios, or
+design hardware (M6). Earth uses a synthetic sandbox fixture until real data
+sources are verified; seamless H3 LOD is tracked separately after Earth.
 
 ### Naming (locked)
 
@@ -68,7 +76,7 @@ hardware (M6).
 
 ## Milestones
 
-Order: **M2 → M1 → M3 → M4 → M5 → M6**. M2 was chosen ahead of M1 deliberately:
+Order: **M2 → M1 → M3 → M4 → M5 → Earth → M6**. M2 was chosen ahead of M1 deliberately:
 the shell is cheap and makes every later demo presentable, while the clock is the
 expensive part and needs the design attention M1 deserves.
 
@@ -379,9 +387,35 @@ between regions, rover fleet state, failure/repair.
     tests, 25/25 headless smokes PASS (worst p95 7.14 ms vs the 20 ms limit),
     `git diff --check` clean, no push. M5 is complete; D43 records the gate.
 
-**After M5:** add Earth as the third baked body before starting the seamless H3
-LOD experiment. The LOD work stays in a separate worktree until M5 and Earth are
-done (user decision 2026-11-20; brief in
+### Earth — third playable body (complete)
+
+- [x] Bake Earth with 13 land/water biomes, bathymetric elevations, no craters and
+  water-aware manifest export. Only deterministic synthetic imagery/fluid fixtures
+  ship; real Earth source URLs and checksums are still unverified, so real bakes
+  fail closed (D44).
+- [x] Add authoritative water rules to `Sim`: `WaterKind`, per-building
+  `buildOnWater` (forbidden by default), water-aware `ScoreSite`/`FindBestSites`
+  and `CampaignState.Preview`, without changing TileFormat v1 or the save schema.
+- [x] Add terrain-aware movement, a water rover named “barge”, an immediately
+  available offshore pad and a Barge Port alongside the Rover Garage. Earth uses
+  the shared building catalogue with translated biomes and baseline starting tech.
+- [x] Make Earth the launch default when its bake exists; Moon and Mars remain
+  selectable. Body-aware panel titles, HUD hover text and fleet capacity reflect
+  ports and waterborne units.
+- [x] Add a presentation-only fluid sidecar and flat water rendering in the
+  region, area and colony views; the globe uses region-mean colours and the site
+  grid is unchanged. Bad sidecars warn and fall back.
+- [x] Replace the ellipse fixture with a deterministic warped fBm field sampled
+  per fine hex, add mid-sized islands and smooth coasts/elevation, and cap
+  renderer relief exaggeration for flat Earth terrain without touching H3
+  resolutions, TileFormat v1 or the save schema (D45).
+- [x] CI bakes synthetic Earth tiles, imagery and fluid sidecars, runs all
+  `test_*.py` pipeline tests and seven Earth frame-gate smokes. Verified after
+  D45: clean build, 209/209 C# tests, 17/17 pipeline tests, 32/32 headless
+  smokes (worst p95 7.14 ms).
+
+**Next:** the seamless H3 LOD experiment stays in a separate worktree until Earth
+is merged (user decision 2026-11-20; brief in
 `C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`).
 
 ### M6 — Hardware designer

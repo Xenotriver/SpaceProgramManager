@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using H3;
 using H3.Algorithms;
+using Sim.Biomes;
 using Sim.Movement;
 using Sim.Site;
 using Sim.World;
@@ -56,6 +57,9 @@ public sealed record BuildingDef
 
     /// <summary>Biome IDs where this building may NOT be placed.</summary>
     public IReadOnlyList<string> ForbiddenBiomeIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>Water permission. Defaults to forbidden, like every pre-Earth definition.</summary>
+    public WaterPlacement BuildOnWater { get; init; } = WaterPlacement.Forbidden;
 
     /// <summary>Maximum elevation difference (meters) across the footprint.</summary>
     public double MaxSlopeM { get; init; } = 500.0;
@@ -161,6 +165,10 @@ public sealed record BuildingDef
         var biomeResult = CheckBiomes(tile, footprint, world);
         if (!biomeResult.Success) return biomeResult;
 
+        // 4b. Check water permission across the whole footprint
+        var waterResult = CheckWater(tile, footprint, world);
+        if (!waterResult.Success) return waterResult;
+
         // 5. Check slope / elevation
         var slopeResult = CheckSlope(tile, footprint);
         if (!slopeResult.Success) return slopeResult;
@@ -170,7 +178,7 @@ public sealed record BuildingDef
         if (!craterResult.Success) return craterResult;
 
         // 7. Check site score against the caller's weights
-        var score = tile.ScoreSite(centerOrdinal, world, siteConfig);
+        var score = tile.ScoreSite(centerOrdinal, world, siteConfig, BuildOnWater);
         var weights = siteConfig.Weights;
         var composite = score.Factors.Composite(
             weights.Sunlight, weights.Comms, weights.Terrain, weights.Resources, weights.CraterClearance);
@@ -249,6 +257,30 @@ public sealed record BuildingDef
 
             if (ForbiddenBiomeIds.Contains(biome.Id))
                 return PlacementResult.Fail($"Biome {biome.Id} is forbidden");
+        }
+
+        return PlacementResult.Ok();
+    }
+
+    private PlacementResult CheckWater(
+        RegionTile tile,
+        IReadOnlyList<H3Index> footprint,
+        BodyWorld world)
+    {
+        foreach (var hex in footprint)
+        {
+            var ordinal = FindOrdinal(tile, hex);
+            if (ordinal < 0) return PlacementResult.Fail($"Hex {hex} not found in tile");
+
+            var biomeCode = tile.BiomeCode(ordinal);
+            if (!world.Biomes.TryGet(biomeCode, out var biome))
+                return PlacementResult.Fail($"Unknown biome code {biomeCode}");
+
+            if (!WaterPlacementRules.Allows(BuildOnWater, biome))
+            {
+                return PlacementResult.Fail(
+                    $"{WaterPlacementRules.Describe(biome)} at {hex} violates water placement {BuildOnWater}");
+            }
         }
 
         return PlacementResult.Ok();

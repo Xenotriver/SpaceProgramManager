@@ -928,6 +928,135 @@ shell screen) instead of minimal, so adding a view requires adding its smoke.
 
 ---
 
+## D44 — Earth is a synthetic, water-aware playable sandbox
+
+**Date:** 2026-11-20 · **Status:** active
+
+**Decision.** Earth becomes the third baked, playable body and the launch default
+when `data/earth` exists. Water presence and class stay in the authoritative
+biome byte of `fine.bin`; `TileFormat` remains v1 and the v4 save schema gains no
+fields. Placement is forbidden on water unless a `BuildingDef` opts in with
+`buildOnWater`, so the offshore pad is available from the start while ordinary
+buildings keep their existing rules. Movement gains `TerrainMode`; barges are
+water rovers purchased at a new barge port alongside the rover garage. Earth uses
+the shared building catalogue with translated biomes and baseline starting tech.
+
+River detail lives in an optional presentation-only `fluid.bin`/`fluid.json`
+sidecar. The runtime validates body, resolution, hex count, length and SHA-256,
+then draws flat water fills and river strokes in region, area and colony views;
+missing or corrupt sidecars warn and fall back to biome colours. The globe uses
+region-mean colours and the site grid is unchanged. Only deterministic synthetic
+Earth imagery and fluid fixtures ship: real data URLs and checksums are still
+unverified, so non-synthetic Earth sidecar bakes fail closed rather than guess a
+source. Historical Earth scenarios are deferred.
+
+**Why.** The user wants a full homeworld testing sandbox before the separate
+seamless-H3-LOD experiment. Keeping water authoritative in Sim and flow detail
+out of the save means the new presentation cannot weaken placement, routing or
+bake-fingerprint rules. A synthetic fixture gives CI reproducible globe/region/
+area/colony/fleet coverage without committing `data/`.
+
+**Cost.** Earth adds seven frame-gate smokes (32 total), a third synthetic tile
+bake and two more sidecar bakes to CI, plus Python fluid tests. Local verification
+is clean build (0 warnings/errors), 209/209 C#, 10/10 pipeline tests and 32/32
+headless Godot smokes PASS (worst p95 8.63 ms against the 20 ms gate). No save
+schema, fingerprint rule or `slot.json` contract changed; nothing was committed
+or pushed by this work. The fixture's visual shape was later refined by D45; the
+gameplay contract above is unchanged. Seamless H3 LOD remains a separate follow-up.
+
+---
+
+## D45 — Synthetic Earth reads like a planet
+
+**Date:** 2026-11-20 · **Status:** active
+
+**Decision.** Replace the eight-ellipse Earth fixture with a deterministic
+warped fBm surface in `pipeline/spm/synthetic_earth.py`. Continent anchors supply
+the broad arrangement, domain warping and multi-octave detail supply irregular
+coasts, and explicit seeds preserve mid-sized islands (British Isles, Japan,
+Philippines, Indonesia, Madagascar, Sri Lanka, New Zealand and Tasmania). Africa
+and Eurasia meet through Arabia/Sinai. Biome and elevation are sampled at every
+res-6 hex centroid; imagery reuses the same field, so colour, biome and flow
+agree. Removed the independent per-hex ordinal noise that made all terrain
+spiky; rivers meander, lake basins are continuous depressions and mountains are
+broad belts. Region dominant biomes still come from `hexify.region_dominant`, and
+the globe still draws 41,162 region hexes with per-region means.
+
+`ReliefMath` gives Earth a 2,500 m elevation-span floor before the terrain views
+normalise colour and geometry. Flat ocean and lowland regions therefore stay
+flat, while Moon/Mars keep their existing local-span behaviour; water remains
+flattened in every renderer. H3 fine res 6 / region res 3, `TileFormat` v1, the
+v4 save schema, water placement rules and the fluid sidecar format are unchanged.
+The CI smoke regions were re-derived from the final bake so they still cover a
+mixed coast, a lake and a river.
+
+**Why.** Playtest showed the original synthetic Earth as two touching ellipses,
+a blobby Australia, missing South Asian islands and spikes everywhere. Bumping
+H3 resolution would multiply hex counts roughly 7× per step and still not fix
+the field; per-hex sampling of a continuous field fixes the visual cause while
+keeping the shipped runtime layout and gameplay intact.
+
+**Cost.** Earth tile and imagery bakes take about two minutes each locally
+instead of using one value per region; memory stays bounded by 64-region batches.
+Verification: clean build (0 warnings/errors), 209/209 C#, 17/17 pipeline tests
+(7 new Earth field tests), 32/32 headless Godot smokes PASS (worst p95 7.14 ms
+against the 20 ms gate), `git diff --check` clean. No save schema, fingerprint
+rule or `slot.json` contract changed; nothing was committed or pushed.
+
+---
+
+## D46 — Real Earth geography replaces the synthetic fixture
+
+**Date:** 2026-11-22 · **Status:** active
+
+**Decision.** Bake Earth from pinned public-domain sources instead of the
+procedural field introduced by D44/D45:
+
+- Natural Earth 1:10m land, lake and river-centreline vectors for the
+  authoritative coastlines and water biome bytes;
+- NOAA ETOPO1 1-arcminute Ice-surface grid-registered relief for land elevation
+  and bathymetry;
+- NASA Blue Marble Next Generation (December 2004, 21600×10800, with
+  topography and bathymetry) for the `color.bin` sidecar and as a land-cover
+  proxy (greenness plus latitude/elevation selects forest, taiga, tundra,
+  hills, plains and mountains).
+
+All five inputs are pinned by SHA-256 in `pipeline/spm/fetch.py` and cached
+under `pipeline/.cache/earth/`. `pipeline/spm/earth_real.py` rasterises the
+vectors and samples every res-6 hex centroid in bounded batches, so biome,
+elevation and colour describe the same real geography. `--synthetic` still
+produces the deterministic D45 CI fixture (identical tile and colour bytes);
+CI is unchanged. The
+`earth.volcanic` biome is retained in the table but is not assigned by the real
+path, and the globe still resolves one mean colour per res-3 region.
+
+Validating the real bake exposed a pre-existing block-alignment bug in
+`imagery.aggregate_to_hex`: each 512-row block restarted at 90°N and used
+block-local row spacing, so later source rows were painted onto northern hexes.
+`raster.global_latlon` now takes an explicit `dlat` for sliced grids, a
+regression test guards the alignment, and all three real colour sidecars were
+rebaked. Moon and Mars changed only in `color.bin`/`imagery.json`; their tile
+manifests and save fingerprints are untouched.
+
+**Why.** D45 fixed the *shape* of the procedural blobs but Earth remained the
+only body with no real data: Moon and Mars bake real DEMs, geology and pinned
+imagery mosaics. A smooth procedural field averaged over ~60 km region cells
+cannot produce recognisable coasts, islands or mountain belts. Real sources are
+the only way for Earth to read like the other two bodies. After the rebake,
+spot checks match the source imagery at Sahara, Congo, Antarctica, Australia,
+India and the Himalaya, and ETOPO at Everest and the Mariana Trench, so the
+globe's existing per-region averaging stays unchanged.
+
+**Cost.** A real Earth bake downloads ~430 MB of pinned sources (ETOPO1 alone is
+376 MiB gzipped and unpacks to 890 MiB) and takes substantially longer than the
+synthetic fixture. The new `generatedUtc` changes Earth's bake fingerprint, so
+pre-existing Earth save slots are refused by the gate and never overwritten;
+fresh slots are required. No save schema, `TileFormat` version, water-placement
+rule or `slot.json` contract changed. Verification: see the status snapshot in
+`roadmap.md`.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -939,5 +1068,6 @@ choices are settled by D23–D29, M4.5 imagery by D30–D32, terrain presentatio
 D33–D34, the M5 C0 save contract, typed failures and rover speed by D35–D37, the
 M5 C1 tech catalogue and purchase rule by D38, the M5 C2 AreaView/garage choice
 by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
-mission rule by D41, the M5 C4 static-cause repair loop by D42, and the M5 C5
-verification gate by D43.
+mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
+verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
+and the organic per-hex Earth surface by D45.

@@ -1,4 +1,5 @@
 using H3;
+using Sim.Biomes;
 using Sim.Buildings;
 using Sim.Movement;
 using Sim.Site;
@@ -115,41 +116,67 @@ public sealed partial class CampaignState
     /// <summary>Campaign-wide rover fleet; the save owns every field.</summary>
     public IReadOnlyList<RoverState> Rovers => Meta.Rovers;
 
+    private static TerrainMode TerrainModeFor(RoverState rover)
+        => RoverCatalogue.TryGet(rover.DefId, out var def) && def is not null
+            ? def.TerrainMode
+            : TerrainMode.Land;
+
     /// <summary>
-    /// Buys a rover at an operational garage in <paramref name="regionIndex"/>.
-    /// New rovers are docked at the garage hex and have no cargo.
+    /// Buys a rover at an operational garage, or a barge at an operational port,
+    /// in <paramref name="regionIndex"/>. New units are docked at the facility hex.
     /// </summary>
     public RoverActionResult TryPurchaseRover(
         ulong regionIndex,
         out RoverState? rover,
-        double? speedKmh = null)
+        double? speedKmh = null,
+        string? roverDefId = null)
     {
         rover = null;
 
-        if (!_regions.TryGetValue(regionIndex, out var region))
-            return new RoverActionResult(RoverActionStatus.NoGarage, "no garage in this region");
+        var model = RoverCatalogue.TryGet(roverDefId, out var resolved) && resolved is not null
+            ? resolved
+            : RoverCatalogue.Mk1;
+        var waterborne = model.TerrainMode == TerrainMode.Waterborne;
+        var facilityDefId = waterborne ? RoverCatalogue.PortDefId : RoverCatalogue.GarageDefId;
+        var facilityName = waterborne ? "port" : "garage";
 
-        var garages = region.Buildings
-            .Where(building => building.DefId == RoverCatalogue.GarageDefId
+        if (!_regions.TryGetValue(regionIndex, out var region))
+        {
+            return waterborne
+                ? new RoverActionResult(RoverActionStatus.NoPort, "no port in this region")
+                : new RoverActionResult(RoverActionStatus.NoGarage, "no garage in this region");
+        }
+
+        var facilities = region.Buildings
+            .Where(building => building.DefId == facilityDefId
                                && !building.Paused
                                && building.Status is BuildingStatus.Operational or BuildingStatus.Idle)
             .ToList();
 
-        if (garages.Count == 0)
-            return new RoverActionResult(RoverActionStatus.NoGarage, "no operational rover garage here");
-
-        var capacity = 0;
-        foreach (var garage in garages)
+        if (facilities.Count == 0)
         {
-            if (_registry.TryGet(garage.DefId, out var def) && def is not null)
-                capacity += (int)def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0);
+            return waterborne
+                ? new RoverActionResult(RoverActionStatus.NoPort, "no operational barge port here")
+                : new RoverActionResult(RoverActionStatus.NoGarage, "no operational rover garage here");
         }
 
-        var stationed = Meta.Rovers.Count(item => item.LocationRegion == regionIndex);
-        if (stationed >= capacity)
-            return new RoverActionResult(RoverActionStatus.NoCapacity, "garage is full");
+        var slotKey = waterborne ? "barge_slots" : "rover_slots";
+        var capacity = 0;
+        foreach (var facility in facilities)
+        {
+            if (_registry.TryGet(facility.DefId, out var def) && def is not null)
+            {
+                var slots = def.StorageCapacity.GetValueOrDefault(
+                    slotKey, def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0));
+                capacity += (int)slots;
+            }
+        }
 
-        var model = RoverCatalogue.Mk1;
+        var stationed = Meta.Rovers.Count(item =>
+            item.LocationRegion == regionIndex && TerrainModeFor(item) == model.TerrainMode);
+        if (stationed >= capacity)
+            return new RoverActionResult(RoverActionStatus.NoCapacity, $"{facilityName} is full");
+
         if (!TryPay(model.Cost, out var error))
             return new RoverActionResult(RoverActionStatus.CannotAfford, error);
 
@@ -157,21 +184,22 @@ public sealed partial class CampaignState
         if (speed <= 0.0)
             speed = model.SpeedKmh;
 
+        var namePrefix = waterborne ? "Barge" : "Rover";
         rover = new RoverState
         {
             Id = Guid.NewGuid().ToString("D"),
-            Name = $"Rover {Meta.Rovers.Count + 1}",
+            Name = $"{namePrefix} {Meta.Rovers.Count + 1}",
             DefId = model.Id,
             Status = RoverStatus.Docked,
             Health = model.Health,
             SpeedKmh = speed,
             LocationRegion = regionIndex,
-            LocationHex = (ulong)garages[0].ParentHex,
+            LocationHex = (ulong)facilities[0].ParentHex,
         };
 
         Meta.Rovers.Add(rover);
         Meta.UpdatedUtc = DateTimeOffset.UtcNow;
-        return new RoverActionResult(RoverActionStatus.Purchased, $"{rover.Name} ready at garage");
+        return new RoverActionResult(RoverActionStatus.Purchased, $"{rover.Name} ready at {facilityName}");
     }
 
     /// <summary>
@@ -191,7 +219,7 @@ public sealed partial class CampaignState
             return new RoverActionResult(RoverActionStatus.WrongLocation, $"{rover.Name} has no location");
 
         var plan = RegionalRoutePlanner.Plan(
-            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh);
+            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh, TerrainModeFor(rover));
         if (plan is null)
             return new RoverActionResult(RoverActionStatus.Unreachable, "destination is unreachable");
 
@@ -230,7 +258,7 @@ public sealed partial class CampaignState
             return cached;
 
         var rebuilt = RegionalRoutePlanner.Plan(
-            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh);
+            _world, fromRegion, fromHex, toRegion, toHex, rover.SpeedKmh, TerrainModeFor(rover));
         if (rebuilt is not null)
             _roverRoutes[roverId] = rebuilt;
 
@@ -294,23 +322,31 @@ public sealed partial class CampaignState
             return PlacementResult.FailLocal($"requires tech: {def.RequiredTech}", footprint);
 
         var parentHex = tile.Cells[hexOrdinal];
-        var score = tile.ScoreSite(hexOrdinal, _world, _siteConfig);
-        if (!score.Factors.Buildable)
-            return PlacementResult.FailLocal("Site is not buildable", footprint);
-
-        var composite = score.Factors.Composite(_siteConfig.Weights);
-        if (composite < def.MinSiteScore)
-            return PlacementResult.FailLocal($"Site score {composite:P0} below minimum {def.MinSiteScore:P0}", footprint);
 
         var biomeCode = tile.BiomeCode(hexOrdinal);
         if (!_world.Biomes.TryGet(biomeCode, out var biome))
             return PlacementResult.FailLocal($"Unknown biome code {biomeCode}", footprint);
+
+        if (!biome.Buildable)
+            return PlacementResult.FailLocal($"Biome {biome.Id} is not buildable", footprint);
+
+        if (!WaterPlacementRules.Allows(def.BuildOnWater, biome))
+            return PlacementResult.FailLocal(
+                $"{WaterPlacementRules.Describe(biome)} violates water placement {def.BuildOnWater}", footprint);
 
         if (def.AllowedBiomeIds.Count > 0 && !def.AllowedBiomeIds.Contains(biome.Id))
             return PlacementResult.FailLocal($"Biome {biome.Id} not in allowed list", footprint);
 
         if (def.ForbiddenBiomeIds.Contains(biome.Id))
             return PlacementResult.FailLocal($"Biome {biome.Id} is forbidden", footprint);
+
+        var score = tile.ScoreSite(hexOrdinal, _world, _siteConfig, def.BuildOnWater);
+        if (!score.Factors.Buildable)
+            return PlacementResult.FailLocal("Site is not buildable", footprint);
+
+        var composite = score.Factors.Composite(_siteConfig.Weights);
+        if (composite < def.MinSiteScore)
+            return PlacementResult.FailLocal($"Site score {composite:P0} below minimum {def.MinSiteScore:P0}", footprint);
 
         foreach (var cell in footprint)
         {

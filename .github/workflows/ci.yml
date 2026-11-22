@@ -40,21 +40,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r pipeline/requirements.txt
 
-      - name: Bake synthetic Moon and Mars fixtures
+      - name: Bake synthetic Moon, Mars and Earth fixtures
         run: |
           set -euo pipefail
           mkdir -p "$SPM_DATA"
           python pipeline/bake_moon.py --synthetic --out "$SPM_DATA/moon"
           python pipeline/bake_mars.py --synthetic --out "$SPM_DATA/mars"
+          python pipeline/bake_earth.py --synthetic --out "$SPM_DATA/earth"
           python pipeline/bake_imagery.py --body=moon --synthetic --out "$SPM_DATA/moon"
           python pipeline/bake_imagery.py --body=mars --synthetic --out "$SPM_DATA/mars"
+          python pipeline/bake_imagery.py --body=earth --synthetic --out "$SPM_DATA/earth"
+          python pipeline/bake_fluid.py --body=earth --synthetic --out "$SPM_DATA/earth"
           test -s "$SPM_DATA/moon/color.bin"
           test -s "$SPM_DATA/moon/imagery.json"
           test -s "$SPM_DATA/mars/color.bin"
           test -s "$SPM_DATA/mars/imagery.json"
+          test -s "$SPM_DATA/earth/color.bin"
+          test -s "$SPM_DATA/earth/imagery.json"
+          test -s "$SPM_DATA/earth/fluid.bin"
+          test -s "$SPM_DATA/earth/fluid.json"
 
-      - name: Imagery pipeline tests
-        run: python -m unittest discover -s pipeline/tests -p 'test_imagery.py' -v
+      - name: Pipeline sidecar tests
+        run: python -m unittest discover -s pipeline/tests -p 'test_*.py' -v
 
       - name: Build
         run: dotnet build SpaceProgramManager.slnx
@@ -133,3 +140,12 @@ jobs:
           # M5 C4 maintenance: failure list and repair actions on both bodies.
           run_smoke moon moon-maintenance --maintenance
           run_smoke mars mars-maintenance --maintenance
+
+          # Earth water, fluid overlay and barge/port coverage.
+          run_smoke earth earth-globe-color --view=globe --overlay=color
+          run_smoke earth earth-region-color --view=region --region=590241962326491135 --overlay=color
+          run_smoke earth earth-region-biome --view=region --region=590231860563410943 --overlay=biome
+          run_smoke earth earth-management --view=management --region=590500691156402175 --overlay=color
+          run_smoke earth earth-area --view=area --region=590500691156402175
+          run_smoke earth earth-area-iso --view=area --region=590500691156402175 --projection=iso
+          run_smoke earth earth-fleet --view=area --fleet

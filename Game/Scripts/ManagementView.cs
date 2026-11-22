@@ -93,6 +93,7 @@ public partial class ManagementView : Node2D
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
     private SurfaceImagery? _imagery;
+    private FluidOverlay? _fluid;
     private CampaignState? _campaign;
     private Font _font = null!;
 
@@ -106,6 +107,7 @@ public partial class ManagementView : Node2D
     private Vector2[] _rotatedCenters = Array.Empty<Vector2>();
     private Vector2[] _isoCenters = Array.Empty<Vector2>();
     private float[] _elevations = Array.Empty<float>();
+    private bool[] _water = Array.Empty<bool>();
     private float[] _heights = Array.Empty<float>();
     private Color[] _biomeFills = Array.Empty<Color>();
     private Color[] _terrainFills = Array.Empty<Color>();
@@ -206,6 +208,12 @@ public partial class ManagementView : Node2D
     /// <summary>Binds the optional surface-colour sidecar before a region is loaded.</summary>
     public void SetImagery(SurfaceImagery? imagery) => _imagery = imagery;
 
+    /// <summary>Binds the optional presentation-only fluid sidecar.</summary>
+    public void SetFluid(FluidOverlay? fluid) => _fluid = fluid;
+
+    /// <summary>True when fluid strokes are available for this body.</summary>
+    public bool HasFluid => _fluid is not null;
+
     /// <summary>User multiplier on the automatic relief exaggeration.</summary>
     public float ReliefScale { get; set; } = 1f;
 
@@ -262,6 +270,7 @@ public partial class ManagementView : Node2D
         _rotatedCenters = new Vector2[count];
         _isoCenters = new Vector2[count];
         _elevations = new float[count];
+        _water = new bool[count];
         _heights = new float[count];
         _biomeFills = new Color[count];
         _terrainFills = new Color[count];
@@ -296,6 +305,7 @@ public partial class ManagementView : Node2D
             var biome = world.Biomes[record.BiomeCode];
 
             _biomeIds[i] = biome.Id;
+            _water[i] = biome.IsWater;
             _biomeFills[i] = BiomePalette.For(biome.Id);
 
             if (!biomesPresent.Contains(biome.Id))
@@ -358,9 +368,10 @@ public partial class ManagementView : Node2D
         BiomesPresent = biomesPresent;
         _homePivot = (min + max) * 0.5f;
 
-        var elevationSpan = Math.Max(1, maxElevation - minElevation);
+        var elevationSpan = ReliefMath.EffectiveSpan(
+            maxElevation - minElevation, _world.Manifest.Body.Key);
         var spanPlane = Mathf.Max(max.X - min.X, max.Y - min.Y);
-        var elevationSpanPlane = (maxElevation - minElevation) / (_radiusKm * 1000.0);
+        var elevationSpanPlane = (double)elevationSpan / (_radiusKm * 1000.0);
 
         _autoRelief = elevationSpanPlane > 1e-9
             ? ReliefFraction * spanPlane / (float)elevationSpanPlane
@@ -370,7 +381,9 @@ public partial class ManagementView : Node2D
         for (var i = 0; i < count; i++)
         {
             var t = (_elevations[i] - minElevation) / (double)elevationSpan;
-            _terrainFills[i] = TerrainPalette.For(t);
+            _terrainFills[i] = _water[i]
+                ? _biomeFills[i]
+                : TerrainPalette.For(t);
 
             var biomeFill = _biomeFills[i];
             _buildingFills[i] = new Color(biomeFill.R * 0.32f, biomeFill.G * 0.32f, biomeFill.B * 0.32f, 1f);
@@ -508,6 +521,7 @@ public partial class ManagementView : Node2D
         DrawMesh(_mesh!, _whiteTexture,
             new Transform2D(new Vector2(scale, 0f), new Vector2(0f, scale), _center + _pan));
 
+        DrawFluid(scale);
         DrawGridOutlines(scale);
 
         if (_campaign is not null && _tile is not null)
@@ -744,7 +758,11 @@ public partial class ManagementView : Node2D
         _baseHeight = -_slab;
 
         for (var i = 0; i < _heights.Length; i++)
-            _heights[i] = (float)((_elevations[i] - TerrainMinM) / radiusMetres * _autoRelief * ReliefScale);
+        {
+            // Water is rendered as a flat surface; bathymetry remains in the tile.
+            var visualElevation = _water[i] ? TerrainMinM : _elevations[i];
+            _heights[i] = (float)((visualElevation - TerrainMinM) / radiusMetres * _autoRelief * ReliefScale);
+        }
 
         var cornerSums = new float[_cornerCount];
         var cornerCounts = new int[_cornerCount];
@@ -876,6 +894,24 @@ public partial class ManagementView : Node2D
         _mesh = new ArrayMesh();
         _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         _meshDirty = false;
+    }
+
+    private void DrawFluid(float scale)
+    {
+        if (_fluid is null || _tile is null || _isoCenters.Length != _ordinalByIndex.Count)
+            return;
+
+        var strokes = _fluid.StrokesForRegion(
+            (ulong)_tile.Entry.Index,
+            _tile,
+            _ordinalByIndex,
+            _isoCenters,
+            point => ToScreen(point, scale),
+            _cellRadius,
+            scale);
+
+        foreach (var stroke in strokes)
+            DrawLine(stroke.From, stroke.To, stroke.Color, stroke.Width, true);
     }
 
     private void DrawGridOutlines(float scale)

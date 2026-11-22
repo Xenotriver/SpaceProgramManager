@@ -186,13 +186,17 @@ def global_latlon(
     *,
     lon_west: float,
     lat_north: float,
+    dlat: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Pixel-centre latitude/longitude arrays for a global equirectangular grid.
 
     Returns ``(lat, lon)`` as 2-D arrays of shape ``(height, width)`` where
-    ``lat`` varies down the rows and ``lon`` across the columns.
+    ``lat`` varies down the rows and ``lon`` across the columns.  ``dlat`` can
+    be supplied when ``height`` is a slice of a taller grid, so a block keeps
+    the source raster's row spacing instead of rescaling 180 degrees into the
+    block.
     """
-    dlat = 180.0 / height
+    dlat = 180.0 / height if dlat is None else dlat
     dlon = 360.0 / width
     lat = lat_north - (np.arange(height, dtype=np.float64) + 0.5) * dlat
     lon = lon_west + (np.arange(width, dtype=np.float64) + 0.5) * dlon

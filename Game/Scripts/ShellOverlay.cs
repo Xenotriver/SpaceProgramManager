@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Sim.Campaign;
+using Sim.Movement;
 using Sim.World;
 
 /// <summary>Actions the shell asks <see cref="Main"/> to perform.</summary>
@@ -156,21 +157,25 @@ public partial class ShellOverlay : Node2D
         string Status,
         string Detail,
         string Right,
+        string Terrain,
         bool Available);
 
-    /// <summary>Live garage and fleet values rendered by the fleet screen.</summary>
+    /// <summary>Live garage, port and fleet values rendered by the fleet screen.</summary>
     public sealed record RoverFleetView(
         ulong RegionIndex,
         bool GarageReady,
         int Capacity,
         int Stationed,
+        bool PortReady,
+        int PortCapacity,
+        int PortStationed,
         IReadOnlyList<RoverFleetRow> Rovers);
 
     /// <summary>Supplies rover state on every draw; the shell owns no game state.</summary>
     public Func<RoverFleetView>? FleetViewProvider { get; set; }
 
     private RoverFleetView CurrentFleetView() => FleetViewProvider?.Invoke()
-        ?? new RoverFleetView(0UL, false, 0, 0, Array.Empty<RoverFleetRow>());
+        ?? new RoverFleetView(0UL, false, 0, 0, false, 0, 0, Array.Empty<RoverFleetRow>());
 
     private TechTreeView CurrentTechView() => TechViewProvider?.Invoke()
         ?? new TechTreeView(
@@ -1058,7 +1063,7 @@ public partial class ShellOverlay : Node2D
 
             case Screen.SystemMap:
                 title = "SOLAR SYSTEM MAP";
-                subtitle = $"Current: {BodyLabel} · ready bakes: Moon, Mars";
+                subtitle = $"Current: {BodyLabel} · ready bakes: {string.Join(", ", MapBodies.Where(b => b.Ready).Select(b => b.Name))}";
                 hint = "←→ select · Enter travel · M/Esc close · click a body";
                 fixedHeight = 680f;
                 foreach (var body in MapBodies)
@@ -1121,33 +1126,46 @@ public partial class ShellOverlay : Node2D
             case Screen.Fleet:
                 var fleet = CurrentFleetView();
                 var garage = fleet.GarageReady
-                    ? $"garage ready · {fleet.Stationed}/{fleet.Capacity} slots"
-                    : "no operational rover garage here";
-                title = "ROVER FLEET";
-                subtitle = $"Region {fleet.RegionIndex} · {garage} · {fleet.Rovers.Count} rover(s)";
-                hint = "Click a rover, then a region in the area view to dispatch · R/Esc close";
+                    ? $"garage {fleet.Stationed}/{fleet.Capacity}"
+                    : "no garage";
+                var port = fleet.PortReady
+                    ? $"port {fleet.PortStationed}/{fleet.PortCapacity}"
+                    : "no port";
+                title = "FLEET";
+                subtitle = $"Region {fleet.RegionIndex} · {garage} · {port} · {fleet.Rovers.Count} unit(s)";
+                hint = "Click a unit, then a region in the area view to dispatch · R/Esc close";
                 specs.Add(new RowSpec("Open area operations",
-                    "Show rover tracks and dispatch targets", "A",
+                    "Show tracks and dispatch targets", "A",
                     true, ShellCommand.OpenArea, null));
-                specs.Add(new RowSpec(
-                    $"Purchase {RoverCatalogue.Mk1.DisplayName}",
-                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("credits"):N0} cr · " +
-                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("metals"):0.#} metals · " +
-                    $"{RoverCatalogue.Mk1.Cost.GetValueOrDefault("electronics"):0.#} electronics",
-                    fleet.GarageReady && fleet.Stationed < fleet.Capacity ? "garage" : "unavailable",
-                    fleet.GarageReady && fleet.Stationed < fleet.Capacity,
-                    ShellCommand.PurchaseRover,
-                    RoverCatalogue.Mk1Id,
-                    false,
-                    fleet.GarageReady
-                        ? "garage is full"
-                        : "build and finish a Rover Garage in this region first"));
+
+                foreach (var model in RoverCatalogue.All)
+                {
+                    var waterborne = model.TerrainMode == TerrainMode.Waterborne;
+                    var ready = waterborne ? fleet.PortReady : fleet.GarageReady;
+                    var capacity = waterborne ? fleet.PortCapacity : fleet.Capacity;
+                    var stationed = waterborne ? fleet.PortStationed : fleet.Stationed;
+                    var facility = waterborne ? "port" : "garage";
+                    var building = waterborne ? "Barge Port" : "Rover Garage";
+                    specs.Add(new RowSpec(
+                        $"Purchase {model.DisplayName}",
+                        $"{model.Cost.GetValueOrDefault("credits"):N0} cr · " +
+                        $"{model.Cost.GetValueOrDefault("metals"):0.#} metals · " +
+                        $"{model.Cost.GetValueOrDefault("electronics"):0.#} electronics · {model.TerrainMode.ToString().ToLowerInvariant()}",
+                        ready && stationed < capacity ? facility : "unavailable",
+                        ready && stationed < capacity,
+                        ShellCommand.PurchaseRover,
+                        model.Id,
+                        false,
+                        ready
+                            ? $"{facility} is full"
+                            : $"build and finish a {building} in this region first"));
+                }
 
                 foreach (var rover in fleet.Rovers.Take(8))
                 {
                     specs.Add(new RowSpec(
                         rover.Name,
-                        rover.Detail,
+                        $"{rover.Detail} · {rover.Terrain.ToLowerInvariant()}",
                         rover.Right,
                         rover.Available,
                         ShellCommand.SelectRover,
@@ -1159,7 +1177,7 @@ public partial class ShellOverlay : Node2D
                 if (fleet.Rovers.Count > 8)
                 {
                     specs.Add(new RowSpec(
-                        $"+ {fleet.Rovers.Count - 8} more rover(s)",
+                        $"+ {fleet.Rovers.Count - 8} more unit(s)",
                         "Fleets above eight need a wider display",
                         null,
                         false,

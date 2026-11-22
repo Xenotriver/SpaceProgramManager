@@ -134,6 +134,113 @@ public class RoverTests
     }
 
     [Fact]
+    public void BargePurchase_NeedsOperationalPortAndStopsAtCapacity()
+    {
+        using var fixture = new RoverFixture(water: true);
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        var tile = world.GetRegion((ulong)fixture.FirstRegion);
+
+        var early = campaign.TryPurchaseRover(
+            (ulong)fixture.FirstRegion, out var barge, roverDefId: RoverCatalogue.BargeId);
+        Assert.Equal(RoverActionStatus.NoPort, early.Status);
+        Assert.Null(barge);
+
+        var placed = campaign.TryPlace(fixture.Port, tile, fixture.FirstCenter, LocalGrid.Center);
+        Assert.True(placed.Success, placed.Error);
+        Assert.Equal(
+            RoverActionStatus.NoPort,
+            campaign.TryPurchaseRover(
+                (ulong)fixture.FirstRegion, out _, roverDefId: RoverCatalogue.BargeId).Status);
+
+        Assert.True(campaign.Tick(fixture.Port.BuildTimeHours + 1.0).Changed);
+        for (var i = 0; i < 4; i++)
+        {
+            var purchase = campaign.TryPurchaseRover(
+                (ulong)fixture.FirstRegion, out var bought, roverDefId: RoverCatalogue.BargeId);
+            Assert.Equal(RoverActionStatus.Purchased, purchase.Status);
+            Assert.NotNull(bought);
+            Assert.Equal(RoverCatalogue.BargeId, bought!.DefId);
+            Assert.StartsWith("Barge", bought.Name, StringComparison.Ordinal);
+            Assert.Equal(TerrainMode.Waterborne, RoverCatalogue.All.Single(d => d.Id == bought.DefId).TerrainMode);
+        }
+
+        var full = campaign.TryPurchaseRover(
+            (ulong)fixture.FirstRegion, out var overflow, roverDefId: RoverCatalogue.BargeId);
+        Assert.Equal(RoverActionStatus.NoCapacity, full.Status);
+        Assert.Null(overflow);
+        Assert.Equal(4, campaign.Rovers.Count);
+    }
+
+    [Fact]
+    public void BargeDispatch_UsesWaterwayRoutes()
+    {
+        using var fixture = new RoverFixture(water: true);
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        var tile = world.GetRegion((ulong)fixture.FirstRegion);
+
+        Assert.True(campaign.TryPlace(fixture.Port, tile, fixture.FirstCenter, LocalGrid.Center).Success);
+        campaign.Tick(fixture.Port.BuildTimeHours + 1.0);
+        Assert.Equal(
+            RoverActionStatus.Purchased,
+            campaign.TryPurchaseRover(
+                (ulong)fixture.FirstRegion, out var barge, roverDefId: RoverCatalogue.BargeId).Status);
+        Assert.NotNull(barge);
+
+        var destinationRegion = (ulong)fixture.SecondRegion;
+        var destinationHex = (ulong)fixture.SecondCells[fixture.SecondCenter];
+        var dispatch = campaign.DispatchRover(barge!.Id, destinationRegion, destinationHex);
+
+        Assert.Equal(RoverActionStatus.Dispatched, dispatch.Status);
+        Assert.NotNull(campaign.RouteForRover(barge.Id));
+    }
+
+    [Fact]
+    public void WaterborneRouting_CannotStartOnLandOrEndOnLand()
+    {
+        using var fixture = new RoverFixture();
+        using var world = fixture.Open();
+        var fromRegion = (ulong)fixture.FirstRegion;
+        var fromHex = (ulong)fixture.FirstCells[fixture.FirstCenter];
+        var toRegion = (ulong)fixture.SecondRegion;
+        var toHex = (ulong)fixture.SecondCells[fixture.SecondCenter];
+
+        Assert.Null(RegionalRoutePlanner.Plan(
+            world, fromRegion, fromHex, toRegion, toHex,
+            CampaignDefaults.DefaultRoverSpeedKmh, TerrainMode.Waterborne));
+    }
+
+    [Fact]
+    public void BargeState_DefIdRoundTripsThroughSave()
+    {
+        using var fixture = new RoverFixture(water: true);
+        using var world = fixture.Open();
+        var campaign = fixture.CreateCampaign(world);
+        var tile = world.GetRegion((ulong)fixture.FirstRegion);
+
+        Assert.True(campaign.TryPlace(fixture.Port, tile, fixture.FirstCenter, LocalGrid.Center).Success);
+        campaign.Tick(fixture.Port.BuildTimeHours + 1.0);
+        Assert.Equal(
+            RoverActionStatus.Purchased,
+            campaign.TryPurchaseRover(
+                (ulong)fixture.FirstRegion, out var barge, roverDefId: RoverCatalogue.BargeId).Status);
+
+        Assert.True(campaign.DispatchRover(
+            barge!.Id, (ulong)fixture.SecondRegion, (ulong)fixture.SecondCells[fixture.SecondCenter]).Success);
+
+        var store = new CampaignStore(Path.Combine(fixture.Root, "save"));
+        var fingerprint = BakeFingerprint.From(world.Manifest);
+        store.SaveMeta(campaign.Meta, fingerprint);
+        var loaded = store.LoadMeta(fingerprint);
+
+        var saved = Assert.Single(loaded.Rovers);
+        Assert.Equal(RoverCatalogue.BargeId, saved.DefId);
+        Assert.Equal(barge.Id, saved.Id);
+        Assert.Equal(RoverStatus.Enroute, saved.Status);
+    }
+
+    [Fact]
     public void RoverDispatch_CompletesCrossRegionTravelOnTick()
     {
         using var fixture = new RoverFixture();
@@ -241,8 +348,9 @@ public class RoverTests
         private const int RegionResolution = 3;
         private const string BodyKey = "rover-test";
 
-        public RoverFixture()
+        public RoverFixture(bool water = false)
         {
+            Water = water;
             FirstRegion = HexGrid.FromLatLon(0.41590091884368713, 0.23004777276206262, RegionResolution);
             SecondRegion = HexGrid.Neighbors(FirstRegion)
                 .First(candidate => HexGrid.FineHexesInRegion(candidate, FineResolution).Count == 343);
@@ -253,6 +361,7 @@ public class RoverTests
             SecondCenter = FindCenter(SecondCells);
 
             Garage = BuildingCatalogue.For("moon").Single(def => def.Id == RoverCatalogue.GarageDefId);
+            Port = BuildingCatalogue.For("earth").Single(def => def.Id == RoverCatalogue.PortDefId);
 
             Root = Path.Combine(Path.GetTempPath(), "spm-rover-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(Root, BodyKey));
@@ -273,12 +382,16 @@ public class RoverTests
 
         public BuildingDef Garage { get; }
 
+        public BuildingDef Port { get; }
+
+        public bool Water { get; }
+
         public string Root { get; }
 
         public BodyWorld Open() => BodyWorld.Open(BodyKey, Root);
 
         public CampaignState CreateCampaign(BodyWorld world)
-            => new(world, new BuildingRegistry(new[] { Garage }));
+            => new(world, new BuildingRegistry(Water ? new[] { Garage, Port } : new[] { Garage }));
 
         public CampaignState PurchasedCampaign(BodyWorld world)
         {
@@ -339,7 +452,7 @@ public class RoverTests
                     stream.Write(header);
 
                     var record = new byte[TileFormat.RecordBytes];
-                    record[0] = 0;
+                    record[0] = Water ? (byte)1 : (byte)0;
                     for (var i = 0; i < cells.Count; i++)
                     {
                         BinaryPrimitives.WriteInt16LittleEndian(record.AsSpan(1), 0);
@@ -362,10 +475,16 @@ public class RoverTests
                 recordBytes = TileFormat.RecordBytes,
                 tileHeaderBytes = TileFormat.HeaderBytes,
                 tilesFile = "fine.bin",
-                biomes = new object[]
-                {
-                    new { code = 0, id = "test.buildable", displayName = "Buildable", elevationRank = 1, buildable = true },
-                },
+                biomes = Water
+                    ? new object[]
+                    {
+                        new { code = 0, id = "test.buildable", displayName = "Buildable", elevationRank = 1, buildable = true },
+                        new { code = 1, id = "test.ocean", displayName = "Ocean", elevationRank = 0, buildable = true, waterKind = "ocean" },
+                    }
+                    : new object[]
+                    {
+                        new { code = 0, id = "test.buildable", displayName = "Buildable", elevationRank = 1, buildable = true },
+                    },
                 sources = new Dictionary<string, string>(),
                 regions = regions.Select((region, i) => new
                 {

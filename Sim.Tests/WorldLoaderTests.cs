@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using H3;
+using Sim.Biomes;
 using Sim.Hex;
 using Sim.Movement;
 using Sim.World;
@@ -311,6 +312,53 @@ public class WorldLoaderTests
                 var record = tile[i];
                 Assert.InRange(record.BiomeCode, (byte)0, (byte)6);
                 Assert.InRange(record.ElevationM, (short)-8177, (short)21171);
+                Assert.True(Enum.IsDefined(record.Crater));
+            }
+        }
+    }
+
+    [Fact]
+    public void RealBake_Earth_ManifestHasAuthoritativeWaterBiomes()
+    {
+        var root = TryFindRealDataRoot("earth");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("earth", root);
+
+        Assert.Equal("earth", world.BodyKey);
+        Assert.Equal(41_162, world.Regions.Count);
+        Assert.Equal(13, world.Biomes.Count);
+        Assert.Equal(WaterKind.Ocean, world.Biomes.All.Single(b => b.Id == "earth.ocean").WaterKind);
+        Assert.Equal(WaterKind.Lake, world.Biomes.All.Single(b => b.Id == "earth.lake").WaterKind);
+        Assert.Equal(WaterKind.River, world.Biomes.All.Single(b => b.Id == "earth.river").WaterKind);
+        Assert.True(world.Biomes.All.Single(b => b.Id == "earth.ocean").IsWater);
+        Assert.Equal(WaterKind.None, world.Biomes.All.Single(b => b.Id == "earth.plains").WaterKind);
+        Assert.False(world.Biomes.All.Single(b => b.Id == "earth.plains").IsWater);
+    }
+
+    [Fact]
+    public void RealBake_Earth_ReadsSampleRegions()
+    {
+        var root = TryFindRealDataRoot("earth");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("earth", root);
+        var ordinals = Enumerable.Range(0, world.Regions.Count)
+            .Where(i => i % 4096 == 0)
+            .Append(world.Regions.Count - 1);
+
+        foreach (var ordinal in ordinals)
+        {
+            var tile = world.GetRegionAt(ordinal);
+            Assert.Equal(world.Regions[ordinal].HexCount, tile.HexCount);
+            Assert.Equal(world.Regions[ordinal].DominantBiomeCode, tile.DominantBiomeCode);
+
+            for (var i = 0; i < tile.HexCount; i++)
+            {
+                var record = tile[i];
+                Assert.InRange(record.BiomeCode, (byte)0, (byte)12);
                 Assert.True(Enum.IsDefined(record.Crater));
             }
         }

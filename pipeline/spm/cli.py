@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from h3.api import basic_int as h3
 
-from . import classify, crater, export, fetch, hexify, raster
+from . import classify, crater, earth_real, export, fetch, hexify, raster, synthetic_earth
 from .bodies import BodyDef, get_body
 
 # LOLA GDR grids are simple-cylindrical, longitude 0..360 east-positive,
@@ -102,7 +102,14 @@ def _biome_code_or_none(body: BodyDef, biome_id: str) -> int | None:
 
 
 def _synthetic_biome_code(body: BodyDef, lat: float, lon: float) -> int:
-    """Deterministic latitude/longitude biome for a synthetic CI bake."""
+    """Deterministic latitude/longitude biome for Moon/Mars synthetic bakes.
+
+    Earth uses :func:`spm.synthetic_earth.sample`, which samples the whole fine
+    grid rather than one value per res-3 region.
+    """
+    if body.key == "earth":
+        raise ValueError("Earth synthetic bakes must use synthetic_earth.sample()")
+
     north = body.biome_code(body.pole_north_biome_ids[1])
     south = body.biome_code(body.pole_south_biome_ids[1])
 
@@ -131,7 +138,11 @@ def _synthetic_biome_code(body: BodyDef, lat: float, lon: float) -> int:
 
 
 def _synthetic_elevation(body: BodyDef, lat: float, lon: float, ordinal: int) -> float:
-    """Deterministic elevation in metres for a synthetic CI bake."""
+    """Deterministic elevation in metres for Moon/Mars synthetic bakes."""
+    if body.key == "earth":
+        raise ValueError("Earth synthetic bakes must use synthetic_earth.sample()")
+    noise = float((ordinal * 37) % 101) - 50.0
+
     north_fraction = (lat + 90.0) / 180.0
     elevation = 2500.0 - 6500.0 * north_fraction
 
@@ -152,27 +163,30 @@ def _run_synthetic(
 ) -> Path:
     """Bake the full tile layout without downloads or a source raster.
 
-    At H3 res 6 a small raster would leave almost every hex empty, and the
-    generic nearest-pixel fill would call H3 once per empty hex.  Assigning the
-    synthetic values directly from each region centroid keeps the fixture fast
-    while still producing the real region/hex counts the runtime expects.
+    Moon/Mars keep the original fast per-region fixture.  Earth samples a smooth
+    procedural field per fine hex so coastlines, islands and terrain remain
+    coherent across region boundaries while the res-6/res-3 layout is unchanged.
     """
     grid = hexify.enumerate_grid(region_res, fine_res)
     _log(f"  {grid.region_ids.size} regions, {grid.total} fine hexes")
 
-    dominant = np.empty(grid.total, dtype=np.int8)
-    elevation = np.empty(grid.total, dtype=np.float32)
     crater_kinds = np.zeros(grid.total, dtype=np.uint8)
 
-    for r, region in enumerate(grid.region_ids):
-        lat, lon = h3.cell_to_latlng(int(region))
-        start, end = grid.region_slice(r)
-        count = end - start
-        dominant[start:end] = _synthetic_biome_code(body, lat, lon)
-        ords = np.arange(count, dtype=np.float32)
-        elevation[start:end] = _synthetic_elevation(body, lat, lon, 0) + (
-            (ords * 37.0) % 101.0
-        ) - 50.0
+    if body.key == "earth":
+        _log("sampling synthetic Earth field at fine-hex centroids")
+        dominant, elevation = synthetic_earth.sample(body, grid)
+    else:
+        dominant = np.empty(grid.total, dtype=np.int8)
+        elevation = np.empty(grid.total, dtype=np.float32)
+        for r, region in enumerate(grid.region_ids):
+            lat, lon = h3.cell_to_latlng(int(region))
+            start, end = grid.region_slice(r)
+            count = end - start
+            dominant[start:end] = _synthetic_biome_code(body, lat, lon)
+            ords = np.arange(count, dtype=np.float32)
+            elevation[start:end] = _synthetic_elevation(body, lat, lon, 0) + (
+                (ords * 37.0) % 101.0
+            ) - 50.0
 
     region_dom = hexify.region_dominant(grid, dominant, priority=list(range(len(body.biomes))))
 
@@ -197,6 +211,39 @@ def _run_synthetic(
     )
 
 
+def _run_real_earth(
+    body: BodyDef,
+    args: argparse.Namespace,
+    fine_res: int,
+    region_res: int,
+) -> Path:
+    """Bake Earth from pinned public-domain geography instead of the fixture."""
+    _log("fetching real Earth inputs (cached)")
+    paths = earth_real.ensure_inputs(force=args.force)
+
+    _log("enumerating H3 grid")
+    grid = hexify.enumerate_grid(region_res, fine_res)
+    _log(f"  {grid.region_ids.size} regions, {grid.total} fine hexes")
+
+    dominant, elevation = earth_real.sample(body, grid, paths)
+    crater_kinds = np.zeros(grid.total, dtype=np.uint8)
+    region_dom = hexify.region_dominant(
+        grid, dominant, priority=list(range(len(body.biomes)))
+    )
+
+    _log("exporting tiles")
+    return export.write_tiles(
+        body,
+        grid,
+        dominant=dominant,
+        elevation_m=elevation,
+        crater_kinds=crater_kinds,
+        region_dominant=region_dom,
+        out_dir=Path(args.out) if args.out else None,
+        sources=dict(earth_real.SOURCE_LABELS),
+    )
+
+
 def run(args: argparse.Namespace) -> Path:
     body = get_body(args.body)
     fine_res = body.fine_resolution if args.fine_res is None else args.fine_res
@@ -208,6 +255,11 @@ def run(args: argparse.Namespace) -> Path:
     if args.synthetic:
         _log("generating deterministic in-memory raster (no fetch)")
         manifest = _run_synthetic(body, args, fine_res, region_res)
+        _log(f"done in {time.time() - t0:.1f}s -> {manifest}")
+        return manifest
+
+    if body.source_profile == "earth":
+        manifest = _run_real_earth(body, args, fine_res, region_res)
         _log(f"done in {time.time() - t0:.1f}s -> {manifest}")
         return manifest
 

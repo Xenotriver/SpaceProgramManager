@@ -31,11 +31,62 @@ public static class MovementModel
     /// <summary>Multi-cell crater: 20% speed penalty.</summary>
     public const double MultiCellCraterSpeedMultiplier = 0.80;
 
+    /// <summary>Land units cannot enter water.</summary>
+    public const double LandWaterSpeedMultiplier = 0.0;
+
+    /// <summary>Amphibious units pay a penalty when moving through water.</summary>
+    public const double AmphibiousWaterSpeedMultiplier = 0.65;
+
+    /// <summary>Waterborne units travel faster over water than over land.</summary>
+    public const double WaterborneWaterSpeedMultiplier = 1.10;
+
+    /// <summary>Waterborne units cannot beach on ordinary land.</summary>
+    public const double WaterborneLandSpeedMultiplier = 0.0;
+
+    /// <summary>Whether a unit in <paramref name="mode"/> may occupy <paramref name="biome"/>.</summary>
+    public static bool CanEnter(Biome biome, TerrainMode mode = TerrainMode.Land)
+    {
+        ArgumentNullException.ThrowIfNull(biome);
+
+        return mode switch
+        {
+            TerrainMode.Land => !biome.IsWater,
+            TerrainMode.Amphibious => true,
+            TerrainMode.Waterborne => biome.IsWater,
+            _ => false,
+        };
+    }
+
+    /// <summary>Fastest multiplier any edge can have for a terrain mode (A* heuristic bound).</summary>
+    public static double MaxSpeedMultiplier(TerrainMode mode) => mode switch
+    {
+        TerrainMode.Amphibious => Math.Max(DownhillSpeedMultiplier, AmphibiousWaterSpeedMultiplier),
+        TerrainMode.Waterborne => Math.Max(DownhillSpeedMultiplier, WaterborneWaterSpeedMultiplier),
+        _ => DownhillSpeedMultiplier,
+    };
+
     /// <summary>Speed multiplier for moving from <paramref name="from"/> to <paramref name="to"/>.</summary>
-    public static double SpeedMultiplier(Biome from, Biome to, CraterKind crater = CraterKind.None)
+    public static double SpeedMultiplier(
+        Biome from,
+        Biome to,
+        CraterKind crater = CraterKind.None,
+        TerrainMode mode = TerrainMode.Land)
     {
         ArgumentNullException.ThrowIfNull(from);
         ArgumentNullException.ThrowIfNull(to);
+
+        if (!CanEnter(to, mode))
+            return 0.0;
+
+        if (to.IsWater || from.IsWater)
+        {
+            return mode switch
+            {
+                TerrainMode.Amphibious => AmphibiousWaterSpeedMultiplier,
+                TerrainMode.Waterborne => WaterborneWaterSpeedMultiplier,
+                _ => LandWaterSpeedMultiplier,
+            };
+        }
 
         if (crater != CraterKind.None)
         {
@@ -61,6 +112,9 @@ public static class MovementModel
     {
         if (baseSpeedKmh <= 0)
             throw new ArgumentOutOfRangeException(nameof(baseSpeedKmh), "Base speed must be positive.");
+
+        if (speedMultiplier <= 0.0)
+            return double.PositiveInfinity;
 
         return distanceKm / (baseSpeedKmh * speedMultiplier);
     }

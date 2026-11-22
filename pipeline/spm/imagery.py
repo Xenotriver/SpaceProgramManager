@@ -23,7 +23,7 @@ import numpy as np
 from h3.api import basic_int as h3
 from PIL import Image
 
-from . import config, fetch, hexify, raster
+from . import config, fetch, hexify, raster, synthetic_earth
 from .bodies import BodyDef, get_body
 
 COLOR_FILE = "color.bin"
@@ -61,6 +61,19 @@ SOURCES: dict[str, dict[str, str]] = {
         "projection": "simple cylindrical, north up, planetocentric latitude, positive-east longitude -180..180",
         "sha256": "FDFCD335559C3DC67052B7E8A9565D850E336AC0D1F3EA7F5EB7826FFB44ECB2",
         "notes": "1 km JPEG derivative of the 12 GB 232 m master. Colourized Viking imagery, not multispectral true colour.",
+    },
+    "earth": {
+        "fetch": "earth_color",
+        "name": "NASA Blue Marble Next Generation, December 2004, with topography and bathymetry",
+        "product": "Blue Marble: Next Generation 21600x10800 (2 km/pixel)",
+        "url": "https://visibleearth.nasa.gov/images/73909/"
+        "december-blue-marble-next-generation-w-topography-and-bathymetry",
+        "file": "world.topo.bathy.200412.3x21600x10800.jpg",
+        "license": "NASA content is generally not subject to US copyright; acknowledge NASA Earth Observatory.",
+        "credits": "NASA Earth Observatory; produced by Reto Stöckli, NASA GSFC.",
+        "projection": "equirectangular (plate carree), north up, WGS84, -180..180, prime meridian at image centre",
+        "sha256": "3006C58B1272362DB0A8C2DF02DC07CEA4B12DFE820B7DC4A159A075CAF5D4D4",
+        "notes": "Monthly MODIS composite with shaded topography and bathymetry; aesthetic true-colour base map, not a multispectral science product.",
     },
 }
 
@@ -172,14 +185,20 @@ def aggregate_to_hex(
     sums = np.zeros((grid.total, BYTES_PER_HEX), dtype=np.float32)
     counts = np.zeros(grid.total, dtype=np.uint32)
     height = rgb.shape[0]
+    dlat = 180.0 / height
 
     for start in range(0, height, block_rows):
         end = min(start + block_rows, height)
+        # global_latlon() always starts at its lat_north argument and derives
+        # row spacing from the height it is given.  A block is only a slice of
+        # the source grid, so pass both the offset latitude and the full-grid
+        # dlat; otherwise later rows are compressed onto northern hexes.
         lat, lon = raster.global_latlon(
             end - start,
             rgb.shape[1],
             lon_west=LON_WEST,
-            lat_north=LAT_NORTH,
+            lat_north=LAT_NORTH - start * dlat,
+            dlat=dlat,
         )
         cells = hexify.pixels_to_hex(
             lat.ravel(), lon.ravel(), grid.fine_resolution, jobs=jobs
@@ -212,6 +231,14 @@ def aggregate_to_hex(
 def synthetic_rgb(body: BodyDef, grid: hexify.Grid) -> np.ndarray:
     """Deterministic body-coloured fixture for CI; no source image required."""
     out = np.empty((grid.total, BYTES_PER_HEX), dtype=np.uint8)
+
+    # Earth shares the tile baker's per-hex surface field, so colour, biome and
+    # elevation describe the same coastlines instead of three different blobs.
+    if body.key == "earth":
+        for start, end, lat, lon in synthetic_earth.latlon_batches(grid):
+            out[start:end] = synthetic_earth.rgb(body, lat, lon)
+        return out
+
     for r, region in enumerate(grid.region_ids):
         lat, lon = h3.cell_to_latlng(int(region))
         start, end = grid.region_slice(r)

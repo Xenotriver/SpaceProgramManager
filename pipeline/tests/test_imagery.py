@@ -57,6 +57,40 @@ class ImageryTests(unittest.TestCase):
         np.testing.assert_array_equal(sample(np.array([90.0]), np.array([0.0]))[0], (1, 2, 3))
         np.testing.assert_array_equal(sample(np.array([-90.0]), np.array([270.0]))[0], (9, 8, 7))
 
+    def test_aggregate_to_hex_keeps_latitude_aligned_across_blocks(self) -> None:
+        # Four one-row blocks must sample four different latitudes.  A block that
+        # restarts at 90N silently paints southern image rows onto northern hexes.
+        height = 4
+        rgb = np.array(
+            [[[10, 10, 10]], [[20, 20, 20]], [[50, 50, 50]], [[60, 60, 60]]],
+            dtype=np.uint8,
+        )
+        cells = []
+        for start in range(height):
+            lat, lon = imagery.raster.global_latlon(
+                1,
+                1,
+                lon_west=imagery.LON_WEST,
+                lat_north=imagery.LAT_NORTH - start * (180.0 / height),
+                dlat=180.0 / height,
+            )
+            cells.append(h3.latlng_to_cell(float(lat[0, 0]), float(lon[0, 0]), 6))
+        hex_ids = np.asarray(cells, dtype=np.int64)
+        order = np.argsort(hex_ids, kind="stable").astype(np.int32)
+        grid = hexify.Grid(
+            region_resolution=3,
+            fine_resolution=6,
+            region_ids=np.asarray([1], dtype=np.int64),
+            hex_ids=hex_ids,
+            offsets=np.asarray([0, height], dtype=np.int64),
+            sorted_hex=hex_ids[order],
+            order=order,
+        )
+
+        out = imagery.aggregate_to_hex(grid, rgb, jobs=1, block_rows=1)
+
+        np.testing.assert_array_equal(out, rgb[:, 0, :])
+
     def test_validate_manifest_rejects_wrong_body(self) -> None:
         grid = tiny_grid([1], [4])
         manifest = {

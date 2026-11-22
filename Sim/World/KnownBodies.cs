@@ -11,8 +11,9 @@ public static class KnownBodies
 {
     public const string Moon = "moon";
     public const string Mars = "mars";
+    public const string Earth = "earth";
 
-    public static IReadOnlyList<string> ReadyKeys { get; } = new[] { Moon, Mars };
+    public static IReadOnlyList<string> ReadyKeys { get; } = new[] { Moon, Mars, Earth };
 
     public static bool IsReady(string? bodyKey)
         => bodyKey is not null && ReadyKeys.Contains(bodyKey, StringComparer.OrdinalIgnoreCase);
@@ -27,6 +28,7 @@ public static class KnownBodies
         {
             Moon => "Moon",
             Mars => "Mars",
+            Earth => "Earth",
             _ => bodyKey,
         };
 }

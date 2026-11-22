@@ -159,6 +159,7 @@ public sealed class BodyManifest
                 DisplayName = string.IsNullOrWhiteSpace(entry.DisplayName) ? entry.Id : entry.DisplayName,
                 ElevationRank = entry.ElevationRank,
                 Buildable = entry.Buildable,
+                WaterKind = ParseWaterKind(entry.WaterKind, source, entry.Code),
             };
         }
 
@@ -211,6 +212,22 @@ public sealed class BodyManifest
         }
 
         return regions;
+    }
+
+    private static WaterKind ParseWaterKind(string? value, string source, int code)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return WaterKind.None;
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "none" => WaterKind.None,
+            "ocean" or "sea" => WaterKind.Ocean,
+            "lake" => WaterKind.Lake,
+            "river" => WaterKind.River,
+            _ => throw new InvalidDataException(
+                $"{source}: biome {code} has unknown water kind '{value}'."),
+        };
     }
 
     private static ulong ParseRegionIndex(JsonElement element, string source)
@@ -278,6 +295,8 @@ public sealed class BodyManifest
         public int ElevationRank { get; set; }
 
         public bool Buildable { get; set; } = true;
+
+        public string? WaterKind { get; set; }
     }
 
     private sealed class RegionJson

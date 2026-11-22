@@ -58,6 +58,7 @@ public partial class Main : Node2D
 
     private BodyWorld _world = null!;
     private SurfaceImagery? _imagery;
+    private FluidOverlay? _fluid;
     private BuildingRegistry _registry = null!;
     private IReadOnlyDictionary<string, string> _buildingNames =
         new Dictionary<string, string>(StringComparer.Ordinal);
@@ -134,19 +135,34 @@ public partial class Main : Node2D
         _settings = GameSettings.Load();
         _catalogue = new CampaignSlotStore(_settings.SaveRoot);
 
-        var requestedBody = _pendingBody ?? ArgumentValue("--body") ?? KnownBodies.Moon;
+        var explicitBody = _pendingBody ?? ArgumentValue("--body");
+        var requestedBody = explicitBody ?? KnownBodies.Earth;
         var bodyKey = KnownBodies.TryNormalize(requestedBody);
         if (bodyKey is null)
         {
-            GD.PushWarning($"unknown body '{requestedBody}'; loading {KnownBodies.Moon}");
+            GD.PushWarning($"unknown body '{requestedBody}'; loading {KnownBodies.Earth}");
+            bodyKey = KnownBodies.Earth;
+        }
+
+        if (explicitBody is null && bodyKey == KnownBodies.Earth && !HasBodyBake(bodyKey))
+        {
+            GD.PushWarning("Earth bake is not available; falling back to Moon");
             bodyKey = KnownBodies.Moon;
         }
+
         _world = OpenBody(bodyKey);
         _imagery = SurfaceImagery.TryLoad(_world);
         if (_imagery is not null)
         {
             GD.Print($"surface imagery: {_imagery.SourceName} " +
                      $"({(_imagery.Synthetic ? "synthetic CI fixture" : "public-data source")})");
+        }
+
+        _fluid = FluidOverlay.TryLoad(_world);
+        if (_fluid is not null)
+        {
+            GD.Print($"fluid overlay: {_fluid.SourceName} " +
+                     $"({(_fluid.Synthetic ? "synthetic CI fixture" : "public-data source")})");
         }
 
         // World view sits below the HUD so the panel is never covered.
@@ -162,6 +178,7 @@ public partial class Main : Node2D
 
         _regionView = new RegionView { Visible = false };
         _regionView.SetImagery(_imagery);
+        _regionView.SetFluid(_fluid);
         _worldLayer.AddChild(_regionView);
         _regionView.HexHovered += OnHexHovered;
         _regionView.HexSelected += OnHexSelected;
@@ -172,6 +189,7 @@ public partial class Main : Node2D
 
         _areaView = new AreaView { Visible = false };
         _areaView.SetImagery(_imagery);
+        _areaView.SetFluid(_fluid);
         _worldLayer.AddChild(_areaView);
         _areaView.RegionOpened += OnAreaRegionOpened;
         _areaView.DispatchRequested += OnAreaDispatchRequested;
@@ -185,6 +203,7 @@ public partial class Main : Node2D
 
         _managementView = new ManagementView { Visible = false };
         _managementView.SetImagery(_imagery);
+        _managementView.SetFluid(_fluid);
         _worldLayer.AddChild(_managementView);
         _managementView.HexHovered += OnHexHovered;
         _managementView.HexSelected += OnHexSelected;
@@ -468,28 +487,47 @@ public partial class Main : Node2D
     {
         if (!_started || _campaign is null)
             return new ShellOverlay.RoverFleetView(
-                0UL, false, 0, 0, Array.Empty<ShellOverlay.RoverFleetRow>());
+                0UL, false, 0, 0, false, 0, 0, Array.Empty<ShellOverlay.RoverFleetRow>());
 
         var regionIndex = _areaView.IsLoaded
             ? _areaView.CenterRegion
             : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index;
 
-        var ready = false;
-        var capacity = 0;
+        var garageReady = false;
+        var garageCapacity = 0;
+        var portReady = false;
+        var portCapacity = 0;
         foreach (var building in _campaign.Buildings(regionIndex))
         {
-            if (building.DefId != RoverCatalogue.GarageDefId
-                || building.Paused
+            if (building.Paused
                 || building.Status is not (BuildingStatus.Operational or BuildingStatus.Idle)
                 || !_registry.TryGet(building.DefId, out var def)
                 || def is null)
                 continue;
 
-            ready = true;
-            capacity += (int)def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0);
+            var slots = (int)def.StorageCapacity.GetValueOrDefault("rover_slots", 0.0);
+            if (building.DefId == RoverCatalogue.GarageDefId)
+            {
+                garageReady = true;
+                garageCapacity += slots;
+            }
+            else if (building.DefId == RoverCatalogue.PortDefId)
+            {
+                portReady = true;
+                portCapacity += (int)def.StorageCapacity.GetValueOrDefault("barge_slots", 0.0);
+            }
         }
 
-        var stationed = _campaign.Rovers.Count(rover => rover.LocationRegion == regionIndex);
+        bool Waterborne(RoverState rover)
+            => RoverCatalogue.TryGet(rover.DefId, out var model)
+               && model is not null
+               && model.TerrainMode == TerrainMode.Waterborne;
+
+        var garageStationed = _campaign.Rovers.Count(
+            rover => rover.LocationRegion == regionIndex && !Waterborne(rover));
+        var portStationed = _campaign.Rovers.Count(
+            rover => rover.LocationRegion == regionIndex && Waterborne(rover));
+
         var rows = _campaign.Rovers
             .OrderBy(rover => rover.Name, StringComparer.Ordinal)
             .Select(rover =>
@@ -507,6 +545,9 @@ public partial class Main : Node2D
                             && rover.ArrivalGameHour is { } arrival
                     ? $"ETA {arrival:0.#} h"
                     : rover.Status.ToString();
+                var terrain = RoverCatalogue.TryGet(rover.DefId, out var model) && model is not null
+                    ? model.TerrainMode.ToString()
+                    : TerrainMode.Land.ToString();
 
                 return new ShellOverlay.RoverFleetRow(
                     rover.Id,
@@ -514,12 +555,20 @@ public partial class Main : Node2D
                     rover.Status.ToString(),
                     $"{location} · {rover.SpeedKmh:0.#} km/h · {rover.Health:0.#}% · {cargo}",
                     right,
+                    terrain,
                     available);
             })
             .ToArray();
 
         return new ShellOverlay.RoverFleetView(
-            regionIndex, ready, capacity, stationed, rows);
+            regionIndex,
+            garageReady,
+            garageCapacity,
+            garageStationed,
+            portReady,
+            portCapacity,
+            portStationed,
+            rows);
     }
 
     private ShellOverlay.MissionView CurrentMissionsView()
@@ -700,7 +749,7 @@ public partial class Main : Node2D
                 return;
 
             case ShellCommand.SwitchBody:
-                SwitchBody(payload ?? KnownBodies.Moon);
+                SwitchBody(payload ?? KnownBodies.Earth);
                 return;
 
             case ShellCommand.UnlockTech:
@@ -719,7 +768,7 @@ public partial class Main : Node2D
 
             case ShellCommand.PurchaseRover:
                 _shell.Close();
-                PurchaseRover();
+                PurchaseRover(payload);
                 return;
 
             case ShellCommand.SelectRover:
@@ -1665,7 +1714,7 @@ public partial class Main : Node2D
         _shell.PushToast(result.Message, error: !result.Success);
     }
 
-    private void PurchaseRover()
+    private void PurchaseRover(string? roverDefId = null)
     {
         if (!_started || _campaign is null)
             return;
@@ -1673,7 +1722,7 @@ public partial class Main : Node2D
         var regionIndex = _areaView.IsLoaded
             ? _areaView.CenterRegion
             : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index;
-        var result = _campaign.TryPurchaseRover(regionIndex, out _);
+        var result = _campaign.TryPurchaseRover(regionIndex, out _, roverDefId: roverDefId);
         if (result.Success)
         {
             _campaignService.SetViewState(CaptureView());
@@ -1693,7 +1742,8 @@ public partial class Main : Node2D
             return;
         }
 
-        _status = $"hex {ordinal} · {DisplayName(biomeId)} · {elevationM:N0} m · {CraterName((CraterKind)craterKind)}";
+        var water = WaterSuffix(biomeId);
+        _status = $"hex {ordinal} · {DisplayName(biomeId)}{water} · {elevationM:N0} m · {CraterName((CraterKind)craterKind)}";
         QueueRedraw();
     }
 
@@ -1860,7 +1910,7 @@ public partial class Main : Node2D
         DrawRect(panel, PanelColor);
         DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.55f, 0.68f, 0.85f, 0.9f));
 
-        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · REGIONS",
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), $"{KnownBodies.DisplayName(_world.BodyKey).ToUpperInvariant()} · REGIONS",
             HorizontalAlignment.Left, -1, 17, AccentText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
             $"{_world.Regions.Count:N0} regions · res {_world.RegionResolution} · {_world.Biomes.Count} biomes",
@@ -1907,7 +1957,7 @@ public partial class Main : Node2D
         DrawRect(panel, PanelColor);
         DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.55f, 0.68f, 0.85f, 0.9f));
 
-        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · REGION",
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), $"{KnownBodies.DisplayName(_world.BodyKey).ToUpperInvariant()} · REGION",
             HorizontalAlignment.Left, -1, 17, AccentText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
             $"{DisplayName(_regionView.RegionBiomeId)} · {_regionView.HexCount} hexes · res {_world.FineResolution}",
@@ -2125,7 +2175,7 @@ public partial class Main : Node2D
         DrawRect(panel, PanelColor);
         DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.55f, 0.9f, 0.75f, 0.9f));
 
-        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · SITE",
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), $"{KnownBodies.DisplayName(_world.BodyKey).ToUpperInvariant()} · SITE",
             HorizontalAlignment.Left, -1, 17, AccentText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
             $"{DisplayName(biomeId)} · hex {_siteParentOrdinal}", HorizontalAlignment.Left, -1, 12, MutedText);
@@ -2225,7 +2275,7 @@ public partial class Main : Node2D
         DrawRect(panel, PanelColor);
         DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.9f, 0.72f, 0.45f, 0.9f));
 
-        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), "MOON · COLONY",
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30), $"{KnownBodies.DisplayName(_world.BodyKey).ToUpperInvariant()} · COLONY",
             HorizontalAlignment.Left, -1, 17, AccentText);
         DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 48),
             $"{DisplayName(_managementView.RegionBiomeId)} · {_managementView.HexCount} hexes · res {_world.FineResolution}",
@@ -2528,6 +2578,11 @@ public partial class Main : Node2D
     private string DisplayName(string biomeId)
         => _world.Biomes.TryGetById(biomeId, out Biome? biome) ? biome.DisplayName : biomeId;
 
+    private string WaterSuffix(string biomeId)
+        => _world.Biomes.TryGetById(biomeId, out Biome? biome) && biome.IsWater
+            ? $" · {biome.WaterKind.ToString().ToLowerInvariant()} water"
+            : string.Empty;
+
     private static string CraterName(CraterKind crater) => crater switch
     {
         CraterKind.SingleCell => "crater rim",
@@ -2563,9 +2618,36 @@ public partial class Main : Node2D
     private static int FootprintHexes(BuildingDef def)
         => 3 * def.FootprintRadius * (def.FootprintRadius + 1) + 1;
 
+    private static bool HasBodyBake(string bodyKey)
+    {
+        var key = KnownBodies.TryNormalize(bodyKey);
+        if (key is null)
+            return false;
+
+        try
+        {
+            if (File.Exists(Path.Combine(BodyWorld.FindDataRoot(bodyKey: key), key, "manifest.json")))
+                return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // Try the Godot-project fallback below.
+        }
+
+        try
+        {
+            var fallback = ProjectSettings.GlobalizePath("res://../data");
+            return File.Exists(Path.Combine(fallback, key, "manifest.json"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private static BodyWorld OpenBody(string bodyKey)
     {
-        var key = KnownBodies.TryNormalize(bodyKey) ?? KnownBodies.Moon;
+        var key = KnownBodies.TryNormalize(bodyKey) ?? KnownBodies.Earth;
 
         try
         {
@@ -2649,6 +2731,6 @@ public partial class Main : Node2D
         GD.Print($"Screenshot: {path}");
     }
 
-    private static string DefaultScreenshotPath()
-        => ProjectSettings.GlobalizePath("user://moon_overview.png");
+    private string DefaultScreenshotPath()
+        => ProjectSettings.GlobalizePath($"user://{_world.BodyKey}_overview.png");
 }

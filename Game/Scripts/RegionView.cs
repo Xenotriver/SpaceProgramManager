@@ -75,6 +75,7 @@ public partial class RegionView : Node2D
     private BodyWorld _world = null!;
     private RegionTile _tile = null!;
     private SurfaceImagery? _imagery;
+    private FluidOverlay? _fluid;
 
     private Vector2[] _centers = Array.Empty<Vector2>();
     private Vector3[] _unitCenters = Array.Empty<Vector3>();
@@ -94,6 +95,7 @@ public partial class RegionView : Node2D
     private string[] _biomeIds = Array.Empty<string>();
     private short[] _elevations = Array.Empty<short>();
     private CraterKind[] _craters = Array.Empty<CraterKind>();
+    private bool[] _water = Array.Empty<bool>();
     private int[][] _neighbours = Array.Empty<int[]>();
     private readonly Dictionary<ulong, int> _ordinalByIndex = new();
     private float _cellRadius;
@@ -163,6 +165,12 @@ public partial class RegionView : Node2D
 
     /// <summary>Binds the optional surface-colour sidecar before a region is loaded.</summary>
     public void SetImagery(SurfaceImagery? imagery) => _imagery = imagery;
+
+    /// <summary>Binds the optional presentation-only fluid sidecar.</summary>
+    public void SetFluid(FluidOverlay? fluid) => _fluid = fluid;
+
+    /// <summary>True when fluid strokes are available for this body.</summary>
+    public bool HasFluid => _fluid is not null;
 
     /// <summary>Site-scoring configuration used by the heatmap and placement validation.</summary>
     public SiteScorerConfig SiteConfig { get; set; } = new() { BodyRadiusKm = 1737.4 };
@@ -236,6 +244,7 @@ public partial class RegionView : Node2D
         _biomeIds = new string[count];
         _elevations = new short[count];
         _craters = new CraterKind[count];
+        _water = new bool[count];
         _radiusKm = world.Manifest.Body.RadiusKm;
         SiteConfig = (_campaign?.SiteConfig ?? SiteConfig) with { BodyRadiusKm = _radiusKm };
 
@@ -255,6 +264,7 @@ public partial class RegionView : Node2D
             _biomeIds[i] = biome.Id;
             _elevations[i] = record.ElevationM;
             _craters[i] = record.Crater;
+            _water[i] = biome.IsWater;
 
             if (!biomesPresent.Contains(biome.Id))
                 biomesPresent.Add(biome.Id);
@@ -288,10 +298,13 @@ public partial class RegionView : Node2D
 
         BiomesPresent = biomesPresent;
 
-        var elevationSpan = Math.Max(1, _terrainMax - _terrainMin);
+        var elevationSpan = ReliefMath.EffectiveSpan(
+            _terrainMax - _terrainMin, _world.Manifest.Body.Key);
         for (var i = 0; i < count; i++)
         {
-            _terrainFills[i] = TerrainPalette.For((_elevations[i] - _terrainMin) / (double)elevationSpan);
+            _terrainFills[i] = _water[i]
+                ? _biomeFills[i]
+                : TerrainPalette.For((_elevations[i] - _terrainMin) / (double)elevationSpan);
 
             var biomeFill = _biomeFills[i];
             _buildingFills[i] = new Color(biomeFill.R * 0.32f, biomeFill.G * 0.32f, biomeFill.B * 0.32f, 1f);
@@ -379,6 +392,7 @@ public partial class RegionView : Node2D
 
         DrawMesh(_fillMesh, _whiteTexture, meshTransform);
         DrawMultiline(_borderPoints, BorderColor, 1f, false);
+        DrawFluid(scale);
 
         // The heatmap already encodes crater clearance; dots would fight it.
         if (ViewMode != RegionViewMode.SiteScore)
@@ -525,6 +539,24 @@ public partial class RegionView : Node2D
             screen[v] = ToScreen(_corners[ordinal][v], scale);
 
         DrawPolyline(Close(screen), color, 2.5f, true);
+    }
+
+    private void DrawFluid(float scale)
+    {
+        if (_fluid is null || _tile is null)
+            return;
+
+        var strokes = _fluid.StrokesForRegion(
+            RegionIndex,
+            _tile,
+            _ordinalByIndex,
+            _centers,
+            center => ToScreen(center, scale),
+            _cellRadius,
+            scale);
+
+        foreach (var stroke in strokes)
+            DrawLine(stroke.From, stroke.To, stroke.Color, stroke.Width, true);
     }
 
     private void DrawRoute(RoutePlan route, float scale)

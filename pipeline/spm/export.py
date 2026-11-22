@@ -110,6 +110,11 @@ def write_tiles(
                 "displayName": biome.display_name,
                 "elevationRank": biome.elevation_rank,
                 "buildable": biome.buildable,
+                **(
+                    {"waterKind": biome.water_kind}
+                    if biome.water_kind != "none"
+                    else {}
+                ),
             }
             for code, biome in enumerate(body.biomes)
         ],

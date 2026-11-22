@@ -22,4 +22,10 @@ public sealed record Biome
 
     /// <summary>Whether installations may be placed on this biome.</summary>
     public bool Buildable { get; init; } = true;
+
+    /// <summary>Authoritative water class. Derived from manifest metadata; never persisted in a save.</summary>
+    public WaterKind WaterKind { get; init; } = WaterKind.None;
+
+    /// <summary>True when this biome is water. Computed, not serialized.</summary>
+    public bool IsWater => WaterKind is not WaterKind.None;
 }

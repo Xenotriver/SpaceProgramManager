@@ -64,7 +64,7 @@ public sealed class AreaDiorama
         string[][] cornerKeys,
         float[] elevations,
         float minElevation,
-        float maxElevation,
+        float elevationSpan,
         double radiusMetres,
         Color[] fills)
     {
@@ -72,7 +72,7 @@ public sealed class AreaDiorama
         _corners = corners;
         _elevations = elevations;
         _minElevation = minElevation;
-        _elevationSpan = Mathf.Max(1e-6f, maxElevation - minElevation);
+        _elevationSpan = Mathf.Max(1e-6f, elevationSpan);
         _radiusMetres = Math.Max(1.0, radiusMetres);
         _fills = fills;
 
@@ -139,7 +139,7 @@ public sealed class AreaDiorama
 
         _homePivot = (min + max) * 0.5f;
         var spanPlane = Mathf.Max(max.X - min.X, max.Y - min.Y);
-        var elevationSpanPlane = (maxElevation - minElevation) / _radiusMetres;
+        var elevationSpanPlane = _elevationSpan / _radiusMetres;
         _autoRelief = elevationSpanPlane > 1e-9
             ? ReliefFraction * spanPlane / (float)elevationSpanPlane
             : 0f;

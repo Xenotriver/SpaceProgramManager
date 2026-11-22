@@ -18,6 +18,7 @@ Nothing here is committed; everything lands in ``pipeline/.cache``.
 from __future__ import annotations
 
 import sys
+import hashlib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ class Source:
     url: str
     filename: str
     size: int | None = None
+    sha256: str | None = None
 
 
 SOURCES: dict[str, Source] = {
@@ -121,6 +123,49 @@ SOURCES: dict[str, Source] = {
         "mars_viking_mdim21_clrmosaic_1km.jpg",
         36708552,
     ),
+    # Real Earth colour; the same pinned file feeds the tile land-cover proxy
+    # and the presentation-only color.bin sidecar.
+    "earth_color": Source(
+        "earth_color",
+        "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/"
+        "bmng-topography-bathymetry/december/"
+        "world.topo.bathy.200412.3x21600x10800.jpg",
+        "world.topo.bathy.200412.3x21600x10800.jpg",
+        29868040,
+        "3006C58B1272362DB0A8C2DF02DC07CEA4B12DFE820B7DC4A159A075CAF5D4D4",
+    ),
+    # Real Earth coastlines, lakes, rivers and relief.  All four are public
+    # domain and pinned by SHA-256 so a re-bake is reproducible.
+    "earth_land": Source(
+        "earth_land",
+        "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip",
+        "ne_10m_land.zip",
+        3269070,
+        "E547D749445EAA0964ABA76738090EC88F5E63C4585122170F98C67A7EA922DC",
+    ),
+    "earth_lakes": Source(
+        "earth_lakes",
+        "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_lakes.zip",
+        "ne_10m_lakes.zip",
+        2349685,
+        "0803A06F9C3CB4671D89B68C48B142AAD9366BA40F665245E12A913FBC61722A",
+    ),
+    "earth_rivers": Source(
+        "earth_rivers",
+        "https://naturalearth.s3.amazonaws.com/10m_physical/"
+        "ne_10m_rivers_lake_centerlines.zip",
+        "ne_10m_rivers_lake_centerlines.zip",
+        2079507,
+        "DED71B01870855CCFE19B51F2EC14C9BB48FAE23C0E9F3C11974D426433B5C38",
+    ),
+    "earth_elevation": Source(
+        "earth_elevation",
+        "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO1/data/ice_surface/"
+        "grid_registered/netcdf/ETOPO1_Ice_g_gmt4.grd.gz",
+        "ETOPO1_Ice_g_gmt4.grd.gz",
+        395148066,
+        "C241DB385D89F3D0C22EEC8138224DB9F2EBEE6A1B4D1ECB4EBC6A5743A28EC8",
+    ),
 }
 
 
@@ -139,10 +184,22 @@ def fetch(name: str, *, force: bool = False, body_key: str = "moon") -> Path:
     """
     source = SOURCES[name]
     dest = cache_dir(body_key) / source.filename
+
+    def verified(path: Path) -> bool:
+        if source.sha256 is None:
+            return source.size is None or path.stat().st_size == source.size
+        if source.size is not None and path.stat().st_size != source.size:
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest().upper() == source.sha256.upper()
+
     if dest.exists() and not force:
-        if source.size is None or dest.stat().st_size == source.size:
+        if verified(dest):
             return dest
-        print(f"  cache size mismatch for {dest.name}; re-downloading")
+        print(f"  cache checksum/size mismatch for {dest.name}; re-downloading")
 
     print(f"  downloading {source.name} -> {dest.name}")
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -162,6 +219,9 @@ def fetch(name: str, *, force: bool = False, body_key: str = "moon") -> Path:
                     sys.stdout.write(f"\r    {pct:5.1f}%  {done >> 20} MiB")
                     sys.stdout.flush()
     sys.stdout.write("\n")
+    if source.sha256 is not None and not verified(tmp):
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"{source.name}: downloaded SHA-256 does not match the pinned checksum")
     tmp.replace(dest)
     return dest
 

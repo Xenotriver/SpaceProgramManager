@@ -117,12 +117,14 @@ public partial class AreaView : Node2D
     private BodyWorld _world = null!;
     private CampaignState _campaign = null!;
     private SurfaceImagery? _imagery;
+    private FluidOverlay? _fluid;
     private SiteScorerConfig _siteConfig = new() { BodyRadiusKm = 1737.4 };
     private double _radiusKm = 1737.4;
 
     private readonly List<RegionArea> _areas = new();
     private readonly Dictionary<ulong, RegionArea> _areaByIndex = new();
     private readonly Dictionary<(ulong Region, ulong Hex), int> _cellByKey = new();
+    private readonly Dictionary<ulong, Dictionary<ulong, int>> _centerIndexByCellByRegion = new();
     private readonly Dictionary<ulong, Vector2[]> _regionBorders = new();
     private readonly Dictionary<ulong, Vector2[]> _screenRegionBorders = new();
     private readonly Dictionary<ulong, Vector2[]> _isoScreenRegionBorders = new();
@@ -130,6 +132,7 @@ public partial class AreaView : Node2D
     private Vector2[] _centers = Array.Empty<Vector2>();
     private Vector2[][] _corners = Array.Empty<Vector2[]>();
     private float[] _elevations = Array.Empty<float>();
+    private bool[] _water = Array.Empty<bool>();
     private float[] _heights = Array.Empty<float>();
     private string[][] _cornerKeys = Array.Empty<string[]>();
     private float[][] _cornerHeights = Array.Empty<float[]>();
@@ -161,6 +164,7 @@ public partial class AreaView : Node2D
     private Vector2 _origin;
     private Vector2 _span = Vector2.One;
     private float _unitsPerRadian = 1f;
+    private float _flatCellRadius = 0.01f;
     private float _flatZoom = 1f;
     private Vector2 _flatPan;
 
@@ -252,6 +256,12 @@ public partial class AreaView : Node2D
     /// <summary>Binds the optional surface-colour sidecar before an area is loaded.</summary>
     public void SetImagery(SurfaceImagery? imagery) => _imagery = imagery;
 
+    /// <summary>Binds the optional presentation-only fluid sidecar.</summary>
+    public void SetFluid(FluidOverlay? fluid) => _fluid = fluid;
+
+    /// <summary>True when fluid strokes are available for this body.</summary>
+    public bool HasFluid => _fluid is not null;
+
     /// <summary>Rover chosen as the source of the next destination click.</summary>
     public string? SelectedRoverId { get; private set; }
 
@@ -288,6 +298,7 @@ public partial class AreaView : Node2D
         _areas.Clear();
         _areaByIndex.Clear();
         _cellByKey.Clear();
+        _centerIndexByCellByRegion.Clear();
         _regionBorders.Clear();
         _screenRegionBorders.Clear();
         _isoScreenRegionBorders.Clear();
@@ -309,6 +320,7 @@ public partial class AreaView : Node2D
         var corners = new List<Vector2[]>(totalCells);
         var biomeFills = new List<Color>(totalCells);
         var elevations = new List<float>(totalCells);
+        var water = new List<bool>(totalCells);
         var cornerKeys = new List<string[]>(totalCells);
         var tiles = new List<RegionTile>(totalCells);
         var ordinals = new List<int>(totalCells);
@@ -329,6 +341,7 @@ public partial class AreaView : Node2D
             var centerHex = 0;
             var centerCell = 0;
             var bestDot = -2f;
+            var centerIndexByCell = new Dictionary<ulong, int>(tile.HexCount);
             var regionImagery = new Color[tile.HexCount];
             if (_imagery is null || !_imagery.TryCopyRegion(regionIndex, tile.HexCount, regionImagery))
                 imageryComplete = false;
@@ -362,6 +375,7 @@ public partial class AreaView : Node2D
                 corners.Add(polygon);
                 cornerKeys.Add(keys);
                 _cellByKey[(regionIndex, (ulong)cell)] = globalIndex;
+                centerIndexByCell[(ulong)cell] = globalIndex;
                 cells.Add(globalIndex);
                 tiles.Add(tile);
                 ordinals.Add(ordinal);
@@ -377,6 +391,7 @@ public partial class AreaView : Node2D
 
                 var elevation = tile.ElevationM(ordinal);
                 elevations.Add(elevation);
+                water.Add(biome.IsWater);
                 minElevation = Mathf.Min(minElevation, elevation);
                 maxElevation = Mathf.Max(maxElevation, elevation);
 
@@ -399,11 +414,15 @@ public partial class AreaView : Node2D
             };
             _areaByIndex[regionIndex] = area;
             _areas.Add(area);
+            _centerIndexByCellByRegion[regionIndex] = centerIndexByCell;
             _regionBorders[regionIndex] = regionBorder.ToArray();
         }
 
         _centers = centers.ToArray();
         _corners = corners.ToArray();
+        _flatCellRadius = _corners.Length == 0 || _corners[0].Length == 0
+            ? 0.01f
+            : (float)_corners[0].Average(corner => corner.DistanceTo(_centers[0]));
         _biomeFills = biomeFills.ToArray();
         _imageryFills = imageryComplete ? imageryFills : Array.Empty<Color>();
         _cornerKeys = cornerKeys.ToArray();
@@ -412,11 +431,15 @@ public partial class AreaView : Node2D
         _ordinals = ordinals.ToArray();
 
         _elevations = elevations.ToArray();
+        _water = water.ToArray();
         TerrainMinM = (short)minElevation;
         TerrainMaxM = (short)maxElevation;
-        var elevationSpan = Mathf.Max(1f, maxElevation - minElevation);
+        var elevationSpan = (float)ReliefMath.EffectiveSpan(
+            maxElevation - minElevation, world.Manifest.Body.Key);
         _terrainFills = elevations
-            .Select(elevation => TerrainPalette.For((elevation - minElevation) / elevationSpan))
+            .Select((elevation, i) => _water[i]
+                ? _biomeFills[i]
+                : TerrainPalette.For((elevation - minElevation) / elevationSpan))
             .ToArray();
         _siteFills = Array.Empty<Color>();
         _siteScoreMin = 0.0;
@@ -427,7 +450,7 @@ public partial class AreaView : Node2D
 
         var radiusMetres = Math.Max(1.0, world.Manifest.Body.RadiusKm * 1000.0);
         var spanPlane = Mathf.Max(max.X - min.X, max.Y - min.Y);
-        var elevationSpanPlane = (maxElevation - minElevation) / radiusMetres;
+        var elevationSpanPlane = elevationSpan / radiusMetres;
         var relief = elevationSpanPlane > 1e-9
             ? ReliefFraction * spanPlane / elevationSpanPlane
             : 0f;
@@ -473,8 +496,13 @@ public partial class AreaView : Node2D
             EnsureSiteScores();
         UpdateFills();
 
-        _diorama = new AreaDiorama(_centers, _corners, _cornerKeys, _elevations,
-            minElevation, maxElevation, radiusMetres, _fills);
+        // Bathymetry stays authoritative in the tile record, but the rendered
+        // ocean surface is flat so rivers do not look like underwater ridges.
+        var visualElevations = _elevations
+            .Select((elevation, i) => _water[i] ? minElevation : elevation)
+            .ToArray();
+        _diorama = new AreaDiorama(_centers, _corners, _cornerKeys, visualElevations,
+            minElevation, elevationSpan, radiusMetres, _fills);
         FitIso();
 
         _hoverRegionIndex = -1;
@@ -726,6 +754,7 @@ public partial class AreaView : Node2D
         }
 
         DrawMultiline(grid, BorderColor, 1f, false);
+        DrawFluid();
 
         if (_hoverRegionIndex >= 0 && _hoverRegionIndex < _areas.Count)
         {
@@ -1034,6 +1063,36 @@ public partial class AreaView : Node2D
         _fillMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
     }
 
+    private void DrawFluid()
+    {
+        if (_fluid is null || _areas.Count == 0)
+            return;
+
+        var isometric = UsesIsometric && _diorama is not null;
+        var centers = isometric ? _diorama!.IsoCenters : _centers;
+        if (centers.Count != _centers.Length)
+            return;
+
+        var scale = CurrentScale;
+        Func<Vector2, Vector2> toScreen = isometric
+            ? point => IsoToScreen(point, scale)
+            : point => ToScreen(point, scale);
+        var radius = isometric ? _diorama!.CellRadius : _flatCellRadius;
+
+        foreach (var area in _areas)
+        {
+            if (area.Cells.Count == 0
+                || !_centerIndexByCellByRegion.TryGetValue(area.Index, out var centerIndexByCell))
+                continue;
+
+            var tile = _tiles[area.Cells[0]];
+            var strokes = _fluid.StrokesForRegion(
+                area.Index, tile, centerIndexByCell, centers, toScreen, radius, scale);
+            foreach (var stroke in strokes)
+                DrawLine(stroke.From, stroke.To, stroke.Color, stroke.Width, true);
+        }
+    }
+
     private void DrawRoverTracks()
     {
         var scale = CurrentScale;
@@ -1179,10 +1238,13 @@ public partial class AreaView : Node2D
 
         var tile = _world.GetRegion(area.Index);
         var biome = _world.Biomes[tile.DominantBiomeCode];
+        var water = biome.IsWater
+            ? $" · {biome.WaterKind.ToString().ToLowerInvariant()} water"
+            : string.Empty;
         var marker = SelectedRoverId is null
             ? "click to centre here · Enter opens region · click a rover first to dispatch"
             : "click to dispatch selected rover";
-        return $"region {area.Index} · {biome.DisplayName} · {tile.HexCount} hexes · {marker}";
+        return $"region {area.Index} · {biome.DisplayName}{water} · {tile.HexCount} hexes · {marker}";
     }
 
     private static string RoverDetail(RoverState rover)
@@ -1190,7 +1252,10 @@ public partial class AreaView : Node2D
         var eta = rover.ArrivalGameHour is { } arrival
             ? $" · ETA hour {arrival:0.#}"
             : string.Empty;
-        return $"{rover.Name} · {rover.Status} · {rover.Health:0.#}% health{eta}";
+        var terrain = RoverCatalogue.TryGet(rover.DefId, out var def) && def is not null
+            ? def.TerrainMode.ToString()
+            : "surface";
+        return $"{rover.Name} · {terrain} · {rover.Status} · {rover.Health:0.#}% health{eta}";
     }
 
     private static Vector2 Project(Vector3 unit, Vector3 east, Vector3 north)

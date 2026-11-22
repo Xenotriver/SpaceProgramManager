@@ -143,6 +143,14 @@ are camelCase. Hex indices are decimal strings; RNG values are numeric `ulong`s.
   at an operational `rover_garage`, and dispatch fills `destination*`,
   `departureGameHour` and `arrivalGameHour`; `Tick` moves the rover on arrival.
   The fine-hex route itself is derived from the save fields and is never persisted.
+  Earth adds no rover fields: `defId: "barge"` selects the waterborne definition
+  from `RoverCatalogue`, and a barge is purchased at an operational `barge_port`
+  instead of a `rover_garage`. Terrain mode and capacity come from static
+  definitions, so old saves stay readable.
+- Earth water rules add no save fields. Water presence/class stays in the
+  authoritative biome byte of `fine.bin`, and `BuildingDef.buildOnWater` is static;
+  `data/earth/fluid.bin` and `fluid.json` are presentation-only and are never read
+  by the campaign store or included in `BakeFingerprint`.
 - An installation's `failure` record is kept after a completed repair with
   `repairCompleteGameHour` set; `status` says whether it is currently broken. A
   later failure replaces the record. M5 C4 uses the existing shard fields only:
@@ -229,10 +237,12 @@ selection is an optional UI field. The M4.5 `color` overlay value is likewise
 additive UI state: when a valid imagery sidecar exists the game defaults to true
 colour for every slot, so saved overlay strings do not gate or migrate imagery.
 
-`data/<body>/color.bin` and `imagery.json` are **not** part of any slot or bake
-contract. They are presentation-only sidecars validated independently of
-`BakeFingerprint`; a missing or invalid sidecar never changes a save and never
-makes a save incompatible.
+`data/<body>/color.bin`, `imagery.json`, and Earth's `fluid.bin` / `fluid.json`
+are **not** part of any slot or bake contract. They are presentation-only
+sidecars validated independently of `BakeFingerprint`; a missing or invalid
+sidecar never changes a save and never makes a save incompatible. In particular,
+the fluid sidecar only supplies river strokes: it cannot allow water placement,
+change movement costs or add state to a slot.
 
 ## `regions/<h3>.json`
 
@@ -342,6 +352,9 @@ refusal of unknown versions.
 7. **`slot.json` is never authoritative.** It only mirrors campaign metadata and
    view state; deleting it must not lose an installation, a credit, a contract, a
    rover or a visited region.
+8. **Water state is never sidecar state.** Earth installations and barges are
+   validated from the bake's biome byte plus static `BuildingDef`/`RoverDefinition`
+   data; adding, removing or corrupting `fluid.bin` cannot change a valid save.
 
 ## Atomic writes and backups
 

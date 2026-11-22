@@ -20,6 +20,9 @@ class BiomeDef:
     #: Ascending elevation rank used by the movement model.
     elevation_rank: int
     buildable: bool = True
+    #: Authoritative water class written to the manifest so Sim can identify
+    #: water biomes without hardcoding per-body ids.
+    water_kind: str = "none"
 
 
 @dataclass(frozen=True)
@@ -175,7 +178,57 @@ MARS = BodyDef(
     has_crater_source=True,
 )
 
-BODIES: dict[str, BodyDef] = {MOON.key: MOON, MARS.key: MARS}
+# ---------------------------------------------------------------------------
+# Earth
+# ---------------------------------------------------------------------------
+
+#: Earth biome table. Codes are the byte written to each fine hex record.
+#: Water classes are ordinary biomes so placement/scoring can see them without
+#: changing TileFormat v1; per-building water permissions decide who may build.
+EARTH_BIOMES: tuple[BiomeDef, ...] = (
+    BiomeDef("earth.ocean", "Ocean", 0, water_kind="ocean"),
+    BiomeDef("earth.lake", "Lake", 0, water_kind="lake"),
+    BiomeDef("earth.river", "River", 0, water_kind="river"),
+    BiomeDef("earth.shore", "Shore", 1),
+    BiomeDef("earth.plains", "Plains", 2),
+    BiomeDef("earth.hills", "Hills", 3),
+    BiomeDef("earth.mountains", "Mountains", 4),
+    BiomeDef("earth.forest", "Forest", 2),
+    BiomeDef("earth.taiga", "Taiga", 2),
+    BiomeDef("earth.tundra", "Tundra", 1),
+    BiomeDef("earth.pole_north", "North Pole", 1),
+    BiomeDef("earth.pole_south", "South Pole", 1),
+    BiomeDef("earth.volcanic", "Volcanic", 4, buildable=False),
+)
+
+EARTH = BodyDef(
+    key="earth",
+    display_name="Earth",
+    radius_km=6371.0072,
+    fine_resolution=6,
+    region_resolution=3,
+    biomes=EARTH_BIOMES,
+    mare_biome_id=None,
+    lowlands_biome_id="earth.plains",
+    midlands_biome_id="earth.hills",
+    highlands_biome_id="earth.mountains",
+    pole_north_biome_ids=("earth.pole_north",) * 3,
+    pole_south_biome_ids=("earth.pole_south",) * 3,
+    volcanic_biome_id="earth.volcanic",
+    canyon_biome_id=None,
+    pole_latitude_deg=66.5,
+    lowlands_max_m=0.0,
+    midlands_max_m=800.0,
+    source_profile="earth",
+    has_geology_source=True,
+    has_crater_source=False,
+)
+
+BODIES: dict[str, BodyDef] = {
+    MOON.key: MOON,
+    MARS.key: MARS,
+    EARTH.key: EARTH,
+}
 
 
 def get_body(key: str) -> BodyDef:

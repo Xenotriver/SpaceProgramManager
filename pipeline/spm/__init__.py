@@ -12,6 +12,8 @@ The pipeline is split into the stages described in the development plan
     hexify.py     H3 aggregation, dominant-biome + tie-break
     export.py     write region tiles + body manifest
     imagery.py    optional colour.bin sidecar + provenance
+    fluid.py      optional fluid.bin sidecar + provenance
+    earth_real.py real Earth vectors/DEM/colour -> per-hex tiles
 """
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "hexify",
     "export",
     "imagery",
+    "fluid",
+    "earth_real",
 ]

@@ -40,7 +40,8 @@ public static class RoutePlanner
         Func<int, Biome> biomeOf,
         Func<int, CraterKind> craterOf,
         Func<int, int, double> distanceKm,
-        double baseSpeedKmh)
+        double baseSpeedKmh,
+        TerrainMode mode = TerrainMode.Land)
     {
         ArgumentNullException.ThrowIfNull(neighbours);
         ArgumentNullException.ThrowIfNull(biomeOf);
@@ -56,11 +57,15 @@ public static class RoutePlanner
         if ((uint)goal >= (uint)count)
             throw new ArgumentOutOfRangeException(nameof(goal), goal, $"Grid has {count} cells.");
 
+        if (!MovementModel.CanEnter(biomeOf(start), mode)
+            || !MovementModel.CanEnter(biomeOf(goal), mode))
+            return null;
+
         if (start == goal)
             return new RoutePlan(Array.Empty<RouteLeg>(), 0.0, 0.0);
 
-        // An admissible heuristic: nobody moves faster than a downhill run.
-        var bestMultiplier = MovementModel.DownhillSpeedMultiplier;
+        // An admissible heuristic: no edge is faster than this mode's best multiplier.
+        var bestMultiplier = MovementModel.MaxSpeedMultiplier(mode);
 
         var best = new double[count];
         var cameFrom = new int[count];
@@ -78,7 +83,7 @@ public static class RoutePlanner
                 continue;
 
             if (current == goal)
-                return Reconstruct(cameFrom, start, goal, biomeOf, craterOf, distanceKm, baseSpeedKmh);
+                return Reconstruct(cameFrom, start, goal, biomeOf, craterOf, distanceKm, baseSpeedKmh, mode);
 
             closed[current] = true;
             var currentBiome = biomeOf(current);
@@ -88,7 +93,14 @@ public static class RoutePlanner
                 if (closed[next])
                     continue;
 
-                var multiplier = MovementModel.SpeedMultiplier(currentBiome, biomeOf(next), craterOf(next));
+                var nextBiome = biomeOf(next);
+                if (!MovementModel.CanEnter(nextBiome, mode))
+                    continue;
+
+                var multiplier = MovementModel.SpeedMultiplier(currentBiome, nextBiome, craterOf(next), mode);
+                if (multiplier <= 0.0)
+                    continue;
+
                 var hours = MovementModel.TravelTimeHours(distanceKm(current, next), baseSpeedKmh, multiplier);
                 var tentative = best[current] + hours;
 
@@ -114,7 +126,8 @@ public static class RoutePlanner
         Func<int, Biome> biomeOf,
         Func<int, CraterKind> craterOf,
         Func<int, int, double> distanceKm,
-        double baseSpeedKmh)
+        double baseSpeedKmh,
+        TerrainMode mode)
     {
         var path = new List<int>();
         for (var cell = goal; cell >= 0; cell = cameFrom[cell])
@@ -134,7 +147,7 @@ public static class RoutePlanner
         {
             var from = path[i];
             var to = path[i + 1];
-            var multiplier = MovementModel.SpeedMultiplier(biomeOf(from), biomeOf(to), craterOf(to));
+            var multiplier = MovementModel.SpeedMultiplier(biomeOf(from), biomeOf(to), craterOf(to), mode);
             var km = distanceKm(from, to);
             var hours = MovementModel.TravelTimeHours(km, baseSpeedKmh, multiplier);
 

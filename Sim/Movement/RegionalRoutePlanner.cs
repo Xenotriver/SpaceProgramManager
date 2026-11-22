@@ -48,13 +48,14 @@ public sealed class RegionalRoutePlanner
 {
     private readonly BodyWorld _world;
     private readonly double _speedKmh;
+    private readonly TerrainMode _mode;
     private readonly Dictionary<ulong, RegionTile> _tiles = new();
     private readonly Dictionary<ulong, Dictionary<ulong, int>> _ordinals = new();
     private readonly Dictionary<ulong, int[][]> _adjacency = new();
     private readonly Dictionary<(ulong From, ulong To), BorderCrossing> _crossings = new();
     private readonly Dictionary<ulong, H3Index> _centers = new();
 
-    private RegionalRoutePlanner(BodyWorld world, double speedKmh)
+    private RegionalRoutePlanner(BodyWorld world, double speedKmh, TerrainMode mode)
     {
         ArgumentNullException.ThrowIfNull(world);
         if (speedKmh <= 0.0)
@@ -62,6 +63,7 @@ public sealed class RegionalRoutePlanner
 
         _world = world;
         _speedKmh = speedKmh;
+        _mode = mode;
     }
 
     /// <summary>Plans a route, or returns <see langword="null"/> when unreachable.</summary>
@@ -71,8 +73,9 @@ public sealed class RegionalRoutePlanner
         ulong fromHex,
         ulong toRegion,
         ulong toHex,
-        double baseSpeedKmh)
-        => new RegionalRoutePlanner(world, baseSpeedKmh)
+        double baseSpeedKmh,
+        TerrainMode mode = TerrainMode.Land)
+        => new RegionalRoutePlanner(world, baseSpeedKmh, mode)
             .Plan(fromRegion, fromHex, toRegion, toHex);
 
     private RegionalRoutePlan? Plan(ulong fromRegion, ulong fromHex, ulong toRegion, ulong toHex)
@@ -83,6 +86,10 @@ public sealed class RegionalRoutePlanner
 
         if (!TryOrdinal(fromRegion, fromHex, out var fromOrdinal)
             || !TryOrdinal(toRegion, toHex, out var toOrdinal))
+            return null;
+
+        if (!MovementModel.CanEnter(BiomeAt(fromRegion, fromOrdinal), _mode)
+            || !MovementModel.CanEnter(BiomeAt(toRegion, toOrdinal), _mode))
             return null;
 
         var legs = new List<RegionalRouteLeg>();
@@ -171,7 +178,8 @@ public sealed class RegionalRoutePlanner
             ordinal => BiomeAt(region, ordinal),
             ordinal => tile.Crater(ordinal),
             (a, b) => HexGrid.DistanceKm(tile.Cells[a], tile.Cells[b], _world.Manifest.Body.RadiusKm),
-            _speedKmh);
+            _speedKmh,
+            _mode);
     }
 
     private Biome BiomeAt(ulong region, int ordinal)
@@ -229,7 +237,7 @@ public sealed class RegionalRoutePlanner
 
         double Heuristic(ulong region)
             => HexGrid.DistanceKm(Center(region), Center(goal), _world.Manifest.Body.RadiusKm)
-               / (_speedKmh * MovementModel.DownhillSpeedMultiplier);
+               / (_speedKmh * MovementModel.MaxSpeedMultiplier(_mode));
     }
 
     private BorderCrossing? Crossing(ulong fromRegion, ulong toRegion)
@@ -256,7 +264,13 @@ public sealed class RegionalRoutePlanner
 
                 var km = HexGrid.DistanceKm(from.Cells[i], neighbour.Index, radiusKm);
                 var multiplier = MovementModel.SpeedMultiplier(
-                    BiomeAt(fromRegion, i), BiomeAt(toRegion, destination), to.Crater(destination));
+                    BiomeAt(fromRegion, i),
+                    BiomeAt(toRegion, destination),
+                    to.Crater(destination),
+                    _mode);
+                if (multiplier <= 0.0)
+                    continue;
+
                 var hours = MovementModel.TravelTimeHours(km, _speedKmh, multiplier);
 
                 if (best is not null && hours >= best.Value.Hours)

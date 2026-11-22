@@ -7,31 +7,34 @@ System bodies are baked offline into an **H3** hexagonal grid; the runtime rende
 a globe, a multi-region **area view** for situational awareness and rover logistics,
 a per-region hex map, a region-scale isometric colony view, and a close-up per-hex
 **site view** where installations are placed on a local grid. Campaign state is
-engine-free and saved as JSON. Moon and Mars are playable.
+engine-free and saved as JSON. Moon, Mars and Earth are playable; Earth adds
+water placement rules, an offshore launch pad and barge/port logistics.
 
 ## Status at a glance
 
-Snapshot: **2026-11-20**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), **190 C# tests + 5 pipeline tests + 25 headless Godot smokes passing**.
+Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), Earth playable with real pinned geography, **209 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**.
 
 | Area | State |
 |---|---|
 | Moon data pipeline | **Done** — 41,162 regions, 14,117,882 fine hexes, biome + crater + elevation |
 | Mars data pipeline | **Done (M4)** — 41,162 regions, 7 biomes, MOLA elevation, geology and craters |
-| Sim core (engine-free) | **Done** — H3, biomes, movement, routing, tiles, site scoring, per-body building catalogues, sites, campaign, save store, slot catalogue |
+| Earth data pipeline | **Done (D46; D45 fixture remains for CI)** — 41,162 regions, 13 land/water biomes, real Natural Earth coasts/water, ETOPO1 relief and Blue Marble colour; deterministic synthetic fixtures for CI |
+| Sim core (engine-free) | **Done** — H3, biomes, water placement, movement, routing, tiles, site scoring, per-body building catalogues, sites, campaign, save store, slot catalogue |
 | Godot runtime | **Done** — main menu, slots, body selection, system map, globe, region/colony inspectors, site placement, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
-| Rover logistics | **Done (M5 C2)** — garage purchases, cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
+| Rover logistics | **Done (M5 C2, extended for Earth)** — garage/rover and port/barge purchases, terrain-aware cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
 | Missions and events | **Done (M5 C3)** — contract offers, partial-delivery payouts, deadlines, seeded events, `C`/`--missions` screen; D41 |
 | Failures and repairs | **Done (M5 C4)** — static failure causes, severity-scaled repair bills, timed repairs, hazard and event-linked damage, `X`/`--maintenance` screen; D42 |
-| M5 verification | **Done (M5 C5)** — synced docs, 25 CI smokes, clean build/tests/diff; D43 |
+| M5 verification | **Done (M5 C5)** — synced docs, 25 CI smokes, clean build/tests/diff; D43. Earth adds 7 smokes (32 total). |
 | Area-first navigation | **Done** — globe click/`--region` opens area view; region click recentres the area; `Enter` drills into the centred region; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
-| Multi-body | **Done (M4)** — Moon + Mars, body-keyed saves, cross-body refusal, system-map travel |
-| Surface imagery | **Done (M4.5)** — optional real Moon/Mars colour sidecars in globe, region and colony views; biome fallback |
-| CI and performance gate | **Done (M4, extended M4.5/M5)** — synthetic tile + imagery bakes, 25 headless Godot smokes, 20 ms p95 frame budget |
+| Multi-body | **Done (M4, extended for Earth)** — Moon + Mars + Earth, body-keyed saves, cross-body refusal, system-map travel; Earth is the launch default |
+| Surface imagery | **Done (M4.5, extended for Earth/D46)** — real Moon/Mars/Earth colour sidecars in globe, region and colony views; Earth CI uses a synthetic fixture; biome fallback |
+| Water presentation | **Done (Earth)** — presentation-only fluid sidecar with flat water fills and river strokes; biome byte remains authoritative |
+| CI and performance gate | **Done (M4, extended M4.5/M5/Earth)** — synthetic tile + imagery + fluid bakes, 32 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -44,7 +47,7 @@ mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
 | `Sim.Tests/` | xUnit tests for the simulation core. |
 | `Game/` | Godot 4.7.2 project (C#). References `Sim`. |
 | `pipeline/` | Python 3.13 offline data pipeline (H3, rasterio, geopandas). |
-| `data/` | Generated tiles and optional colour sidecars (gitignored). The game uses `data/moon/` and `data/mars/`; CI generates synthetic fixtures. |
+| `data/` | Generated tiles and optional colour/fluid sidecars (gitignored). The game uses `data/moon/`, `data/mars/` and `data/earth/`; CI generates synthetic fixtures. |
 | `docs/` | Architecture, save format, roadmap, development notes, decisions. |
 
 ## Requirements
@@ -69,11 +72,13 @@ godot --path Game
 ```
 
 The game expects `data/<body>/manifest.json` + `data/<body>/fine.bin` for the
-selected body (`moon` by default, or `mars`). Optional `data/<body>/color.bin`
-and `imagery.json` add true-colour surface imagery; if either is missing or
-invalid the game warns and uses biome colours. Data root resolution searches
-upward from the executable and honours the `SPM_DATA` environment variable
-(pointing at the folder that contains `moon/` and `mars/`).
+selected body (`earth` by default when baked, otherwise `moon`; `mars` remains
+selectable). Optional `data/<body>/color.bin` and `imagery.json` add true-colour
+surface imagery; `data/earth/fluid.bin` and `fluid.json` add presentation-only
+river strokes. Missing or invalid sidecars warn and fall back to biome water
+colours. Data root resolution searches upward from the executable and honours
+the `SPM_DATA` environment variable (pointing at the folder that contains
+`moon/`, `mars/` and `earth/`).
 
 ### Controls
 
@@ -91,12 +96,12 @@ mouse for the same actions.
 | Settings | Save root, keybind reference, open save folder |
 | Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), tech, missions, maintenance, fleet, load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
-| `M` | Open/close the schematic Solar System Map (Moon and Mars are ready) |
+| `M` | Open/close the schematic Solar System Map (Moon, Mars and Earth are ready) |
 | `T` | Open/close the tech tree |
 | `C` | Open/close missions (contracts and events) |
 | `X` | Open/close maintenance (failures and repairs) |
 | `A` | Open the area view (the default drill-in from the globe) |
-| `R` | Open the rover fleet / garage screen |
+| `R` | Open the fleet screen (garage/rover and port/barge) |
 
 **Globe**
 
@@ -111,7 +116,7 @@ mouse for the same actions.
 | `Home` | Focus the active region |
 | `Space` | Pause / resume time (resumes at 1×) |
 | `F5` | Save now |
-| F12 | Screenshot to `user://moon_overview.png` |
+| F12 | Screenshot to `user://<body>_overview.png` |
 | Esc | Pause menu |
 
 **Missions (`C`)**
@@ -240,7 +245,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 
 | Flag | Meaning |
 |---|---|
-| `--body=<moon\|mars>` | Select the baked body to load (default `moon`) |
+| `--body=<moon\|mars\|earth>` | Select the baked body to load (default `earth` when available, otherwise `moon`) |
 | `--region=<h3>` | Open the area around a region by H3 index (restores the last active region when omitted) |
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management` |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`) |
@@ -260,7 +265,7 @@ godot --path Game -- --region=589971619905011711 --view=site --hex=0 \
 | `--menu` | Force the main menu (pair with `--shot` to capture it) |
 | `--map` | Open the Solar System Map after startup |
 | `--tech` | Open the tech tree after startup |
-| `--fleet` | Open the rover fleet/garage screen after startup |
+| `--fleet` | Open the fleet/garage/port screen after startup |
 | `--missions` | Open the contracts and events screen after startup |
 | `--maintenance` | Open the failures and repairs screen after startup |
 | `--save=<dir>` | Override the slot **directory** (default `user://saves/<slotId>`) |
@@ -314,15 +319,27 @@ pipeline/.venv/Scripts/python pipeline/bake_moon.py --dem 64 --jobs 4
 # Mars uses the same resolutions with MOLA / USGS geology / Robbins craters
 pipeline/.venv/Scripts/python pipeline/bake_mars.py --dem 16
 
+# Earth uses the same resolutions with real Natural Earth / ETOPO1 / Blue Marble data
+pipeline/.venv/Scripts/python pipeline/bake_earth.py
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=earth --ppd=16
+pipeline/.venv/Scripts/python pipeline/bake_fluid.py --body=earth
+
 # deterministic no-download fixtures (used by CI)
 pipeline/.venv/Scripts/python pipeline/bake_moon.py --synthetic --out _ci/moon
 pipeline/.venv/Scripts/python pipeline/bake_mars.py --synthetic --out _ci/mars
+pipeline/.venv/Scripts/python pipeline/bake_earth.py --synthetic --out _ci/earth
 pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon --synthetic --out _ci/moon
 pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars --synthetic --out _ci/mars
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=earth --synthetic --out _ci/earth
+pipeline/.venv/Scripts/python pipeline/bake_fluid.py --body=earth --synthetic --out _ci/earth
 
 # optional real colour sidecars after the tile bake exists
 pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=moon
 pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=mars
+
+# deterministic Earth CI fixtures (no downloads)
+pipeline/.venv/Scripts/python pipeline/bake_imagery.py --body=earth --synthetic --out _ci/earth
+pipeline/.venv/Scripts/python pipeline/bake_fluid.py --body=earth --synthetic --out _ci/earth
 
 # optional equirectangular previews
 pipeline/.venv/Scripts/python pipeline/preview_moon.py
@@ -332,8 +349,11 @@ Sources: LOLA LDEM, USGS Unified Geologic Map of the Moon 2020 and Robbins (2019
 lunar craters; MOLA MEGDR 16 ppd, USGS Mars 15M Geologic Map and Robbins & Hynek
 (2012) Mars craters. Colour sidecars use NASA SVS CGI Moon Kit LROC WAC and the
 USGS Viking MDIM 2.1 colorized Mars mosaic; both are public-domain/non-copyright
-US government imagery with attribution recorded in `imagery.json`. Sidecars are
-presentation-only and never change `manifest.json`, `fine.bin` or a save. See
+US government imagery with attribution recorded in `imagery.json`. Earth bakes
+real coastlines and water from Natural Earth 1:10m vectors, relief from NOAA
+ETOPO1 and colour from NASA Blue Marble Next Generation, all pinned by SHA-256;
+`--synthetic` still produces the D45 CI fixture. Sidecars are presentation-only
+and never change `manifest.json`, `fine.bin` or a save. See
 [`docs/development.md`](docs/development.md).
 
 ## Surface imagery
@@ -353,6 +373,28 @@ A missing, short, wrong-body, wrong-resolution or corrupt sidecar prints a warni
 and falls back to biome colours without blocking the load. The globe uses one mean
 colour per region; region and colony views use per-hex colours. The local site grid
 and all placement rules are unchanged.
+
+## Fluid overlay
+
+`bake_fluid.py` writes two more optional files beside an existing tile bake:
+
+```
+data/earth/
+├─ manifest.json   # unchanged by the fluid bake
+├─ fine.bin        # unchanged by the fluid bake
+├─ fluid.bin       # 1 byte per fine hex, in fine.bin child order
+└─ fluid.json      # provenance, resolutions, hex count and fluid SHA-256
+```
+
+The low three bits encode flow direction (`1..6` = H3 direction `K..IJ`, `7` =
+outlet, `0` = none); the high five bits encode width class. Water presence and
+class stay in the biome byte of `fine.bin`, so the sidecar never affects placement,
+routing or saves. Region, area and colony views draw flat water fills and river
+strokes; the globe uses region-mean colours and the site grid is unchanged.
+Missing Earth, wrong-body, wrong-resolution or corrupt sidecars warn and fall back
+to biome colours; other bodies ignore the optional sidecar silently. Water
+placement is per building (`buildOnWater=0` by default);
+only Earth's offshore pad and barge port require water.
 
 ## Design notes
 

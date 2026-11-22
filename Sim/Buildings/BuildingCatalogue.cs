@@ -23,6 +23,7 @@ public static class BuildingCatalogue
         {
             "moon" => MoonBuildings.All,
             "mars" => MarsDefinitions,
+            "earth" => EarthBuildings.All,
             _ => throw new ArgumentException(
                 $"No building catalogue for body '{bodyKey}'.", nameof(bodyKey)),
         };

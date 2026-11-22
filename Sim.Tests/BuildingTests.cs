@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using H3;
 using H3.Algorithms;
+using Sim.Biomes;
 using Sim.Buildings;
+using Sim.Campaign;
 using Sim.Hex;
 using Sim.Movement;
 using Sim.Site;
@@ -42,6 +44,12 @@ public class BuildingTests
     {
         ("test.buildable", "Buildable", 1, true),
         ("test.nonbuildable", "NonBuildable", 2, false),
+    };
+
+    private static readonly (string Id, string DisplayName, int ElevationRank, bool Buildable)[] WaterFixtureBiomes =
+    {
+        ("test.land", "Land", 2, true),
+        ("test.ocean", "Ocean", 0, true),
     };
 
     // Same normal region used by WorldLoaderTests; 343 fine hexes.
@@ -103,6 +111,143 @@ public class BuildingTests
 
         Assert.False(result.Success);
         Assert.Contains("not buildable", result.Error);
+    }
+
+    [Fact]
+    public void Placement_RejectsWaterByDefault()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var result = MakeDef("land-only").CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+
+        Assert.False(result.Success);
+        Assert.Contains("water placement", result.Error);
+    }
+
+    [Fact]
+    public void Placement_AllowsWaterWhenBuildingOptsIn()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var result = MakeDef("amphibious", buildOnWater: WaterPlacement.Allowed)
+            .CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+
+        Assert.True(result.Success, result.Error);
+    }
+
+    [Fact]
+    public void Placement_RequiredWater_RejectsLandAndAllowsOcean()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        var def = MakeDef("port", buildOnWater: WaterPlacement.Required);
+
+        using (var world = fixture.Open())
+        {
+            var tile = world.GetRegion((ulong)fixture.Region);
+            var onLand = def.CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+            Assert.False(onLand.Success);
+            Assert.Contains("water placement", onLand.Error);
+        }
+
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var waterWorld = fixture.Open();
+        var waterTile = waterWorld.GetRegion((ulong)fixture.Region);
+        var onWater = def.CanPlaceAt(waterTile, fixture.CenterOrdinal, waterWorld, Config);
+        Assert.True(onWater.Success, onWater.Error);
+    }
+
+    [Fact]
+    public void Placement_WaterRuleAppliesToEveryFootprintHex()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.NeighborOrdinals[0]] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var forbidden = MakeDef("land-only", footprintRadius: 1)
+            .CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+        var required = MakeDef("port", footprintRadius: 1, buildOnWater: WaterPlacement.Required)
+            .CanPlaceAt(tile, fixture.CenterOrdinal, world, Config);
+
+        Assert.False(forbidden.Success);
+        Assert.False(required.Success);
+    }
+
+    [Fact]
+    public void CampaignPreview_EnforcesWaterPlacement()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        Array.Fill(fixture.Biomes, (byte)1);
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+        var campaign = new CampaignState(world, new BuildingRegistry(Array.Empty<BuildingDef>()));
+
+        var landOnly = campaign.Preview(
+            MakeDef("land-only"), tile, fixture.CenterOrdinal, LocalGrid.Center);
+        var waterReady = campaign.Preview(
+            MakeDef("offshore", buildOnWater: WaterPlacement.Required),
+            tile,
+            fixture.CenterOrdinal,
+            LocalGrid.Center);
+
+        Assert.False(landOnly.Success);
+        Assert.Contains("water placement", landOnly.Error);
+        Assert.True(waterReady.Success, waterReady.Error);
+    }
+
+    [Fact]
+    public void Scoring_MarksWaterUnbuildableUnlessBuildingOptsIn()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        fixture.Biomes[fixture.CenterOrdinal] = 1;
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var forbidden = tile.ScoreSite(fixture.CenterOrdinal, world, Config);
+        var allowed = tile.ScoreSite(
+            fixture.CenterOrdinal, world, Config, WaterPlacement.Allowed);
+
+        Assert.False(forbidden.Factors.Buildable);
+        Assert.True(allowed.Factors.Buildable);
+    }
+
+    [Fact]
+    public void FindBestSites_UsesWaterPlacementPolicy()
+    {
+        using var fixture = new BuildingFixture(
+            "water-test", WaterFixtureBiomes, waterKinds: new[] { WaterKind.None, WaterKind.Ocean });
+        Array.Fill(fixture.Biomes, (byte)1);
+        fixture.Save();
+        using var world = fixture.Open();
+        var tile = world.GetRegion((ulong)fixture.Region);
+
+        var onLand = tile.FindBestSites(world, Config, count: tile.HexCount);
+        var onWater = tile.FindBestSites(
+            world, Config, count: tile.HexCount, waterPlacement: WaterPlacement.Required);
+        var landCentres = onLand.Select(score => (ulong)score.Center).ToHashSet();
+        var waterCentres = onWater.Select(score => (ulong)score.Center).ToHashSet();
+        var waterHex = (ulong)tile.Cells[fixture.CenterOrdinal];
+
+        Assert.DoesNotContain(waterHex, landCentres);
+        Assert.Contains(waterHex, waterCentres);
     }
 
     [Fact]
@@ -359,6 +504,53 @@ public class BuildingTests
     }
 
     [Fact]
+    public void BuildingCatalogue_ForEarth_AddsWaterLogistics()
+    {
+        var defs = BuildingCatalogue.For("EARTH");
+        var byId = defs.ToDictionary(def => def.Id, StringComparer.Ordinal);
+
+        Assert.Equal(MoonBuildings.All.Count + 2, defs.Count);
+        Assert.All(MoonBuildings.All, def => Assert.True(byId.ContainsKey(def.Id)));
+        Assert.Equal(WaterPlacement.Required, byId["offshore_pad"].BuildOnWater);
+        Assert.Equal(WaterPlacement.Required, byId["barge_port"].BuildOnWater);
+        Assert.Equal(4.0, byId["barge_port"].StorageCapacity["barge_slots"]);
+        Assert.Equal(
+            new[]
+            {
+                "earth.plains", "earth.forest", "earth.taiga", "earth.shore",
+                "earth.hills", "earth.mountains", "earth.tundra",
+            },
+            byId["solar_array_small"].AllowedBiomeIds);
+
+        foreach (var def in defs)
+        {
+            var biomeIds = def.AllowedBiomeIds.Concat(def.ForbiddenBiomeIds).ToList();
+            Assert.DoesNotContain(biomeIds, biomeId => biomeId.StartsWith("luna.", StringComparison.Ordinal));
+            Assert.All(biomeIds, biomeId => Assert.StartsWith("earth.", biomeId));
+
+            if (def is not { Id: "offshore_pad" or "barge_port" })
+                Assert.Equal(WaterPlacement.Forbidden, def.BuildOnWater);
+        }
+    }
+
+    [Fact]
+    public void EarthBuildings_AllowedBiomeIdsExistInRealBake()
+    {
+        var root = TryFindRealDataRoot("earth");
+        if (root is null)
+            return;
+
+        using var world = BodyWorld.Open("earth", root);
+        var known = world.Biomes.All.Select(biome => biome.Id).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var def in BuildingCatalogue.For("earth"))
+        {
+            foreach (var biomeId in def.AllowedBiomeIds.Concat(def.ForbiddenBiomeIds))
+                Assert.Contains(biomeId, known);
+        }
+    }
+
+    [Fact]
     public void BuildingCatalogue_UnknownBody_Throws()
     {
         var error = Assert.Throws<ArgumentException>(() => BuildingCatalogue.For("venus"));
@@ -421,7 +613,8 @@ public class BuildingTests
         double maxSlopeM = 500.0,
         bool allowSingleCellCrater = true,
         bool allowMultiCellCrater = false,
-        bool requireCraterFree = false)
+        bool requireCraterFree = false,
+        WaterPlacement buildOnWater = WaterPlacement.Forbidden)
         => new()
         {
             Id = id,
@@ -434,6 +627,7 @@ public class BuildingTests
             AllowSingleCellCrater = allowSingleCellCrater,
             AllowMultiCellCrater = allowMultiCellCrater,
             RequireCraterFree = requireCraterFree,
+            BuildOnWater = buildOnWater,
             Cost = new Dictionary<string, double> { { "credits", 1.0 } },
             ThroughputPerHour = new Dictionary<string, double>(),
         };
@@ -479,10 +673,12 @@ public class BuildingTests
         public BuildingFixture(
             string bodyKey = "test",
             IReadOnlyList<(string Id, string DisplayName, int ElevationRank, bool Buildable)>? biomes = null,
-            double radiusKm = 1737.4)
+            double radiusKm = 1737.4,
+            IReadOnlyList<WaterKind>? waterKinds = null)
         {
             BodyKey = bodyKey;
             BiomeDefinitions = biomes ?? TestFixtureBiomes;
+            WaterKinds = waterKinds ?? Enumerable.Repeat(WaterKind.None, BiomeDefinitions.Count).ToArray();
             RadiusKm = radiusKm;
 
             Region = NormalRegion;
@@ -504,6 +700,8 @@ public class BuildingTests
         public double RadiusKm { get; }
 
         public IReadOnlyList<(string Id, string DisplayName, int ElevationRank, bool Buildable)> BiomeDefinitions { get; }
+
+        public IReadOnlyList<WaterKind> WaterKinds { get; }
 
         public string Root { get; }
 
@@ -567,6 +765,7 @@ public class BuildingTests
                         displayName = biome.DisplayName,
                         elevationRank = biome.ElevationRank,
                         buildable = biome.Buildable,
+                        waterKind = WaterKinds[code].ToString().ToLowerInvariant(),
                     })
                     .ToArray(),
                 sources = new Dictionary<string, string>(),
