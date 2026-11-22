@@ -1114,6 +1114,13 @@ Verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless smokes
 (worst p95 7.14 ms); a non-headless Earth capture has zero background pixels
 inside the globe disc, so no seams remain.
 
+**Follow-up.** The first D48 build passed `BuildCellMesh()` straight to the
+`MeshInstance2D` without assigning `_cellMesh`, so `ApplyCellColors()` returned
+early and the globe stayed in biome colours despite a correct imagery state.
+Mesh construction now goes through `ApplyCellColors()` itself, which logs the
+colour source it baked; CI greps that line in the globe smokes so a silent
+fallback to biome colours fails the build.
+
 ---
 
 ## Open decisions

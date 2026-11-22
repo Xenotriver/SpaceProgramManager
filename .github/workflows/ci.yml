@@ -97,7 +97,8 @@ jobs:
             mkdir -p "$slot"
             "$GODOT_BIN" --headless --path Game -- \
               "--body=$body" "--save=$slot" --nosave --fresh \
-              "$@" --frame-budget=20 --frames=30
+              "$@" --frame-budget=20 --frames=30 2>&1 \
+              | tee "$RUNNER_TEMP/spm-ci-$label.log"
           }
 
           # True-colour coverage on every M4.5 view for both bodies.
@@ -108,12 +109,21 @@ jobs:
           run_smoke mars mars-region-color --view=region --region=589971619905011711 --overlay=color
           run_smoke mars mars-management-color --view=management --region=589971619905011711 --overlay=color
 
+          # The globe must actually rebuild with imagery colours, not just
+          # report an imagery overlay while showing the initial biome mesh.
+          grep -q 'globe cell colours: imagery' "$RUNNER_TEMP/spm-ci-moon-globe-color.log"
+          grep -q 'globe cell colours: imagery' "$RUNNER_TEMP/spm-ci-mars-globe-color.log"
+
           # Analytical fallback and unchanged site/grid coverage.
           run_smoke moon moon-globe-biome --view=globe --overlay=biome
           run_smoke moon moon-region-biome --view=region --region=589971619905011711 --overlay=biome
           run_smoke moon moon-site --view=site --region=589971619905011711 --hex=0
           run_smoke mars mars-globe-biome --view=globe --overlay=biome
           run_smoke mars mars-region-biome --view=region --region=589971619905011711 --overlay=biome
+
+          # Toggling back must rebuild the mesh with biome colours.
+          grep -q 'globe cell colours: biome' "$RUNNER_TEMP/spm-ci-moon-globe-biome.log"
+          grep -q 'globe cell colours: biome' "$RUNNER_TEMP/spm-ci-mars-globe-biome.log"
 
           # M5 C1 tech screen.
           run_smoke moon moon-tech --tech
@@ -143,6 +153,7 @@ jobs:
 
           # Earth water, fluid overlay and barge/port coverage.
           run_smoke earth earth-globe-color --view=globe --overlay=color
+          grep -q 'globe cell colours: imagery' "$RUNNER_TEMP/spm-ci-earth-globe-color.log"
           run_smoke earth earth-region-color --view=region --region=590241962326491135 --overlay=color
           run_smoke earth earth-region-biome --view=region --region=590231860563410943 --overlay=biome
           run_smoke earth earth-management --view=management --region=590500691156402175 --overlay=color

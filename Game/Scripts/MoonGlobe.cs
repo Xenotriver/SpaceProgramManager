@@ -529,25 +529,30 @@ public partial class MoonGlobe : Node2D
         {
             // Behind the parent's outlines, markers and limb arc.
             ZIndex = -1,
-            Mesh = BuildCellMesh(),
             Material = _material,
             Texture = WhiteTexture(),
         };
 
         AddChild(_cells);
+
+        // Build through the same path used by imagery/biome toggles, so the
+        // cached mesh field is always populated before the first recolour.
+        ApplyCellColors();
         UpdateShader();
     }
 
     private void ApplyCellColors()
     {
-        if (_cells is null || _cellMesh is null)
+        if (_cells is null)
             return;
 
         var previous = _cellMesh;
+        var source = UsesImagery ? "imagery" : "biome";
         _cellMesh = BuildCellMesh();
         _cells.Mesh = _cellMesh;
         _cells.QueueRedraw();
         previous?.Dispose();
+        GD.Print($"globe cell colours: {source} · {_vertexColors.Length} vertices");
     }
 
     private ArrayMesh BuildCellMesh()
