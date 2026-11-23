@@ -1203,6 +1203,43 @@ measurement. Details in [`lod-experiment.md`](lod-experiment.md).
 
 ---
 
+## D51 — Coalesced LOD seam underlay
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main`.
+
+**Decision.** Add one opaque `ArrayMesh` containing every wanted Res 3 parent
+boundary, built from the same real H3 boundary vectors as D48 and projected
+through the one LOD gnomonic basis. It sits below all tier nodes and is rebuilt
+only when the wanted parent set changes.
+
+**Why.** LOD parents already share projected H3 vertices, but each parent/tier is
+a separate `MeshInstance2D`, so independent edge rasterisation and mixed-tier
+T-junctions can leave sub-pixel cracks that show the dark canvas. The underlay
+turns those cracks into parent colour instead of adding blur, MSAA, triangle
+expansion or a `SeamFudge`. It is body-agnostic because every bake carries H3
+region boundaries, and needs no pipeline or per-body change. The D48 globe shader
+is not reused: the LOD view does not rotate in canvas space, so the existing
+`Node2D` transform already moves the baked projection.
+
+**Evidence.** Underlay sizes were `91 / 37 / 19` parents at zoom 12 / 20 / 60.
+In the sampled world region, background pixels fell from `328,890` to `324,183`
+at zoom 12, from `280,564` to `275,053` in the held Res 5→6 fade, and from `770`
+to `0` both at zoom 60 and in the held Res 6→7 fade — the mixed-tier boundary
+case the user reported. Final stress: `avg 8.12 ms · p95 14.99 ms · limit 20 ms ·
+PASS`, max tile load 21 ms, peak queue 15, working set 279–320 MB with no growth
+across 2,041 loads / 1,344 evictions. Full verification: clean build, 212/212 C#,
+22/22 pipeline, 32/32 headless smokes (worst p95 7.14 ms).
+
+**Still revise.** This removes visible background through LOD seams but does not
+add geography to Res 4–7, fix the fixed gnomonic anchor, measure VRAM or isolate
+the probe from the views behind it. If a coloured hairline remains where two
+same-tier parents meet, the next step is coalescing settled parents into one mesh
+per tier while leaving only fading parents on individual nodes. No port without a
+separate decision.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1218,5 +1255,5 @@ mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
 and the organic per-hex Earth surface by D45. Globe handedness and coastal water
 sites are settled by D47; the seam-free boundary mesh by D48. The seamless H3
-LOD experiment remains on REVISE under D49 and D50 until fidelity, reprojection,
+LOD experiment remains on REVISE under D49–D51 until fidelity, reprojection,
 VRAM and isolated timing gaps are closed.

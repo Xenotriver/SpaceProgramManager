@@ -1,7 +1,7 @@
 # Seamless H3 LOD experiment
 
-**Status:** stages A–C plus the D50 five-tier refinement are implemented,
-measured, not ported to `main`.
+**Status:** stages A–C, the D50 five-tier refinement and the D51 seam underlay
+are implemented, measured, not ported to `main`.
 **Branch:** `experiment/seamless-h3-lod` in the `seamless-h3-lod` worktree.
 **Brief:** `~/.opencode/plan/experiment_seamless_h3_lod.md`.
 
@@ -42,10 +42,19 @@ tier. Fine-tier fill variation is flattened from ±14% to ±5% around the parent
 biome colour. Tier builds are queued and drained against an 8 ms per-frame
 budget, with a 96-parent LRU so a short pan-back is a cache hit.
 
+A single coalesced Res 3 underlay mesh fills the active parent window. It is
+built from the same real H3 boundary vectors the globe uses in D48, projected
+through the same gnomonic basis, and sits below every tier node. Adjacent tier
+meshes are still separate `MeshInstance2D` nodes, so independent edge
+rasterisation and mixed-tier T-junctions can leave sub-pixel cracks; the underlay
+makes those cracks show parent colour instead of the dark canvas. No blur, MSAA,
+triangle expansion or per-body rule is involved.
+
 All tiers share one fixed gnomonic projection basis. A boundary shared by two
 parents consists of the same H3 vertices on both sides, so it projects to the
 same screen polyline even when the parents are at different tiers. That is the
-seam fix for this experiment — no blur, MSAA or per-body special case.
+geometric seam fix for this experiment; the underlay covers the raster-level
+remainder.
 
 The probe makes no claim about simulation fidelity:
 
@@ -121,15 +130,30 @@ crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan.
   between a held 50% fade and its settled tier (zoom 12: `133.7` vs `133.3`;
   zoom 60: `70.4` vs `70.1`), confirming the brightness dip is gone.
 
+### D51 — coalesced Res 3 seam underlay
+
+- Underlay meshes contain `91 / 37 / 19` parents (`1,638 / 666 / 342` vertices)
+  at zoom 12 / 20 / 60, rebuilt only when the wanted parent set changes.
+- Background pixels inside the sampled world region (x 350–1550, y 80–860)
+  before → after: zoom 12 `328,890 → 324,183`, held Res 5→6 fade
+  `280,564 → 275,053`, zoom 60 `770 → 0`, held Res 6→7 fade `770 → 0`.
+  The zoom-60 result is the mixed-tier parent boundary case that previously
+  showed the dark canvas through the seam.
+- Final 1,200-frame stress: `avg 8.12 ms · p95 14.99 ms · limit 20.00 ms · PASS`,
+  max tile load `21 ms`, peak queue `15`, `2,041` loads / `1,344` evictions,
+  working set `279–320 MB` with no upward trend.
+- Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless
+  smokes (worst p95 7.14 ms).
+
 VRAM was not measured directly; GPU memory needs an external tool. The 8 GB RAM
 ceiling is met by the working-set figure, but that excludes GPU allocations.
 
-## Stage C / D50 decision
+## Stage C / D50 / D51 decision
 
-**REVISE, do not port** (D49 and D50 in [`decisions.md`](decisions.md)). The
-presentation pop addressed by the user's visual feedback is now mitigated, and
-the crossfade, mixed-tier seams, load latency and frame gates all pass. Res 4–7
-detail is still visual-only, the anchor is fixed, VRAM is unmeasured and the
-timings include the normal views behind the probe. A further iteration needs real
-detail samples, reprojection, VRAM instrumentation and isolated frame measurement
-before any port.
+**REVISE, do not port** (D49–D51 in [`decisions.md`](decisions.md)). The
+presentation pop and the remaining background-through-seam problem are now
+mitigated, and the crossfade, mixed-tier seams, load latency and frame gates all
+pass. Res 4–7 detail is still visual-only, the anchor is fixed, VRAM is unmeasured
+and the timings include the normal views behind the probe. A further iteration
+needs real detail samples, reprojection, VRAM instrumentation and isolated frame
+measurement before any port.

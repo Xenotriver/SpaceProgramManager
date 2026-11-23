@@ -23,6 +23,8 @@ using Sim.World;
 /// which avoids the mid-crossfade brightness dip of a two-way cross-dissolve.
 /// Every tier is projected through one fixed gnomonic basis, so a boundary
 /// shared by two parents maps to the same screen polyline regardless of tier.
+/// A single coalesced Res 3 underlay mesh fills the active parent window, so
+/// raster cracks between independent tier meshes never expose the background.
 ///
 /// Nothing here is authoritative simulation state: no Sim, save, manifest or
 /// fingerprint changes are involved.
@@ -80,6 +82,10 @@ public partial class LodProbe : Node2D
     private readonly Dictionary<H3Index, ParentTile> _tiles = new();
     private readonly Queue<TierBuild> _buildQueue = new();
     private readonly HashSet<(H3Index, int)> _queued = new();
+    private readonly List<ulong> _underlayIds = new();
+    private MeshInstance2D? _underlayNode;
+    private ArrayMesh? _underlayMesh;
+    private int _underlayBuilds;
     private ulong _clock;
     private H3Index _focus;
     private int _focusTier;
@@ -371,6 +377,7 @@ public partial class LodProbe : Node2D
             Evict(victim);
         }
 
+        RebuildUnderlay();
         if (immediate)
             ProcessBuildQueue(unlimited: true);
         TrackMemory();
@@ -529,6 +536,70 @@ public partial class LodProbe : Node2D
             GD.Print($"lod evict: parent={tile.Index} (#{_evictions}) tiles={_tiles.Count}");
     }
 
+    // D48-style seam cover: one mesh containing every wanted Res 3 parent,
+    // built from the same H3 boundary vectors as the tier meshes. Independent
+    // MeshInstance2D nodes still rasterise their edges separately, so without
+    // this underlay a sub-pixel crack can show the dark canvas between parents.
+    private void RebuildUnderlay()
+    {
+        var parents = _tiles.Values.Where(tile => tile.Wanted).ToArray();
+        var ids = parents.Select(tile => (ulong)tile.Index).OrderBy(id => id).ToList();
+        if (ids.SequenceEqual(_underlayIds))
+            return;
+
+        _underlayIds.Clear();
+        _underlayIds.AddRange(ids);
+
+        var vertices = new List<Vector3>(parents.Length * 18);
+        var colors = new List<Color>(parents.Length * 18);
+        foreach (var tile in parents)
+        {
+            var boundary = tile.Index.GetCellBoundaryVertices().ToList();
+            var sum = Vector3.Zero;
+            foreach (var vertex in boundary)
+                sum += ToUnitVector(vertex);
+
+            var origin = Project(sum.Normalized());
+            for (var v = 0; v < boundary.Count; v++)
+            {
+                WriteVertex(origin, tile.BaseColor, vertices, colors);
+                WriteVertex(Project(ToUnitVector(boundary[v])), tile.BaseColor, vertices, colors);
+                WriteVertex(
+                    Project(ToUnitVector(boundary[(v + 1) % boundary.Count])),
+                    tile.BaseColor,
+                    vertices,
+                    colors);
+            }
+        }
+
+        var arrays = new Godot.Collections.Array();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = vertices.ToArray();
+        arrays[(int)Mesh.ArrayType.Color] = colors.ToArray();
+
+        var mesh = new ArrayMesh();
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+
+        if (_underlayNode is null)
+        {
+            _underlayNode = new MeshInstance2D
+            {
+                // Below every tier node (10 + tier).
+                ZIndex = 9,
+                Texture = _white,
+            };
+            AddChild(_underlayNode);
+        }
+
+        _underlayNode.Mesh = mesh;
+        var previous = _underlayMesh;
+        _underlayMesh = mesh;
+        previous?.Dispose();
+        _underlayBuilds++;
+        if (_underlayBuilds == 1)
+            GD.Print($"lod underlay: enabled · {parents.Length} parents · {vertices.Count} vertices");
+    }
+
     private ArrayMesh BuildMesh(H3Index[] cells, int tier, Color baseColor)
     {
         var vertices = new List<Vector3>(cells.Length * 18);
@@ -662,6 +733,12 @@ public partial class LodProbe : Node2D
         var radius = Mathf.Min(size.X, size.Y) * 0.42f;
         var scale = new Vector2(radius * _zoom, -radius * _zoom);
         var origin = size * 0.5f + _pan;
+
+        if (_underlayNode is not null)
+        {
+            _underlayNode.Position = origin;
+            _underlayNode.Scale = scale;
+        }
 
         foreach (var tile in _tiles.Values)
         {
