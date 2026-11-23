@@ -1199,7 +1199,8 @@ it passes the 20 ms stretch gate but leaves less headroom on slower hardware.
 
 **Next.** Port only after a separate decision that adds real fine detail samples,
 reprojection or a globe camera, VRAM instrumentation and no-baseline frame
-measurement. Details in [`lod-experiment.md`](lod-experiment.md).
+measurement. Details in [`lod-experiment.md`](lod-experiment.md). D52 below
+authorises only the opt-in presentation layer.
 
 ---
 
@@ -1235,8 +1236,46 @@ across 2,041 loads / 1,344 evictions. Full verification: clean build, 212/212 C#
 add geography to Res 4–7, fix the fixed gnomonic anchor, measure VRAM or isolate
 the probe from the views behind it. If a coloured hairline remains where two
 same-tier parents meet, the next step is coalescing settled parents into one mesh
-per tier while leaving only fading parents on individual nodes. No port without a
-separate decision.
+per tier while leaving only fading parents on individual nodes. D52 supplies the
+separate, narrowly scoped port decision.
+
+---
+
+## D52 — Opt-in visual LOD: port the presentation only
+
+**Status.** Authorised for `main` as a default-off Settings feature. No save
+schema, bake manifest, bake fingerprint, pipeline, `Sim` or per-body change;
+`slot.json` never stores this mode.
+
+**Decision.** Add Settings → Visual LOD preview, persisted as `enableVisualLod`
+in `settings.json` outside campaign slots. ON auto-enters the LOD view after a
+campaign starts; `--lod` stays a non-persistent automation override. LOD is a real
+view: globe, area, region, management and site views are hidden while it is
+active, `Esc` or the Settings toggle exits and restores the prior ordinary view.
+`CaptureView()` maps LOD back to that prior view, so a save never records
+`"lod"`. The gnomonic basis follows the focus after a large pan (about 1.2 rad)
+with a queued rebuild. Fine Res 4–7 tiers remain deterministic decorative
+density derived from Res 3 biome colours: **they are not geographic samples and
+must not be represented as sampled terrain, sites or buildings**. The existing
+Area view remains the pseudo-heightmesh "3D" presentation; there are no
+resolution buttons and tier selection stays automatic from zoom.
+
+**Why.** D49–D51 required real detail, reprojection, VRAM instrumentation and
+isolated timing before a port. Reprojection and isolated timing are now closed;
+the remaining fidelity and VRAM gaps do not justify hiding the accepted visual
+presentation behind a command-line flag. A remembered, default-off toggle keeps
+normal play identical while making the experiment reviewable and testable in
+`main`. Real fine-tier geography would require a separate bake/fingerprint/save
+migration decision and is explicitly out of scope.
+
+**Evidence.** Build clean. Settings-enabled Moon run without `--lod` entered LOD
+from the current globe zoom (`1.19`) at p95 `6.90 ms`. Isolated Earth stress:
+`avg 8.48 ms · p95 16.67 ms · limit 20 ms · PASS`, max tile load `24 ms`, peak
+queue `38`, `2,258` loads / `1,549` evictions, `200` focus changes, working set
+`273–313 MB` with no upward trend; no rebase in that pattern. LOD frame gates:
+Moon `6.94 ms`, Mars `6.94 ms`, Earth `6.90 ms`, all PASS. D52 screenshots keep
+zoom-60 background pixels at `0`. Full verification: 212/212 C#, 22/22 pipeline,
+32/32 headless smokes (worst p95 7.14 ms), `git diff --check` clean.
 
 ---
 
@@ -1254,6 +1293,7 @@ by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
 mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
 and the organic per-hex Earth surface by D45. Globe handedness and coastal water
-sites are settled by D47; the seam-free boundary mesh by D48. The seamless H3
-LOD experiment remains on REVISE under D49–D51 until fidelity, reprojection,
-VRAM and isolated timing gaps are closed.
+sites are settled by D47; the seam-free boundary mesh by D48. The LOD fidelity
+verdict remains REVISE under D49–D51, but D52 authorises the opt-in,
+default-off presentation port in `main` after closing the reprojection and
+isolated-timing gaps.

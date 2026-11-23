@@ -1,14 +1,19 @@
 # Seamless H3 LOD experiment
 
-**Status:** stages A–C, the D50 five-tier refinement and the D51 seam underlay
-are implemented, measured, not ported to `main`.
-**Branch:** `experiment/seamless-h3-lod` in the `seamless-h3-lod` worktree.
+**Status:** stages A–C, the D50 five-tier refinement, the D51 seam underlay and
+the D52 opt-in setting are implemented and measured. D52 ports the presentation
+layer to `main` behind Settings → Visual LOD preview; the finer tiers remain
+decorative-only.
+**Branch:** `experiment/seamless-h3-lod` in the `seamless-h3-lod` worktree;
+D52 is the narrow authorisation to port the default-off presentation to `main`.
 **Brief:** `~/.opencode/plan/experiment_seamless_h3_lod.md`.
 
 ## What exists
 
-`Game/Scripts/LodProbe.cs` is an opaque experimental overlay enabled by `--lod`.
-It derives five tiers with the same H3 library the bake uses:
+`Game/Scripts/LodProbe.cs` is an opt-in visual LOD view. Players enable it in
+Settings → Visual LOD preview; `--lod` remains an automation override and does
+not change the persisted preference. It derives five tiers with the same H3
+library the bake uses:
 
 | Tier | Resolution | Cells per parent | Core radius | Parents in core / outer ring |
 |---:|---:|---:|---:|---:|
@@ -63,11 +68,13 @@ The probe makes no claim about simulation fidelity:
 - Fine tiers have no biome samples, so their fills are a small deterministic
   brightness variation of the parent's dominant-biome colour. Enough to judge
   geometry, seams and frame cost, not geography.
-- The probe covers the normal views; those views still render behind it. The
-  measurement therefore includes a constant baseline cost, which is acceptable
-  for comparing tiers but is not a lower bound for a production LOD view.
-- The gnomonic anchor is fixed at startup. Panning far from it increases
-  distortion; a production version would need reprojection or a globe camera.
+- While LOD is active it is a real view: the globe, area, region, management and
+  site views are hidden, so input and frame timing are isolated. Turning the
+  setting off restores the ordinary view that was active on entry.
+- All tiers share one gnomonic basis centred on the current focus. If panning or
+  zooming carries the focus more than about 1.2 rad from that anchor, the probe
+  rebases on the focus and queues a fresh window instead of stretching the old
+  basis. Rebase rebuilds are queued, not synchronous.
 - Entering the pseudo-heightmesh "3D" presentation remains the existing Area
   view. There is no resolution button: tier selection is automatic from zoom.
 
@@ -98,7 +105,9 @@ $godot = 'D:\LTC Tools\Godot\Godot_v4.7.2-stable_mono_win64.exe'
 
 Flags: `--lod-zoom=<1..128>` initial zoom, `--lod-sweep=<seconds>` logarithmic
 zoom loop, `--lod-stress=<seconds>` scripted pan loop, `--lod-fade=<0..1>` held
-crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan.
+crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan. With `--lod` and
+no explicit zoom the probe starts at zoom 1 for repeatable automation; the
+settings path carries the current globe or area camera zoom into the view.
 
 ## Measurements (2026-11-23, Earth, region `590241962326491135`)
 
@@ -145,15 +154,32 @@ crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan.
 - Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless
   smokes (worst p95 7.14 ms).
 
+### D52 — opt-in setting, isolated view and focus rebase
+
+- Settings → Visual LOD preview persists `enableVisualLod` in `settings.json`,
+  outside campaign slots and the bake fingerprint. `--lod` stays an automation
+  override. A settings-enabled run without `--lod` started the probe from the
+  current globe zoom (`1.19`) and passed a 60-frame gate at p95 `6.90 ms`.
+- The isolated Earth stress (normal views hidden) logged
+  `avg 8.48 ms · p95 16.67 ms · limit 20.00 ms · PASS`, max tile load `24 ms`,
+  peak queue `38`, `2,258` loads / `1,549` evictions, `200` focus changes and
+  working set `273–313 MB` with no upward trend. No rebase fired inside the
+  stress pattern.
+- LOD frame-gate smokes: Moon p95 `6.94 ms`, Mars p95 `6.94 ms`, Earth p95
+  `6.90 ms`, all PASS.
+- D52 screenshots keep the zero-background result at zoom 60 (`0` pixels in the
+  sampled world region), confirming the seam underlay survived the view change.
+
 VRAM was not measured directly; GPU memory needs an external tool. The 8 GB RAM
 ceiling is met by the working-set figure, but that excludes GPU allocations.
 
-## Stage C / D50 / D51 decision
+## Stage C / D50–D52 decision
 
-**REVISE, do not port** (D49–D51 in [`decisions.md`](decisions.md)). The
-presentation pop and the remaining background-through-seam problem are now
-mitigated, and the crossfade, mixed-tier seams, load latency and frame gates all
-pass. Res 4–7 detail is still visual-only, the anchor is fixed, VRAM is unmeasured
-and the timings include the normal views behind the probe. A further iteration
-needs real detail samples, reprojection, VRAM instrumentation and isolated frame
-measurement before any port.
+**REVISE for fidelity; PORT the presentation layer as an opt-in setting**
+(D49–D52 in [`decisions.md`](decisions.md)). The presentation pop, the
+background-through-seam problem, reprojection and isolated timing are addressed;
+crossfade, mixed-tier seams, load latency and frame gates all pass. Res 4–7
+detail is still visual-only and VRAM remains unmeasured, so D52 explicitly
+overrides the “do not port” verdict for this presentation-only, default-off
+feature. Real Res 4–7 samples would need a separate bake, fingerprint, save and
+migration decision; VRAM instrumentation remains an open measurement task.

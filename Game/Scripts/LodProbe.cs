@@ -10,7 +10,7 @@ using H3.Model;
 using Sim.World;
 
 /// <summary>
-/// Experimental seamless-H3 LOD probe. D50 iteration of the standalone worktree.
+/// Opt-in visual LOD preview for the H3 region window (D49–D52).
 ///
 /// Five tiers (Res 3/4/5/6/7) are selected automatically from camera zoom with
 /// threshold hysteresis. A core of Res 3 parents is drawn at the selected tier;
@@ -112,6 +112,9 @@ public partial class LodProbe : Node2D
     /// <summary>Current focus tier: 0 = Res 3 … 4 = Res 7.</summary>
     public int CurrentTier => _focusTier;
 
+    /// <summary>H3 resolution drawn at the focus.</summary>
+    public int CurrentResolution => TierResolutions[_focusTier];
+
     /// <summary>Current logarithmic camera zoom.</summary>
     public float Zoom => _zoom;
 
@@ -120,6 +123,15 @@ public partial class LodProbe : Node2D
 
     /// <summary>Queued tier builds not yet submitted to the GPU.</summary>
     public int PendingBuilds => _buildQueue.Count;
+
+    /// <summary>Shows or hides the preview and toggles its input/process work.</summary>
+    public void SetActive(bool active)
+    {
+        Visible = active;
+        ProcessMode = active ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
+        SetProcess(active);
+        SetProcessUnhandledInput(active);
+    }
 
     /// <summary>Binds the probe to one region and builds the initial focus neighbourhood.</summary>
     public void Initialize(
@@ -132,6 +144,7 @@ public partial class LodProbe : Node2D
         float panX = 0f,
         float panY = 0f)
     {
+        ClearTiles();
         _world = world;
         _anchor = parentIndex != 0 ? new H3Index(parentIndex) : new H3Index(world.Regions[0].Index);
         _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
@@ -139,7 +152,6 @@ public partial class LodProbe : Node2D
         _stressSeconds = Mathf.Max(0f, stressSeconds);
         _pan = new Vector2(panX, panY);
 
-        SetProcessUnhandledInput(true);
         BuildBasis(_anchor);
         _focus = CellFor(CameraGround());
         _focusTier = TierForZoom(_zoom, -1);
@@ -227,11 +239,11 @@ public partial class LodProbe : Node2D
 
         var focus = _tiles[_focus];
         var resolution = TierResolutions[_focusTier];
-        var text = $"LOD PROBE · focus {_focus} · tier {_focusTier} (Res {resolution}) · " +
+        var text = $"VISUAL LOD · focus {_focus} · Res {resolution} · " +
                    $"{focus.Tiers[_focusTier]?.Cells ?? 0} cells · radius {ParentRadii[_focusTier]} · " +
                    $"{_tiles.Count} parents · queue {_buildQueue.Count} · zoom {_zoom:F1} · " +
                    $"loads {_loads} / evictions {_evictions} / max {_maxLoadMs} ms · " +
-                   "wheel zoom, right-drag pan";
+                   "decorative density · wheel zoom, right-drag pan, Esc exit";
         if (focus.FromTier != focus.CurrentTier && focus.FadeElapsed < CrossfadeSeconds)
             text += $" · crossfade {focus.FromTier}→{focus.CurrentTier}";
 
@@ -325,7 +337,76 @@ public partial class LodProbe : Node2D
         }
 
         _focusTier = tier;
+
+        // Gnomonic projection is only trustworthy near its anchor. Once pans or
+        // zooms carry the focus several parent cells away, re-anchor on the
+        // focus and rebuild the window instead of stretching the old basis.
+        if (ShouldRebase(cell))
+        {
+            Rebase(cell);
+            return;
+        }
+
         RefreshTiles();
+    }
+
+    private bool ShouldRebase(H3Index cell)
+    {
+        var anchorUnit = ToUnitVector(_anchor.ToLatLng());
+        var cellUnit = ToUnitVector(cell.ToLatLng());
+        return anchorUnit.DistanceTo(cellUnit) > 1.2f;
+    }
+
+    private void Rebase(H3Index cell)
+    {
+        if (cell == _anchor)
+            return;
+
+        ClearTiles();
+        _anchor = cell;
+        _focus = cell;
+        _pan = Vector2.Zero;
+        BuildBasis(_anchor);
+        // Queue the rebuild: a rebase is rare and must not put a full window
+        // build into one 20 ms frame.
+        RefreshTiles();
+        ApplyTransforms();
+        GD.Print($"lod rebase: anchor={_anchor} focus={_focus} " +
+                 $"tier={_focusTier} zoom={_zoom:F2} tiles={_tiles.Count}");
+    }
+
+    private void ClearTiles()
+    {
+        foreach (var tile in _tiles.Values)
+        {
+            foreach (var tier in tile.Tiers)
+            {
+                if (tier is null)
+                    continue;
+                tier.Node.Mesh = null;
+                tier.Node.QueueFree();
+                tier.Mesh.Dispose();
+            }
+        }
+
+        _tiles.Clear();
+        _buildQueue.Clear();
+        _queued.Clear();
+
+        if (_underlayNode is not null)
+        {
+            _underlayNode.Mesh = null;
+            _underlayNode.QueueFree();
+            _underlayNode = null;
+        }
+
+        if (_underlayMesh is not null)
+        {
+            _underlayMesh.Dispose();
+            _underlayMesh = null;
+        }
+
+        _underlayIds.Clear();
     }
 
     private void RefreshTiles(bool immediate = false)
@@ -678,6 +759,9 @@ public partial class LodProbe : Node2D
 
     private void BuildWhiteTexture()
     {
+        if (_white is not null)
+            _white.Dispose();
+
         var image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
         image.Fill(Colors.White);
         _white = ImageTexture.CreateFromImage(image);

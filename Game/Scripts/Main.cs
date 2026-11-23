@@ -42,6 +42,8 @@ public partial class Main : Node2D
         "wheel zoom · right-drag pan · G isometric · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
     private const string AreaIsoStatus =
         "wheel zoom · right-drag pan · G flat · Q/E rotate · [ ] relief · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
+    private const string LodStatus =
+        "wheel zoom · right-drag pan · tiers are automatic · decorative detail only · Esc or Settings to exit";
 
     private static readonly Color PanelColor = new(0.04f, 0.05f, 0.07f, 0.86f);
     private static readonly Color MutedText = new(0.68f, 0.72f, 0.78f);
@@ -54,6 +56,7 @@ public partial class Main : Node2D
         Management,
         Site,
         Area,
+        Lod,
     }
 
     private BodyWorld _world = null!;
@@ -95,6 +98,7 @@ public partial class Main : Node2D
     private int _selectedHex = -1;
     private int _siteParentOrdinal = -1;
     private Mode _returnMode = Mode.Region;
+    private Mode _lodReturnMode = Mode.Globe;
     private string _selectedBiome = string.Empty;
     private int _selectedElevation;
     private CraterKind _selectedCrater;
@@ -219,27 +223,12 @@ public partial class Main : Node2D
         _siteView.BuildingsChanged += OnBuildingsChanged;
         _siteView.PlacementFeedback += OnPlacementFeedback;
 
-        if (HasArgument("--lod"))
-        {
-            // Experimental worktree only: an opaque probe over the normal views.
-            _lodProbe = new LodProbe();
-            _worldLayer.AddChild(_lodProbe);
-            _lodProbe.Initialize(
-                _world,
-                UlongArgument("--region"),
-                FloatArgument("--lod-zoom", 1f),
-                FloatArgument("--lod-sweep", 0f),
-                FloatArgument("--lod-fade", -1f),
-                FloatArgument("--lod-stress", 0f),
-                FloatArgument("--lod-pan-x", 0f),
-                FloatArgument("--lod-pan-y", 0f));
-        }
-
         _shell = new ShellOverlay
         {
             SaveRootLabel = _settings.SaveRoot,
             BodyLabel = KnownBodies.DisplayName(_world.BodyKey),
             BodyKey = _world.BodyKey,
+            VisualLodEnabled = _settings.EnableVisualLod,
         };
         AddChild(_shell);
         _shell.Command += OnShellCommand;
@@ -312,6 +301,11 @@ public partial class Main : Node2D
 
         if (!skipCli)
             ApplyCommandLine();
+
+        // The setting is the normal user path; --lod remains an automation
+        // override and deliberately does not change the persisted preference.
+        if (_settings.EnableVisualLod || HasArgument("--lod"))
+            SetVisualLod(true, persist: false);
 
         if (HasArgument("--map"))
             _shell.ToggleSystemMap();
@@ -472,6 +466,7 @@ public partial class Main : Node2D
         _mode = Mode.Globe;
         _status = GlobeStatus;
         _worldLayer.Visible = false;
+        _lodProbe?.SetActive(false);
         _globe.Visible = true;
         _regionView.Visible = false;
         _areaView.Visible = false;
@@ -743,6 +738,19 @@ public partial class Main : Node2D
 
             case ShellCommand.SaveNow:
                 SaveNowAndToast();
+                return;
+
+            case ShellCommand.ToggleVisualLod:
+                if (!_started)
+                {
+                    _settings.EnableVisualLod = !_settings.EnableVisualLod;
+                    _settings.Save();
+                    _shell.SetVisualLod(_settings.EnableVisualLod);
+                }
+                else
+                {
+                    SetVisualLod(_mode != Mode.Lod);
+                }
                 return;
 
             case ShellCommand.PauseTime:
@@ -1143,14 +1151,9 @@ public partial class Main : Node2D
 
     private SlotViewState CaptureView() => new()
     {
-        Mode = _mode switch
-        {
-            Mode.Management => "management",
-            Mode.Region => "region",
-            Mode.Site => "site",
-            Mode.Area => "area",
-            _ => "globe",
-        },
+        // Visual LOD is a setting, never a campaign view mode. Persist the
+        // ordinary view that will be restored when the preview is switched off.
+        Mode = ViewModeName(_mode == Mode.Lod ? _lodReturnMode : _mode),
         SelectedHexOrdinal = _mode == Mode.Site ? _siteParentOrdinal : null,
         GlobeYawDegrees = _globe.YawDegrees,
         GlobePitchDegrees = _globe.PitchDegrees,
@@ -1174,6 +1177,15 @@ public partial class Main : Node2D
             _campaignService.BuiltRegions,
             _campaign.Meta.ActiveRegionIndex);
     }
+
+    private static string ViewModeName(Mode mode) => mode switch
+    {
+        Mode.Management => "management",
+        Mode.Region => "region",
+        Mode.Site => "site",
+        Mode.Area => "area",
+        _ => "globe",
+    };
 
     private static string OverlayName(RegionViewMode mode) => mode switch
     {
@@ -1310,6 +1322,9 @@ public partial class Main : Node2D
                 break;
             case Mode.Area:
                 _areaView.Refresh();
+                break;
+            case Mode.Lod:
+                _lodProbe?.QueueRedraw();
                 break;
             default:
                 _globe.QueueRedraw();
@@ -1534,6 +1549,11 @@ public partial class Main : Node2D
                 ShowGlobe();
                 break;
 
+            case Key.Escape when _mode == Mode.Lod:
+                SetVisualLod(false);
+                _shell.Close();
+                break;
+
             case Key.Escape:
                 _shell.OpenPause();
                 break;
@@ -1547,6 +1567,8 @@ public partial class Main : Node2D
             GD.PushWarning($"Region {regionIndex} is not in the {KnownBodies.DisplayName(_world.BodyKey)} bake.");
             return;
         }
+
+        ExitLodForView();
 
         // Stored buildings must be installed before the view reads the region.
         _campaignService.EnsureRegionLoaded(regionIndex);
@@ -1575,6 +1597,8 @@ public partial class Main : Node2D
             return;
         }
 
+        ExitLodForView();
+
         if (!_areaView.IsLoaded || _areaView.CenterRegion != regionIndex)
             _areaView.Load(_world, _campaign, regionIndex);
         else
@@ -1597,6 +1621,8 @@ public partial class Main : Node2D
         if (!_regionView.IsLoaded)
             return;
 
+        ExitLodForView();
+
         _mode = Mode.Management;
         _managementView.Load(_world, _regionView.RegionIndex);
         _managementView.SetOverlay(_activeOverlay);
@@ -1615,6 +1641,8 @@ public partial class Main : Node2D
 
     private void ShowSite(int hexOrdinal)
     {
+        ExitLodForView();
+
         if (!_regionView.IsLoaded)
         {
             GD.PushWarning("Open a region before opening a site.");
@@ -1647,6 +1675,8 @@ public partial class Main : Node2D
 
     private void ShowGlobe()
     {
+        ExitLodForView();
+
         _regionView.Visible = false;
         _areaView.Visible = false;
         _managementView.Visible = false;
@@ -1658,6 +1688,137 @@ public partial class Main : Node2D
         _campaignService.SetActiveRegion(null);
         RefreshMarkers();
         QueueRedraw();
+    }
+
+    private void EnsureLodProbe()
+    {
+        if (_lodProbe is not null)
+            return;
+
+        _lodProbe = new LodProbe
+        {
+            Visible = false,
+            ProcessMode = ProcessModeEnum.Disabled,
+        };
+        _worldLayer.AddChild(_lodProbe);
+    }
+
+    private float LodStartZoom()
+    {
+        if (ArgumentValue("--lod-zoom") is not null)
+            return FloatArgument("--lod-zoom", 1f);
+
+        // Automation keeps the deterministic zoom-1 start unless it asks for a
+        // specific zoom; the settings path carries the camera's current zoom.
+        if (HasArgument("--lod"))
+            return 1f;
+
+        return _lodReturnMode switch
+        {
+            Mode.Globe => MapZoom(_globe.Zoom, 0.6f, 12f),
+            Mode.Area => MapZoom(_areaView.CurrentZoom, 0.5f, 8f),
+            _ => 1f,
+        };
+    }
+
+    private static float MapZoom(float value, float sourceMin, float sourceMax)
+    {
+        var progress = Math.Clamp((value - sourceMin) / (sourceMax - sourceMin), 0f, 1f);
+        return Mathf.Pow(128f, progress);
+    }
+
+    private void SetVisualLod(bool enabled, bool persist = true)
+    {
+        if (!_started || enabled == (_mode == Mode.Lod))
+        {
+            _shell.SetVisualLod(_mode == Mode.Lod);
+            return;
+        }
+
+        if (enabled)
+        {
+            _lodReturnMode = _mode;
+            EnsureLodProbe();
+
+            _globe.Visible = false;
+            _regionView.Visible = false;
+            _areaView.Visible = false;
+            _managementView.Visible = false;
+            _siteView.Visible = false;
+
+            _lodProbe!.SetActive(true);
+            _lodProbe.Initialize(
+                _world,
+                CurrentRegionIndex(),
+                LodStartZoom(),
+                FloatArgument("--lod-sweep", 0f),
+                FloatArgument("--lod-fade", -1f),
+                FloatArgument("--lod-stress", 0f),
+                FloatArgument("--lod-pan-x", 0f),
+                FloatArgument("--lod-pan-y", 0f));
+
+            _mode = Mode.Lod;
+            _status = LodStatus;
+            if (persist)
+            {
+                _settings.EnableVisualLod = true;
+                _settings.Save();
+            }
+        }
+        else
+        {
+            var returnMode = _lodReturnMode;
+            DeactivateLod();
+            _mode = returnMode;
+            RestoreLodReturnView(returnMode);
+        }
+
+        _shell.SetVisualLod(enabled);
+        QueueRedraw();
+    }
+
+    private void DeactivateLod()
+    {
+        _lodProbe?.SetActive(false);
+        if (_settings.EnableVisualLod)
+        {
+            _settings.EnableVisualLod = false;
+            _settings.Save();
+        }
+        _shell.SetVisualLod(false);
+    }
+
+    private void ExitLodForView()
+    {
+        if (_mode != Mode.Lod)
+            return;
+
+        _mode = _lodReturnMode;
+        DeactivateLod();
+    }
+
+    private void RestoreLodReturnView(Mode mode)
+    {
+        switch (mode)
+        {
+            case Mode.Area:
+                ShowArea(CurrentRegionIndex());
+                break;
+            case Mode.Region:
+                ShowRegion(CurrentRegionIndex());
+                break;
+            case Mode.Management:
+                ShowRegion(CurrentRegionIndex());
+                ShowManagement();
+                break;
+            case Mode.Site:
+                ShowRegion(CurrentRegionIndex());
+                ShowSite(Math.Max(0, _siteParentOrdinal));
+                break;
+            default:
+                ShowGlobe();
+                break;
+        }
     }
 
     public override void _ExitTree()
@@ -1910,10 +2071,37 @@ public partial class Main : Node2D
                 DrawAreaPanel();
                 break;
 
+            case Mode.Lod:
+                DrawLodPanel();
+                break;
+
             default:
                 DrawRegionPanel();
                 break;
         }
+    }
+
+    private void DrawLodPanel()
+    {
+        var panel = new Rect2(PanelLeft, PanelTop, PanelWidth, 138f);
+
+        DrawRect(panel, PanelColor);
+        DrawRect(new Rect2(panel.Position, new Vector2(3, panel.Size.Y)), new Color(0.55f, 0.68f, 0.85f, 0.9f));
+
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 30),
+            $"{KnownBodies.DisplayName(_world.BodyKey).ToUpperInvariant()} · VISUAL LOD",
+            HorizontalAlignment.Left, -1, 17, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 54),
+            $"focus {new H3Index(CurrentRegionIndex())} · Res {_lodProbe?.CurrentResolution ?? 3} · zoom {_lodProbe?.Zoom ?? 1f:F1}",
+            HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 78),
+            "Fine tiers are decorative density, not sampled geography.",
+            HorizontalAlignment.Left, -1, 12, AccentText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 100),
+            "Tiers change automatically with zoom. No saves are affected.",
+            HorizontalAlignment.Left, -1, 12, MutedText);
+        DrawString(_font, new Vector2(PanelLeft + 18, PanelTop + 124),
+            "Esc or Settings to exit · F12 screenshot", HorizontalAlignment.Left, -1, 11, MutedText);
     }
 
     private void DrawGlobePanel()
@@ -2551,6 +2739,7 @@ public partial class Main : Node2D
             Mode.Management =>
                 $"{ModeName(_managementView.Overlay)} · {_managementView.SiteCount} sites",
             Mode.Site => $"SITE · {_siteView.InstallationCount} installations",
+            Mode.Lod => $"VISUAL LOD · RES {_lodProbe?.CurrentResolution ?? 3}",
             _ => $"{ModeName(_regionView.ViewMode)} · {_regionView.SiteCount} sites",
         };
 

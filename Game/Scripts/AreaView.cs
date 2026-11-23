@@ -210,6 +210,9 @@ public partial class AreaView : Node2D
     /// <summary>Currently centred region.</summary>
     public ulong CenterRegion => _centerRegion;
 
+    /// <summary>Current zoom factor for the active projection.</summary>
+    public float CurrentZoom => Zoom;
+
     /// <summary>Current colour/relief overlay.</summary>
     public RegionViewMode Overlay => _overlay;
 
