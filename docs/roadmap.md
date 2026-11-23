@@ -418,10 +418,14 @@ between regions, rover fleet state, failure/repair.
 
 **Next:** the seamless H3 LOD experiment lives in a separate worktree until Earth
 is merged (user decision 2026-11-20; brief in
-`C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`). Stages A and B are
-now implemented and measured in `experiment/seamless-h3-lod`. D49 records the
-REVISE verdict; see [`lod-experiment.md`](lod-experiment.md). Nothing ports to
-`main` without a separate decision.
+`C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`). Stages A–C and the
+D50 five-tier refinement are implemented and measured in
+`experiment/seamless-h3-lod`: automatic Res 3/4/5/6/7 selection with hysteresis,
+a tier-dependent parent window, queued builds and a coarse-under/fine-over fade.
+D49 and D50 keep the REVISE verdict because fine detail is still visual-only and
+reprojection, VRAM and isolated timing gaps remain; see
+[`lod-experiment.md`](lod-experiment.md). Nothing ports to `main` without a
+separate decision.
 
 ### M6 — Hardware designer
 

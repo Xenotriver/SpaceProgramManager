@@ -1157,7 +1157,49 @@ worth one more iteration.
 **Next iteration.** Add real Res 6/7 biome/relief samples, reprojection or a
 globe camera, VRAM instrumentation and a no-baseline frame measurement; then
 write a new decision before any port to `main`. Details in
-[`lod-experiment.md`](lod-experiment.md).
+[`lod-experiment.md`](lod-experiment.md). D50 implements the presentation part
+of that iteration; the fidelity and measurement gaps remain.
+
+---
+
+## D50 — Five-tier LOD refinement: presentation fixed, still REVISE
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main`.
+
+**Change.** The three-tier probe becomes Res 3/4/5/6/7. Zoom thresholds are
+spaced geometrically across 1–128 with 5% down-hysteresis, so the density step
+between neighbouring rings is always 7× instead of the original 343× first jump.
+A tier-dependent core radius (Res 4/5: 4, Res 6: 2, Res 7: 1) keeps rebuilds
+inside the 100 ms tile budget; one outer ring is one tier coarser and a 96-parent
+LRU holds the window. Builds are queued against an 8 ms per-frame budget.
+
+The cross-dissolve is replaced by an opaque coarse underlay with the finer mesh
+fading over it, and fine-tier brightness variation is reduced from ±14% to ±5%.
+Interrupted fades continue from the visually dominant mesh. These changes target
+the user's observation that the centre tile visibly gained detail over its
+neighbours.
+
+**Evidence.** A final 1,200-frame pan+zoom stress logged two complete
+`0→1→2→3→4→0` cycles at `avg 8.52 ms · p95 16.67 ms · limit 20 ms · PASS`
+(an earlier identical run measured 14.07 ms p95), with a peak build queue of 23
+parents and max tile load 27 ms headless (35–44 ms for non-headless initial Res 7
+builds). Working set stayed 276–313 MB headless with no growth across 2,220 loads
+/ 1,503 evictions. Held 50% crossfades at zoom
+12/20/60 have zero background pixels in the central 200×200 box and mean
+luminance within 0.5% of the settled tier, so the mid-fade dimming is gone.
+Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless
+smokes (worst p95 7.14 ms); `git diff --check` clean.
+
+**Still revise.** The extra tiers do not add geography: Res 4–7 remain
+deterministic brightness variants of one Res 3 biome colour. The gnomonic anchor
+is still fixed, VRAM is still unmeasured, and probe timings still include the
+normal views behind it. Larger windows also raised p95 from 6.94 ms to 14–17 ms;
+it passes the 20 ms stretch gate but leaves less headroom on slower hardware.
+
+**Next.** Port only after a separate decision that adds real fine detail samples,
+reprojection or a globe camera, VRAM instrumentation and no-baseline frame
+measurement. Details in [`lod-experiment.md`](lod-experiment.md).
 
 ---
 
@@ -1175,4 +1217,6 @@ by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
 mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
 and the organic per-hex Earth surface by D45. Globe handedness and coastal water
-sites are settled by D47; the seam-free boundary mesh by D48.
+sites are settled by D47; the seam-free boundary mesh by D48. The seamless H3
+LOD experiment remains on REVISE under D49 and D50 until fidelity, reprojection,
+VRAM and isolated timing gaps are closed.
