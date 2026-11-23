@@ -10,7 +10,7 @@ using H3.Model;
 using Sim.World;
 
 /// <summary>
-/// Opt-in visual LOD preview for the H3 region window (D49–D52).
+/// Opt-in visual LOD preview for the H3 region window (D49–D53).
 ///
 /// Five tiers (Res 3/4/5/6/7) are selected automatically from camera zoom with
 /// threshold hysteresis. A core of Res 3 parents is drawn at the selected tier;
@@ -31,6 +31,14 @@ using Sim.World;
 /// </summary>
 public partial class LodProbe : Node2D
 {
+    /// <summary>Hovered region under the cursor, or 0 on a miss.</summary>
+    [Signal]
+    public delegate void RegionHoveredEventHandler(ulong regionIndex, string biomeId, int hexCount);
+
+    /// <summary>Region clicked by the player while the globe LOD is engaged.</summary>
+    [Signal]
+    public delegate void RegionSelectedEventHandler(ulong regionIndex, string biomeId, int hexCount);
+
     private const float CrossfadeSeconds = 0.22f;
     private const float MinZoom = 1f;
     private const float MaxZoom = 128f;
@@ -100,6 +108,10 @@ public partial class LodProbe : Node2D
     private bool _dragging;
     private Vector2 _lastMouse;
     private Vector2 _pan;
+    private Vector2 _pressPosition;
+    private bool _pressActive;
+    private bool _pressMoved;
+    private ulong _hoverRegion;
     private bool _holdFade;
 
     private int _loads;
@@ -123,6 +135,9 @@ public partial class LodProbe : Node2D
 
     /// <summary>Queued tier builds not yet submitted to the GPU.</summary>
     public int PendingBuilds => _buildQueue.Count;
+
+    /// <summary>Unit vector of the current focus, for handover to the globe camera.</summary>
+    public Vector3 FocusUnit => ToUnitVector(_focus.ToLatLng());
 
     /// <summary>Shows or hides the preview and toggles its input/process work.</summary>
     public void SetActive(bool active)
@@ -151,6 +166,10 @@ public partial class LodProbe : Node2D
         _sweepSeconds = Mathf.Max(0f, sweepSeconds);
         _stressSeconds = Mathf.Max(0f, stressSeconds);
         _pan = new Vector2(panX, panY);
+        _dragging = false;
+        _hoverRegion = 0;
+        _pressActive = false;
+        _pressMoved = false;
 
         BuildBasis(_anchor);
         _focus = CellFor(CameraGround());
@@ -243,7 +262,7 @@ public partial class LodProbe : Node2D
                    $"{focus.Tiers[_focusTier]?.Cells ?? 0} cells · radius {ParentRadii[_focusTier]} · " +
                    $"{_tiles.Count} parents · queue {_buildQueue.Count} · zoom {_zoom:F1} · " +
                    $"loads {_loads} / evictions {_evictions} / max {_maxLoadMs} ms · " +
-                   "decorative density · wheel zoom, right-drag pan, Esc exit";
+                   "decorative density · wheel zoom, right-drag pan, click to open area";
         if (focus.FromTier != focus.CurrentTier && focus.FadeElapsed < CrossfadeSeconds)
             text += $" · crossfade {focus.FromTier}→{focus.CurrentTier}";
 
@@ -264,16 +283,79 @@ public partial class LodProbe : Node2D
                     _dragging = button.Pressed;
                     _lastMouse = button.Position;
                 }
+                else if (button.ButtonIndex == MouseButton.Left && button.Pressed)
+                {
+                    _pressPosition = button.Position;
+                    _pressActive = true;
+                    _pressMoved = false;
+                }
+                else if (button.ButtonIndex == MouseButton.Left && !button.Pressed)
+                {
+                    var wasClick = _pressActive && !_pressMoved;
+                    _pressActive = false;
+                    if (wasClick
+                        && TryRegionAt(button.Position, out var selected, out var biomeId, out var hexCount))
+                    {
+                        EmitSignal(SignalName.RegionSelected, selected, biomeId, hexCount);
+                    }
+                }
                 break;
 
             case InputEventMouseMotion motion when _dragging:
+                if (_pressActive && _pressPosition.DistanceTo(motion.Position) > 5f)
+                    _pressMoved = true;
                 _pan += motion.Position - _lastMouse;
                 _lastMouse = motion.Position;
                 UpdateFocus();
                 ApplyTransforms();
                 QueueRedraw();
                 break;
+
+            case InputEventMouseMotion motion:
+                if (_pressPosition.DistanceTo(motion.Position) > 5f)
+                    _pressMoved = true;
+                UpdateHover(motion.Position);
+                break;
         }
+    }
+
+    private void UpdateHover(Vector2 screen)
+    {
+        var hit = TryRegionAt(screen, out var regionIndex, out var biomeId, out var hexCount)
+            ? regionIndex
+            : 0UL;
+        if (hit == _hoverRegion)
+            return;
+
+        _hoverRegion = hit;
+        EmitSignal(SignalName.RegionHovered, hit, biomeId, hexCount);
+    }
+
+    /// <summary>Inverse of the shared gnomonic projection, mapped to a baked region parent.</summary>
+    private bool TryRegionAt(
+        Vector2 screen,
+        out ulong regionIndex,
+        out string biomeId,
+        out int hexCount)
+    {
+        regionIndex = 0;
+        biomeId = string.Empty;
+        hexCount = 0;
+
+        var size = GetViewportRect().Size;
+        var radius = Mathf.Min(size.X, size.Y) * 0.42f;
+        var origin = size * 0.5f + _pan;
+        var projected = (screen - origin) / new Vector2(radius * _zoom, -radius * _zoom);
+        var unit = (_center + _east * projected.X + _north * projected.Y).Normalized();
+        var cell = CellFor(unit, _world.RegionResolution);
+
+        if (!_world.TryGetRegionEntry((ulong)cell, out var entry))
+            return false;
+
+        regionIndex = entry.Index;
+        hexCount = entry.HexCount;
+        biomeId = _world.Biomes[entry.DominantBiomeCode].Id;
+        return true;
     }
 
     private void SetZoom(float value)
@@ -785,11 +867,11 @@ public partial class LodProbe : Node2D
         return (_center + _east * x + _north * y).Normalized();
     }
 
-    private static H3Index CellFor(Vector3 unit)
+    private static H3Index CellFor(Vector3 unit, int resolution = 3)
     {
         var latitude = (float)Math.Asin(Math.Clamp(unit.Y, -1f, 1f));
         var longitude = (float)Math.Atan2(unit.Z, unit.X);
-        return H3Index.FromLatLng(new LatLng(latitude, longitude), 3);
+        return H3Index.FromLatLng(new LatLng(latitude, longitude), resolution);
     }
 
     private static void WriteVertex(

@@ -417,16 +417,18 @@ between regions, rover fleet state, failure/repair.
   smokes (worst p95 7.14 ms).
 
 **Next:** the seamless H3 LOD presentation layer is authorised for `main` behind
-Settings → Visual LOD preview (D52; brief in
+Settings → Visual LOD preview (D52, view topology replaced by D53; brief in
 `C:\Users\xenot\.opencode\plan\experiment_seamless_h3_lod.md`). Stages A–C, the
-D50 five-tier refinement, the D51 seam underlay and the D52 default-off setting
-are implemented and measured in `experiment/seamless-h3-lod`: automatic
-Res 3/4/5/6/7 selection with hysteresis, a tier-dependent parent window, queued
-builds, a coarse-under/fine-over fade, one coalesced H3-boundary underlay, focus
-rebasing and an isolated view that never writes a save mode. D49–D51 keep the
-REVISE verdict for fidelity; D52 overrides it only for the opt-in presentation
-port. Fine tiers remain decorative density, not sampled geography, and VRAM is
-still unmeasured; see [`lod-experiment.md`](lod-experiment.md).
+D50 five-tier refinement, the D51 seam underlay, the D52 default-off setting and
+the D53 globe integration are implemented and measured in
+`experiment/seamless-h3-lod`: automatic Res 3/4/5/6/7 selection with hysteresis,
+a tier-dependent parent window, queued builds, a coarse-under/fine-over fade,
+one coalesced H3-boundary underlay, focus rebasing, and a high-zoom globe overlay
+with region clicks and a camera hand back that never writes a save mode. D49–D51
+keep the REVISE verdict for fidelity; D52 overrides it only for the opt-in
+presentation port and D53 folds that presentation into `Mode.Globe`. Fine tiers
+remain decorative density, not sampled geography, and VRAM is still unmeasured;
+see [`lod-experiment.md`](lod-experiment.md).
 
 ### M6 — Hardware designer
 

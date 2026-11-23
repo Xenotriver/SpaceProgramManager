@@ -1,11 +1,12 @@
 # Seamless H3 LOD experiment
 
-**Status:** stages A–C, the D50 five-tier refinement, the D51 seam underlay and
-the D52 opt-in setting are implemented and measured. D52 ports the presentation
-layer to `main` behind Settings → Visual LOD preview; the finer tiers remain
-decorative-only.
+**Status:** stages A–C, the D50 five-tier refinement, the D51 seam underlay, the
+D52 opt-in setting and the D53 globe integration are implemented and measured.
+D53 replaces the isolated D52 view with an automatic high-zoom continuation
+inside `Mode.Globe`; the finer tiers remain decorative-only.
 **Branch:** `experiment/seamless-h3-lod` in the `seamless-h3-lod` worktree;
-D52 is the narrow authorisation to port the default-off presentation to `main`.
+D52 authorised the default-off presentation port and D53 replaces its view
+topology in both that branch and `main`.
 **Brief:** `~/.opencode/plan/experiment_seamless_h3_lod.md`.
 
 ## What exists
@@ -68,9 +69,12 @@ The probe makes no claim about simulation fidelity:
 - Fine tiers have no biome samples, so their fills are a small deterministic
   brightness variation of the parent's dominant-biome colour. Enough to judge
   geometry, seams and frame cost, not geography.
-- While LOD is active it is a real view: the globe, area, region, management and
-  site views are hidden, so input and frame timing are isolated. Turning the
-  setting off restores the ordinary view that was active on entry.
+- With the setting ON, LOD is a high-zoom overlay inside the normal globe view,
+  not a separate mode. It takes over above globe zoom `4.5`, crossfades over
+  220 ms, owns mouse input, and hides the globe only once fully opaque. Zooming
+  out below the matching `4.25` threshold, turning the setting off, or opening
+  another view hands the camera back to the globe and restores input. No save
+  mode is ever written.
 - All tiers share one gnomonic basis centred on the current focus. If panning or
   zooming carries the focus more than about 1.2 rad from that anchor, the probe
   rebases on the focus and queues a fresh window instead of stretching the old
@@ -106,8 +110,11 @@ $godot = 'D:\LTC Tools\Godot\Godot_v4.7.2-stable_mono_win64.exe'
 Flags: `--lod-zoom=<1..128>` initial zoom, `--lod-sweep=<seconds>` logarithmic
 zoom loop, `--lod-stress=<seconds>` scripted pan loop, `--lod-fade=<0..1>` held
 crossfade, `--lod-pan-x/y=<pixels>` deterministic starting pan. With `--lod` and
-no explicit zoom the probe starts at zoom 1 for repeatable automation; the
-settings path carries the current globe or area camera zoom into the view.
+no explicit zoom the probe enters instantly at zoom 1 for repeatable automation
+and stays engaged for the whole run; `--region` becomes its initial anchor.
+Without `--lod`, the remembered setting takes over only above globe zoom `4.5`,
+carrying the current globe camera into the overlay. `--zoom=<0.6..12>` now parses
+with the other `=`-style flags, so the automatic threshold is scriptable.
 
 ## Measurements (2026-11-23, Earth, region `590241962326491135`)
 
@@ -170,16 +177,46 @@ settings path carries the current globe or area camera zoom into the view.
 - D52 screenshots keep the zero-background result at zoom 60 (`0` pixels in the
   sampled world region), confirming the seam underlay survived the view change.
 
+### D53 — globe-integrated high-zoom continuation
+
+- `Mode.Lod` is gone. With the setting ON the globe remains the campaign mode:
+  crossing globe zoom `4.5` enters the overlay, and the LOD camera maps back to
+  globe zoom `4.25` before automatic exit. A settings-enabled Earth run with
+  `--view=globe --zoom=5` entered at LOD zoom `6.51` and passed p95 `6.90 ms`;
+  the same run with `--lod-zoom=1` exited immediately and finished as
+  `Earth Globe` at p95 `6.94 ms`.
+- View entry and exit use the same 220 ms smoothstep as tier crossfades, inside
+  the 150–300 ms requirement. The globe keeps drawing only until the overlay is
+  opaque, then is hidden; input ownership flips with it, and the return fade
+  gives input back to the globe immediately.
+- Left click in the overlay inverts the shared gnomonic basis, resolves the
+  baked region parent through `_world.RegionResolution`, and reuses
+  `Main.OnRegionSelected` → `ShowArea(regionIndex)`. Hover feeds the same status
+  line the globe uses. Local pan and the >1.2 rad rebase are unchanged.
+- `--lod` stays a non-persistent automation override: instant entry, zoom 1 by
+  default, `--region` as the anchor when supplied, and it suppresses automatic
+  zoom-out exit so long gates stay in the overlay.
+- LOD gates: Moon `6.94 ms`, Mars `6.94 ms`, Earth `6.94 ms`, all PASS. The
+  1,200-frame Earth stress logged `avg 8.57 ms · p95 16.67 ms · limit 20.00 ms ·
+  PASS`, max tile load `39 ms`, `2,241` loads / `1,530` evictions, `199` focus
+  changes and working set `299–300 MB` with no upward trend. A non-headless
+  zoom-60 capture kept the D51 seam result: `0` background pixels in the sampled
+  world region. Full verification: clean build, 212/212 C#, 22/22 pipeline,
+  32/32 headless smokes (worst p95 `7.14 ms`).
+
 VRAM was not measured directly; GPU memory needs an external tool. The 8 GB RAM
 ceiling is met by the working-set figure, but that excludes GPU allocations.
 
-## Stage C / D50–D52 decision
+## Stage C / D50–D53 decision
 
-**REVISE for fidelity; PORT the presentation layer as an opt-in setting**
-(D49–D52 in [`decisions.md`](decisions.md)). The presentation pop, the
+**REVISE for fidelity; PORT the presentation layer as an opt-in globe overlay**
+(D49–D53 in [`decisions.md`](decisions.md)). The presentation pop, the
 background-through-seam problem, reprojection and isolated timing are addressed;
-crossfade, mixed-tier seams, load latency and frame gates all pass. Res 4–7
-detail is still visual-only and VRAM remains unmeasured, so D52 explicitly
-overrides the “do not port” verdict for this presentation-only, default-off
-feature. Real Res 4–7 samples would need a separate bake, fingerprint, save and
-migration decision; VRAM instrumentation remains an open measurement task.
+crossfade, mixed-tier seams, load latency and frame gates all pass. D53 folds the
+opt-in view into the globe as a high-zoom continuation with region clicks and a
+camera hand back, while keeping the same save-free, body-agnostic presentation.
+Res 4–7 detail is still visual-only and VRAM remains unmeasured, so D52’s
+override of the D49 “do not port” verdict is narrowed by D53 to this
+presentation-only, default-off feature. Real Res 4–7 samples would need a
+separate bake, fingerprint, save and migration decision; VRAM instrumentation
+remains an open measurement task.

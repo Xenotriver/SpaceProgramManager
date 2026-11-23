@@ -84,6 +84,15 @@ public partial class MoonGlobe : Node2D
     /// <summary>Current zoom factor.</summary>
     public float Zoom => _zoom;
 
+    /// <summary>Unit vector at the centre of the current camera view.</summary>
+    public Vector3 CameraFocusUnit => new(
+        -Mathf.Sin(_yaw) * Mathf.Cos(_pitch),
+        Mathf.Sin(_pitch),
+        Mathf.Cos(_yaw) * Mathf.Cos(_pitch));
+
+    /// <summary>Clamp applied to pitch when handing the camera back from the LOD view.</summary>
+    public float MaxPitchRadians => MaxPitch;
+
     /// <summary>Draws visited, occupied and active markers on the globe.</summary>
     public void SetMarkers(
         IReadOnlyCollection<ulong> visited,

@@ -1245,7 +1245,8 @@ separate, narrowly scoped port decision.
 
 **Status.** Authorised for `main` as a default-off Settings feature. No save
 schema, bake manifest, bake fingerprint, pipeline, `Sim` or per-body change;
-`slot.json` never stores this mode.
+`slot.json` never stores this mode. D53 supersedes the isolated-view topology
+below but keeps this authorisation, setting key and fidelity boundary.
 
 **Decision.** Add Settings → Visual LOD preview, persisted as `enableVisualLod`
 in `settings.json` outside campaign slots. ON auto-enters the LOD view after a
@@ -1279,6 +1280,48 @@ zoom-60 background pixels at `0`. Full verification: 212/212 C#, 22/22 pipeline,
 
 ---
 
+## D53 — Fold the visual LOD into the globe
+
+**Status.** Authorised for `main`, replacing the D52 isolated `Mode.Lod`. No
+save schema, bake manifest, fingerprint, pipeline, `Sim` or per-body change;
+`slot.json` and `CaptureView()` continue to record `Mode.Globe` even while the
+overlay is on screen. The setting remains default-off in `settings.json`.
+
+**Decision.** Settings → Visual LOD preview now arms an automatic continuation
+inside `Mode.Globe` rather than a separate view. Above globe zoom `4.5` the
+overlay fades in over 220 ms, seeds its Res 3 window from the globe camera's
+focus cell, and takes over mouse input; the globe is hidden only once the fade
+is opaque. Local pan and the >1.2 rad rebase are unchanged. Zooming out until
+the LOD camera maps back below globe zoom `4.25`, disabling the setting, or
+leaving the globe returns the camera to the nearest globe viewpoint and hands
+input back. A left click in the overlay inverts the gnomonic projection, maps
+the point through `_world.RegionResolution` to a baked parent, and opens that
+region's Area view through the existing globe selection callback. `--lod`
+remains a non-persistent automation override with instant entry, deterministic
+zoom 1 and `--region` anchoring; it suppresses automatic zoom-out exit so
+stress and sweep gates stay in the overlay. `--name=value` parsing is also
+accepted by `HasArgument` so `--zoom=5` can drive the automatic threshold.
+
+**Why.** The isolated view answered the D49 timing objection but broke the
+globe navigation contract: a zoomed globe became a different mode, clicks did
+not drill into regions, and leaving the view restored a saved camera instead of
+the current one. Keeping the camera, status text and click flow inside
+`Mode.Globe` makes the preview a continuation of the same map while preserving
+the D52 default-off, save-free boundary. A 220 ms handover stays inside the
+150–300 ms crossfade requirement, and the 4.5/4.25 entry/exit gap prevents
+threshold chatter.
+
+**Evidence.** Settings-enabled Earth run with `--view=globe --zoom=5` entered at
+LOD zoom `6.51` at p95 `6.90 ms`; forcing `--lod-zoom=1` exited and finished as
+`Earth Globe` at p95 `6.94 ms`. LOD gates: Moon `6.94 ms`, Mars `6.94 ms`, Earth
+`6.94 ms`, all PASS. Earth 1,200-frame stress: `avg 8.57 ms · p95 16.67 ms ·
+limit 20 ms · PASS`, max tile load `39 ms`, working set `299–300 MB`. The
+zoom-60 capture kept zero background pixels in the sampled world region. Full
+verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless smokes
+(worst p95 `7.14 ms`), `git diff --check` clean.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1296,4 +1339,5 @@ and the organic per-hex Earth surface by D45. Globe handedness and coastal water
 sites are settled by D47; the seam-free boundary mesh by D48. The LOD fidelity
 verdict remains REVISE under D49–D51, but D52 authorises the opt-in,
 default-off presentation port in `main` after closing the reprojection and
-isolated-timing gaps.
+isolated-timing gaps, and D53 folds that presentation into the globe as a
+high-zoom continuation.
