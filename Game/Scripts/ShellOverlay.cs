@@ -33,6 +33,7 @@ public enum ShellCommand
     ClaimReward,
     ResolveEvent,
     StartRepair,
+    ToggleVisualLod,
 }
 
 /// <summary>
@@ -140,6 +141,16 @@ public partial class ShellOverlay : Node2D
 
     /// <summary>True while the slot list is showing (used to refresh it).</summary>
     public bool IsShowingSlots => _screen == Screen.Slots;
+
+    /// <summary>Whether the opt-in visual LOD preview is active.</summary>
+    public bool VisualLodEnabled { get; set; }
+
+    /// <summary>Updates the settings row without closing the menu.</summary>
+    public void SetVisualLod(bool enabled)
+    {
+        VisualLodEnabled = enabled;
+        QueueRedraw();
+    }
 
     /// <summary>Live campaign values rendered by the tech screen.</summary>
     public sealed record TechTreeView(
@@ -808,6 +819,7 @@ public partial class ShellOverlay : Node2D
             case ShellCommand.ClaimReward:
             case ShellCommand.ResolveEvent:
             case ShellCommand.StartRepair:
+            case ShellCommand.ToggleVisualLod:
                 Command?.Invoke(row.Command, row.Payload);
                 return;
 
@@ -1014,6 +1026,13 @@ public partial class ShellOverlay : Node2D
                     true, ShellCommand.OpenSaveFolder, null));
                 specs.Add(new RowSpec("Relief exaggeration", "Change in the colony view with [ and ]", null,
                     false, ShellCommand.None, null));
+                specs.Add(new RowSpec(
+                    "Visual LOD preview",
+                    VisualLodEnabled
+                        ? "Fine tiers are decorative density, not sampled geography"
+                        : "Keeps the normal globe, area and region views unchanged",
+                    VisualLodEnabled ? "ON" : "OFF",
+                    true, ShellCommand.ToggleVisualLod, null));
                 specs.Add(new RowSpec("Keybinds",
                     "F5 save · Esc pause/back · / search · M system map · T tech · C missions · X maintenance · A area · R fleet · G colony · Home active region", null,
                     false, ShellCommand.None, null));

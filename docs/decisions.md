@@ -1123,6 +1123,162 @@ fallback to biome colours fails the build.
 
 ---
 
+## D49 — Seamless H3 LOD experiment: REVISE, do not port
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main` under this
+decision.
+
+**Verdict: REVISE.** Keep the mechanism, reject the current presentation as
+production-ready.
+
+**Evidence.** Stage A built three tiers from one Res 3 parent
+(`1 / 343 / 2401` cells) with a 220 ms crossfade; 300-frame p95 6.94 ms. Stage B
+drew the focus parent at the zoom tier and its `gridDisk(1)` neighbours one tier
+coarser, with a 16-entry LRU and one shared gnomonic basis; a 1,200-frame
+pan+zoom stress logged two full `0->1->2->0` cycles at p95 6.94 ms, max tile
+load 21 ms at Res 7, 333 loads / 271 evictions, and working set 276-306 MB with
+no growth. Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32
+headless smokes (worst p95 10.01 ms). Shared H3 boundary vertices projected
+through one basis leave no gap between mixed-tier parents; a central 200x200 px
+box contained zero background pixels.
+
+**Why revise, not keep.** Res 6/7 are visual-only: their fills are deterministic
+brightness variants of the parent biome, so the detail tier has no gameplay or
+geography behind it. The gnomonic anchor is fixed, so far panning distorts and
+will need reprojection. VRAM was not measured, the probe overlays the normal
+views (so timings include a constant baseline), and the LRU holds only a
+seven-parent window rather than a globe-wide tile set.
+
+**Why not kill.** Crossfade, mixed-tier seams, tile latency and memory all meet
+the brief's gates on the target-class machine, so the core approach is sound and
+worth one more iteration.
+
+**Next iteration.** Add real Res 6/7 biome/relief samples, reprojection or a
+globe camera, VRAM instrumentation and a no-baseline frame measurement; then
+write a new decision before any port to `main`. Details in
+[`lod-experiment.md`](lod-experiment.md). D50 implements the presentation part
+of that iteration; the fidelity and measurement gaps remain.
+
+---
+
+## D50 — Five-tier LOD refinement: presentation fixed, still REVISE
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main`.
+
+**Change.** The three-tier probe becomes Res 3/4/5/6/7. Zoom thresholds are
+spaced geometrically across 1–128 with 5% down-hysteresis, so the density step
+between neighbouring rings is always 7× instead of the original 343× first jump.
+A tier-dependent core radius (Res 4/5: 4, Res 6: 2, Res 7: 1) keeps rebuilds
+inside the 100 ms tile budget; one outer ring is one tier coarser and a 96-parent
+LRU holds the window. Builds are queued against an 8 ms per-frame budget.
+
+The cross-dissolve is replaced by an opaque coarse underlay with the finer mesh
+fading over it, and fine-tier brightness variation is reduced from ±14% to ±5%.
+Interrupted fades continue from the visually dominant mesh. These changes target
+the user's observation that the centre tile visibly gained detail over its
+neighbours.
+
+**Evidence.** A final 1,200-frame pan+zoom stress logged two complete
+`0→1→2→3→4→0` cycles at `avg 8.52 ms · p95 16.67 ms · limit 20 ms · PASS`
+(an earlier identical run measured 14.07 ms p95), with a peak build queue of 23
+parents and max tile load 27 ms headless (35–44 ms for non-headless initial Res 7
+builds). Working set stayed 276–313 MB headless with no growth across 2,220 loads
+/ 1,503 evictions. Held 50% crossfades at zoom
+12/20/60 have zero background pixels in the central 200×200 box and mean
+luminance within 0.5% of the settled tier, so the mid-fade dimming is gone.
+Full verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless
+smokes (worst p95 7.14 ms); `git diff --check` clean.
+
+**Still revise.** The extra tiers do not add geography: Res 4–7 remain
+deterministic brightness variants of one Res 3 biome colour. The gnomonic anchor
+is still fixed, VRAM is still unmeasured, and probe timings still include the
+normal views behind it. Larger windows also raised p95 from 6.94 ms to 14–17 ms;
+it passes the 20 ms stretch gate but leaves less headroom on slower hardware.
+
+**Next.** Port only after a separate decision that adds real fine detail samples,
+reprojection or a globe camera, VRAM instrumentation and no-baseline frame
+measurement. Details in [`lod-experiment.md`](lod-experiment.md). D52 below
+authorises only the opt-in presentation layer.
+
+---
+
+## D51 — Coalesced LOD seam underlay
+
+**Status.** Experiment branch `experiment/seamless-h3-lod` only. No save schema,
+bake manifest, fingerprint or `Sim` change; nothing ports to `main`.
+
+**Decision.** Add one opaque `ArrayMesh` containing every wanted Res 3 parent
+boundary, built from the same real H3 boundary vectors as D48 and projected
+through the one LOD gnomonic basis. It sits below all tier nodes and is rebuilt
+only when the wanted parent set changes.
+
+**Why.** LOD parents already share projected H3 vertices, but each parent/tier is
+a separate `MeshInstance2D`, so independent edge rasterisation and mixed-tier
+T-junctions can leave sub-pixel cracks that show the dark canvas. The underlay
+turns those cracks into parent colour instead of adding blur, MSAA, triangle
+expansion or a `SeamFudge`. It is body-agnostic because every bake carries H3
+region boundaries, and needs no pipeline or per-body change. The D48 globe shader
+is not reused: the LOD view does not rotate in canvas space, so the existing
+`Node2D` transform already moves the baked projection.
+
+**Evidence.** Underlay sizes were `91 / 37 / 19` parents at zoom 12 / 20 / 60.
+In the sampled world region, background pixels fell from `328,890` to `324,183`
+at zoom 12, from `280,564` to `275,053` in the held Res 5→6 fade, and from `770`
+to `0` both at zoom 60 and in the held Res 6→7 fade — the mixed-tier boundary
+case the user reported. Final stress: `avg 8.12 ms · p95 14.99 ms · limit 20 ms ·
+PASS`, max tile load 21 ms, peak queue 15, working set 279–320 MB with no growth
+across 2,041 loads / 1,344 evictions. Full verification: clean build, 212/212 C#,
+22/22 pipeline, 32/32 headless smokes (worst p95 7.14 ms).
+
+**Still revise.** This removes visible background through LOD seams but does not
+add geography to Res 4–7, fix the fixed gnomonic anchor, measure VRAM or isolate
+the probe from the views behind it. If a coloured hairline remains where two
+same-tier parents meet, the next step is coalescing settled parents into one mesh
+per tier while leaving only fading parents on individual nodes. D52 supplies the
+separate, narrowly scoped port decision.
+
+---
+
+## D52 — Opt-in visual LOD: port the presentation only
+
+**Status.** Authorised for `main` as a default-off Settings feature. No save
+schema, bake manifest, bake fingerprint, pipeline, `Sim` or per-body change;
+`slot.json` never stores this mode.
+
+**Decision.** Add Settings → Visual LOD preview, persisted as `enableVisualLod`
+in `settings.json` outside campaign slots. ON auto-enters the LOD view after a
+campaign starts; `--lod` stays a non-persistent automation override. LOD is a real
+view: globe, area, region, management and site views are hidden while it is
+active, `Esc` or the Settings toggle exits and restores the prior ordinary view.
+`CaptureView()` maps LOD back to that prior view, so a save never records
+`"lod"`. The gnomonic basis follows the focus after a large pan (about 1.2 rad)
+with a queued rebuild. Fine Res 4–7 tiers remain deterministic decorative
+density derived from Res 3 biome colours: **they are not geographic samples and
+must not be represented as sampled terrain, sites or buildings**. The existing
+Area view remains the pseudo-heightmesh "3D" presentation; there are no
+resolution buttons and tier selection stays automatic from zoom.
+
+**Why.** D49–D51 required real detail, reprojection, VRAM instrumentation and
+isolated timing before a port. Reprojection and isolated timing are now closed;
+the remaining fidelity and VRAM gaps do not justify hiding the accepted visual
+presentation behind a command-line flag. A remembered, default-off toggle keeps
+normal play identical while making the experiment reviewable and testable in
+`main`. Real fine-tier geography would require a separate bake/fingerprint/save
+migration decision and is explicitly out of scope.
+
+**Evidence.** Build clean. Settings-enabled Moon run without `--lod` entered LOD
+from the current globe zoom (`1.19`) at p95 `6.90 ms`. Isolated Earth stress:
+`avg 8.48 ms · p95 16.67 ms · limit 20 ms · PASS`, max tile load `24 ms`, peak
+queue `38`, `2,258` loads / `1,549` evictions, `200` focus changes, working set
+`273–313 MB` with no upward trend; no rebase in that pattern. LOD frame gates:
+Moon `6.94 ms`, Mars `6.94 ms`, Earth `6.90 ms`, all PASS. D52 screenshots keep
+zoom-60 background pixels at `0`. Full verification: 212/212 C#, 22/22 pipeline,
+32/32 headless smokes (worst p95 7.14 ms), `git diff --check` clean.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1137,4 +1293,7 @@ by D39, the area-first navigation/slope test by D40, the M5 C3 static-catalogue
 mission rule by D41, the M5 C4 static-cause repair loop by D42, the M5 C5
 verification gate by D43, the synthetic Earth/water presentation sandbox by D44,
 and the organic per-hex Earth surface by D45. Globe handedness and coastal water
-sites are settled by D47; the seam-free boundary mesh by D48.
+sites are settled by D47; the seam-free boundary mesh by D48. The LOD fidelity
+verdict remains REVISE under D49–D51, but D52 authorises the opt-in,
+default-off presentation port in `main` after closing the reprojection and
+isolated-timing gaps.

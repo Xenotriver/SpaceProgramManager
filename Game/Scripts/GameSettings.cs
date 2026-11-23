@@ -43,6 +43,12 @@ public sealed class GameSettings
     /// <summary>Print frame timings to the log.</summary>
     public bool ShowFps { get; set; }
 
+    /// <summary>
+    /// Opt-in visual LOD preview. Stored outside campaign slots so it never
+    /// affects saves, the bake fingerprint or simulation state.
+    /// </summary>
+    public bool EnableVisualLod { get; set; }
+
     /// <summary>Default save root under Godot's per-user data directory.</summary>
     public static string DefaultSaveRoot => ProjectSettings.GlobalizePath("user://saves");
 
