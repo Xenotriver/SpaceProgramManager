@@ -99,6 +99,7 @@ public partial class Main : Node2D
     private int _siteParentOrdinal = -1;
     private Mode _returnMode = Mode.Region;
     private Mode _lodReturnMode = Mode.Globe;
+    private bool _lodIsPreference;
     private string _selectedBiome = string.Empty;
     private int _selectedElevation;
     private CraterKind _selectedCrater;
@@ -749,7 +750,9 @@ public partial class Main : Node2D
                 }
                 else
                 {
-                    SetVisualLod(_mode != Mode.Lod);
+                    // The row reflects the remembered setting, even when --lod
+                    // opened the view without changing that setting.
+                    SetVisualLod(!_settings.EnableVisualLod, persist: true);
                 }
                 return;
 
@@ -1729,15 +1732,28 @@ public partial class Main : Node2D
 
     private void SetVisualLod(bool enabled, bool persist = true)
     {
-        if (!_started || enabled == (_mode == Mode.Lod))
+        if (!_started)
         {
-            _shell.SetVisualLod(_mode == Mode.Lod);
+            _shell.SetVisualLod(_settings.EnableVisualLod);
+            return;
+        }
+
+        if (enabled == (_mode == Mode.Lod))
+        {
+            if (persist)
+            {
+                _settings.EnableVisualLod = enabled;
+                _lodIsPreference = enabled;
+                _settings.Save();
+            }
+            _shell.SetVisualLod(_settings.EnableVisualLod);
             return;
         }
 
         if (enabled)
         {
             _lodReturnMode = _mode;
+            _lodIsPreference = persist || _settings.EnableVisualLod;
             EnsureLodProbe();
 
             _globe.Visible = false;
@@ -1780,12 +1796,13 @@ public partial class Main : Node2D
     private void DeactivateLod()
     {
         _lodProbe?.SetActive(false);
-        if (_settings.EnableVisualLod)
+        if (_lodIsPreference && _settings.EnableVisualLod)
         {
             _settings.EnableVisualLod = false;
             _settings.Save();
         }
-        _shell.SetVisualLod(false);
+        _lodIsPreference = false;
+        _shell.SetVisualLod(_settings.EnableVisualLod);
     }
 
     private void ExitLodForView()
