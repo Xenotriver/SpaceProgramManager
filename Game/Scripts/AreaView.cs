@@ -13,7 +13,7 @@ using Sim.Hex;
 using Sim.Site;
 using Sim.World;
 
-/// <summary>Projection used to present the seven-tile area mosaic.</summary>
+/// <summary>Projection used to present the multi-tile area mosaic.</summary>
 public enum AreaProjectionMode
 {
     /// <summary>Original flat tangent-plane map.</summary>
@@ -24,22 +24,27 @@ public enum AreaProjectionMode
 }
 
 /// <summary>
-/// Multi-region operations view. It shows the active region and its immediate H3
-/// neighbours, with rover tracks and location markers. The same seven tiles can
-/// be presented as a flat tangent-plane map or as one isometric faceted diorama,
+/// Multi-region operations view. It shows the active region and two rings of H3
+/// neighbours, with rover tracks and location markers. The same tiles can be
+/// presented as a flat tangent-plane map or as one isometric faceted diorama,
 /// and both projections share the five region overlays.
 ///
-/// This is the M5 AreaView decision: cross-region logistics needs a scale between
-/// the globe and one region, but it deliberately loads only seven region tiles.
-/// Hovering draws a subdued shade around the whole region without hiding the terrain grid.
+/// Cross-region logistics needs a scale between the globe and one region; the
+/// two-ring window is large enough to read cross-region movement without
+/// loading the whole body. Hovering draws a subdued shade around the whole region
+/// without hiding the terrain grid.
 /// </summary>
 public partial class AreaView : Node2D
 {
-    /// <summary>A region was clicked with no rover awaiting a destination.</summary>
+    /// <summary>A region was left-clicked with no mover awaiting a destination.</summary>
     [Signal]
     public delegate void RegionOpenedEventHandler(ulong regionIndex);
 
-    /// <summary>A rover was selected and a destination region was clicked.</summary>
+    /// <summary>A region was right-clicked and should become the window centre.</summary>
+    [Signal]
+    public delegate void RegionRecentredEventHandler(ulong regionIndex);
+
+    /// <summary>A mover was armed and a destination region was clicked.</summary>
     [Signal]
     public delegate void DispatchRequestedEventHandler(string roverId, ulong regionIndex, ulong hex);
 
@@ -122,6 +127,7 @@ public partial class AreaView : Node2D
     private double _radiusKm = 1737.4;
 
     private readonly List<RegionArea> _areas = new();
+    private ulong[] _regionIndices = Array.Empty<ulong>();
     private readonly Dictionary<ulong, RegionArea> _areaByIndex = new();
     private readonly Dictionary<(ulong Region, ulong Hex), int> _cellByKey = new();
     private readonly Dictionary<ulong, Dictionary<ulong, int>> _centerIndexByCellByRegion = new();
@@ -180,6 +186,7 @@ public partial class AreaView : Node2D
     private ulong _centerRegion;
     private int _hoverRegionIndex = -1;
     private string? _hoverRoverId;
+    private int _yawSteps;
     private RegionViewMode _overlay = RegionViewMode.Biome;
     private AreaProjectionMode _projection = AreaProjectionMode.Flat;
 
@@ -219,14 +226,17 @@ public partial class AreaView : Node2D
     /// <summary>Current flat or isometric presentation.</summary>
     public AreaProjectionMode Projection => _projection;
 
-    /// <summary>True when the seven tiles are drawn as an isometric diorama.</summary>
+    /// <summary>True when the window's tiles are drawn as an isometric diorama.</summary>
     public bool UsesIsometric => _projection == AreaProjectionMode.Isometric;
 
     /// <summary>True when faceted terrain-slope shading is active.</summary>
     public bool UsesSlope => _overlay == RegionViewMode.Terrain;
 
-    /// <summary>Number of loaded region tiles (normally seven).</summary>
+    /// <summary>Number of loaded region tiles (normally nineteen).</summary>
     public int RegionCount => _areas.Count;
+
+    /// <summary>Region indices in the current two-ring window, centre first.</summary>
+    public IReadOnlyList<ulong> RegionIndices => _regionIndices;
 
     /// <summary>Number of fine hexes across all loaded tiles.</summary>
     public int HexCount => _centers.Length;
@@ -250,8 +260,11 @@ public partial class AreaView : Node2D
     /// <summary>Installations across all visible regions.</summary>
     public int BuildingCount => _areas.Sum(area => _campaign.BuildingCount(area.Index));
 
-    /// <summary>Current diorama orbit angle, or 0 in the flat projection.</summary>
-    public int CameraDegrees => _diorama?.CameraDegrees ?? 0;
+    /// <summary>Shared isometric orbit step (0–5, each 60°).</summary>
+    public int RotationSteps => _yawSteps;
+
+    /// <summary>Shared isometric orbit angle (0, 60, … 300).</summary>
+    public int CameraDegrees => _yawSteps * 60;
 
     /// <summary>Current diorama relief multiplier, or 1 in the flat projection.</summary>
     public float ReliefScale => _diorama?.ReliefScale ?? 1f;
@@ -283,14 +296,55 @@ public partial class AreaView : Node2D
         SetProcessUnhandledInput(true);
     }
 
-    /// <summary>Loads the active region plus its present H3 neighbours.</summary>
+    /// <summary>
+    /// Region indices in the two-ring window: centre, first ring, second ring.
+    /// Missing bake entries are skipped, so pentagon edges yield fewer tiles.
+    /// </summary>
+    public static IReadOnlyList<ulong> RegionIndicesFor(BodyWorld world, ulong centerRegion)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        if (!world.TryGetRegionEntry(centerRegion, out _))
+            return Array.Empty<ulong>();
+
+        var ordered = new List<ulong> { centerRegion };
+        var seen = new HashSet<ulong> { centerRegion };
+        var frontier = new[] { centerRegion };
+
+        for (var ring = 0; ring < 2; ring++)
+        {
+            var next = new List<ulong>();
+            foreach (var index in frontier)
+            {
+                foreach (var neighbour in HexGrid.Neighbors(new H3Index(index)))
+                {
+                    var candidate = (ulong)neighbour;
+                    if (!seen.Add(candidate) || !world.TryGetRegionEntry(candidate, out _))
+                        continue;
+
+                    ordered.Add(candidate);
+                    next.Add(candidate);
+                }
+            }
+
+            frontier = next.ToArray();
+        }
+
+        return ordered;
+    }
+
+    /// <summary>Loads the active region plus two rings of present H3 neighbours.</summary>
     public void Load(BodyWorld world, CampaignState campaign, ulong centerRegion)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(campaign);
 
-        if (!world.TryGetRegionEntry(centerRegion, out _))
+        var regionIndices = RegionIndicesFor(world, centerRegion);
+        if (regionIndices.Count == 0)
+        {
+            _regionIndices = Array.Empty<ulong>();
             return;
+        }
 
         _world = world;
         _campaign = campaign;
@@ -308,11 +362,7 @@ public partial class AreaView : Node2D
         _biomesPresent.Clear();
         _siteScores = null;
         _siteScoreMs = 0;
-
-        var regionIndices = new List<ulong> { centerRegion };
-        regionIndices.AddRange(HexGrid.Neighbors(new H3Index(centerRegion))
-            .Select(neighbour => (ulong)neighbour)
-            .Where(index => world.TryGetRegionEntry(index, out _)));
+        _regionIndices = regionIndices.ToArray();
 
         var center = new H3Index(centerRegion).ToLatLng();
         var regionCenter = ToUnitVector(center);
@@ -506,6 +556,7 @@ public partial class AreaView : Node2D
             .ToArray();
         _diorama = new AreaDiorama(_centers, _corners, _cornerKeys, visualElevations,
             minElevation, elevationSpan, radiusMetres, _fills);
+        _diorama.Rotate(_yawSteps);
         FitIso();
 
         _hoverRegionIndex = -1;
@@ -609,21 +660,25 @@ public partial class AreaView : Node2D
         QueueRedraw();
     }
 
-    /// <summary>Orbits the isometric diorama by whole 60° steps.</summary>
-    public void Rotate(int steps)
+    /// <summary>Sets the shared isometric orbit step (0–5, each 60°).</summary>
+    public void SetRotation(int steps)
     {
+        var normalized = ((steps % 6) + 6) % 6;
+        if (normalized == _yawSteps && _diorama is not null)
+            return;
+
+        _yawSteps = normalized;
         if (_diorama is null)
             return;
 
-        var before = _diorama.CameraDegrees;
-        _diorama.Rotate(steps);
-        if (_diorama.CameraDegrees == before)
-            return;
-
+        _diorama.Rotate(_yawSteps);
         _screenDirty = true;
-        GD.Print($"area camera: {_diorama.CameraDegrees}°");
+        GD.Print($"area camera: {CameraDegrees}°");
         QueueRedraw();
     }
+
+    /// <summary>Orbits the isometric diorama by whole 60° steps.</summary>
+    public void Rotate(int steps) => SetRotation(_yawSteps + steps);
 
     /// <summary>Changes the isometric relief exaggeration.</summary>
     public void SetRelief(float scale)
@@ -813,6 +868,14 @@ public partial class AreaView : Node2D
             case MouseButton.Right:
                 if (button.Pressed)
                     _dragStart = button.Position;
+                else if (button.Position.DistanceTo(_dragStart) <= DragThresholdPixels)
+                {
+                    // A right-click (as opposed to a right-drag pan) recentres
+                    // the two-ring window on the region under the cursor.
+                    var area = PickRegion(button.Position);
+                    if (area is not null)
+                        EmitSignal(SignalName.RegionRecentred, area.Index);
+                }
                 break;
 
             case MouseButton.Left:
@@ -1153,7 +1216,7 @@ public partial class AreaView : Node2D
         }
     }
 
-    /// <summary>One aggregate pin per occupied hex across the seven regions.</summary>
+    /// <summary>One aggregate pin per occupied hex across the two-ring window.</summary>
     private void DrawBuildingMarkers()
     {
         var groups = new Dictionary<int, List<BuildingInstance>>();
@@ -1245,8 +1308,8 @@ public partial class AreaView : Node2D
             ? $" · {biome.WaterKind.ToString().ToLowerInvariant()} water"
             : string.Empty;
         var marker = SelectedRoverId is null
-            ? "click to centre here · Enter opens region · click a rover first to dispatch"
-            : "click to dispatch selected rover";
+            ? "LMB opens region · RMB recentres window · click a rover to dispatch"
+            : "LMB dispatches selected rover · Esc cancels";
         return $"region {area.Index} · {biome.DisplayName}{water} · {tile.HexCount} hexes · {marker}";
     }
 

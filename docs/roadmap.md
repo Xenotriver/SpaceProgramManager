@@ -7,7 +7,7 @@
 
 ## Status snapshot
 
-Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, Earth playable with water rules, a presentation-only fluid overlay, real pinned geography and a seam-free globe, **212 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**. M5 and Earth are complete; D46 replaces the Earth fixture with real data for local play while CI keeps the synthetic bake, and D48 removes the gaps between globe cells.
+Anchor: **2026-11-24**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 save v4, C1 tech tree, C2 rover logistics, area-first navigation, C3 missions, C4 failures/repairs and C5 docs/CI closure, Earth playable with water rules, a presentation-only fluid overlay, real pinned geography and a seam-free globe, **212 C# tests + 22 pipeline tests + 39 headless Godot smokes passing**. M5 and Earth are complete; D46 replaces the Earth fixture with real data for local play, D48 removes the gaps between globe cells, D53 folds the visual LOD into the globe (now parked), and D54/D55 widen the area window, map its mouse actions and add the dedicated Move screen.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -15,33 +15,37 @@ Anchor: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 C0 
 | Mars data pipeline | **Done (M4)** | `data/mars`: 41,162 regions, 7 biomes, MOLA elevation, USGS geology and Robbins & Hynek craters; `generatedUtc=2026-11-18T19:35:34+00:00` |
 | Earth data pipeline | **Done (D46; D45 fixture remains for CI)** | `data/earth`: 41,162 regions, 13 land/water biomes, real Natural Earth coasts/water, ETOPO1 relief and Blue Marble colour; synthetic fixture still byte-identical for CI |
 | Sim core | **Done** | H3, biomes, water placement, movement, terrain-aware routing, world loader, site scoring, per-body building catalogues, local grid, sites, campaign, save store, slot catalogue; coastal centre scoring fixed in D47 |
-| Godot runtime | **Done** | Seam-free globe from real H3 boundaries and map-correct east/west orientation (D47/D48), region/colony inspectors, per-hex site view with local placement, body selection, system map, save/load, CLI automation |
+| Godot runtime | **Done** | Seam-free globe from real H3 boundaries and map-correct east/west orientation (D47/D48), region/colony inspectors, direct fine-hex site entry, shared isometric yaw, body selection, system map, save/load, CLI automation |
 | Campaign shell | **Done (M2, extended in M4)** | Main menu, multi-slot saves, Continue, manual save, toasts, pause, search, settings, per-body last slots |
 | Simulation loop | **Done (M1)** | `Sim/Time` clock + seeded RNG, construction lifecycle, economy, power/life support, tech enforcement, live controls |
 | Site view (per-hex grid) | **Done (M3)** | 37-cell radius-3 disk; multiple installations per fine hex; save v4 with v1–v3 migration chain |
 | M5 save contract | **Done (M5 C0)** | `campaign.json` v4 carries contracts, bounded events and rover fleet; region shards carry typed failure/repair; D35–D37 |
 | Tech tree | **Done (M5 C1)** | Static `TechCatalogue`, science-point purchases, prerequisite gating, `T`/`--tech` screen; D38 |
-| Rover logistics | **Done (M5 C2, extended for Earth)** | Garage/rover and port/barge purchases, terrain-aware cross-region routing, area view, fleet screen, `A`/`R` keys; D39 |
-| Area-first navigation | **Done** | Globe click/`--region` opens area; region click recentres the area; `Enter` drills into the centred region; `G` toggles flat/isometric area; five overlays area-wide; D40 |
+| Rover logistics | **Done (M5 C2, extended for Earth)** | Garage/rover and port/barge purchases, terrain-aware cross-region routing, area view, fleet screen and dedicated `V` Move screen; `A`/`R`/`V` keys; D39/D55 |
+| Area-first navigation | **Done** | Globe click/`--region` opens the 19-tile area; LMB opens the true region view, RMB recentres, RMB drag pans, `Enter` drills in; `G` toggles flat/isometric area; five overlays area-wide; shared isometric yaw; D40/D54 |
 | Missions and events | **Done (M5 C3)** | Static contract/event catalogues, partial-delivery payouts, deadline settlement, seeded events, `C`/`--missions` screen; D41 |
 | Failures and repairs | **Done (M5 C4)** | Static failure causes, severity-scaled bills, timed repairs, hazard/event damage, `X`/`--maintenance` screen; D42 |
 | Multi-body | **Done (M4, extended for Earth)** | Moon + Mars + Earth, `--body`, system-map travel, body-keyed saves, cross-body refusal, fresh-slot creation; Earth is the launch default |
 | Surface imagery | **Done (M4.5, extended for Earth/D46)** | Real Moon/Mars/Earth colour sidecars in globe/region/colony; Earth uses Blue Marble, CI uses a synthetic fixture; `Tab` or `--overlay=biome` falls back; no manifest/save change |
 | Water presentation | **Done (Earth)** | Presentation-only `fluid.bin` sidecar, flat water fills, river strokes and water hover text; biome byte stays authoritative |
-| CI and performance gate | **Done (M4, extended M4.5/M5/Earth)** | `.github/workflows/ci.yml`; synthetic tile + imagery + fluid bakes, 32 headless Godot smokes, `--frame-budget=20` p95 gate |
+| CI and performance gate | **Done (M4, extended M4.5/M5/Earth/Navigation)** | `.github/workflows/ci.yml`; synthetic tile + imagery + fluid bakes, 39 headless Godot smokes with navigation/yaw log assertions, `--frame-budget=20` p95 gate |
 | M5 verification | **Done (M5 C5)** | Clean build, 190/190 C# tests, 5/5 pipeline tests, 25/25 smokes PASS (worst p95 7.14 ms), `git diff --check` clean; D43. Earth verification after D48: 212/212 C#, 22/22 pipeline, 32/32 smokes (worst p95 7.14 ms) |
+| Navigation verification | **Done (D54/D55)** | 19-tile flat window measured at p95 6.67 ms, isometric at p95 6.94 ms; shared-yaw, LMB/RMB, site-entry and Move-screen smokes added to CI; 212/212 C#, 22/22 pipeline, 39/39 smokes (worst p95 7.14 ms) |
 | Hardware designer | **Planned (M6)** | Outline only (plan §6.2) |
 
 ### What "done" means today
 
 The player can: start or continue a named campaign from the main menu, keep
 several isolated save slots, save manually, rotate the active body's globe, search
-an H3 index, open the area around a region by default, drill into the region view,
-inspect hexes across five overlays, plan a rover route, buy rovers from a finished
-garage (or a barge from a finished port on Earth), watch them cross regions in
-the area view, switch that view between a flat map and an isometric seven-region
-diorama with the same five overlays as a region, press `Enter` to open a fine hex
-as a site, place several installations on its 37-cell local grid, buy tech
+an H3 index, open a two-ring area window around a region by default, LMB the
+window to drill into the true region view or RMB to recentre it, inspect hexes
+across five overlays, click a buildable fine hex to enter its site directly,
+buy rovers from a finished garage (or a barge from a finished port on Earth),
+choose a ready unit in the `V` Move screen and click a destination region to
+dispatch it, watch units cross regions in the area view, switch that view between
+a flat map and an isometric 19-tile diorama with the same five overlays as a
+region and a yaw shared with colony view, press `Enter` to open a fine hex as a
+site, place several installations on its 37-cell local grid, buy tech
 upgrades in the `T` tree, accept contracts and answer events in the `C` missions
 screen, pay for repairs in the `X` maintenance screen, and have all of it persist
 across launches against a fingerprinted bake. The player can start on Moon, Mars
@@ -65,7 +69,8 @@ every region and colony overlay.
 
 The player cannot: rename a campaign, build historical Earth scenarios, or
 design hardware (M6). Local Earth play uses the pinned real bake from D46; CI
-keeps the synthetic fixture. Seamless H3 LOD is tracked separately after Earth.
+keeps the synthetic fixture. Seamless H3 LOD was folded into the globe by D53
+and is parked; further LOD work is out of scope until explicitly requested.
 
 ### Naming (locked)
 
@@ -429,6 +434,15 @@ keep the REVISE verdict for fidelity; D52 overrides it only for the opt-in
 presentation port and D53 folds that presentation into `Mode.Globe`. Fine tiers
 remain decorative density, not sampled geography, and VRAM is still unmeasured;
 see [`lod-experiment.md`](lod-experiment.md).
+
+D54/D55 then completed the M5 navigation polish: the area window grew to centre
+plus two rings (19 regions / up to 6,517 fine hexes) in both flat and isometric
+presentations; LMB now opens the true region view, RMB recentres while RMB drag
+still pans, RegionView LMB enters a buildable fine hex directly, a dedicated
+Move screen arms a rover/barge before clicking a destination, and Q/E rotate one
+persistent yaw shared by isometric area and colony views. No save schema, bake
+fingerprint, tile format or LOD behaviour changed. **Next milestone: M6 hardware
+designer**; city flags remain a separate presentation-only sidecar follow-up.
 
 ### M6 — Hardware designer
 

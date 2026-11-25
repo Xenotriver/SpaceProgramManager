@@ -1322,6 +1322,90 @@ verification: clean build, 212/212 C#, 22/22 pipeline, 32/32 headless smokes
 
 ---
 
+## D54 — Persistent area window, direct drill-in and shared isometric yaw
+
+**Date:** 2026-11-24 · **Status:** active
+
+**Decision.** The area view shows the centre region plus two complete H3 rings:
+`gridDisk(2)` = centre + 6 + 12 = 19 tiles, or up to 6,517 fine hexes when none
+of those res 3 parents is a pentagon. `AreaView.RegionIndicesFor` walks two neighbour
+rings, skips entries absent from the bake, preserves centre-first order, and is
+reused by `Main.ShowArea` so every tile is installed in `CampaignState` before
+building markers are drawn. The same window is used in the flat map and the
+isometric diorama; both projections share the five overlays.
+
+Mouse semantics are now explicit. Globe LMB still opens the area. Area LMB opens
+the clicked region's true `RegionView` (unless a mover is armed, in which case it
+dispatches). Area RMB click recentres the 19-tile window on the clicked region;
+RMB drag remains a pan. Region LMB selects the fine hex and enters a buildable
+one as a site immediately; non-buildable biomes produce a status/toast instead.
+The previous two-click route preview is removed from the default LMB path;
+`--route=<from>,<to>` remains a dev hook, and `Enter` still opens the selected or
+zero ordinal.
+
+`Q`/`E` maintain one 0–5 yaw step in `Main`. `SetIsometricRotation` applies it to
+`ManagementView` and `AreaView`, and `CaptureView` writes it to the existing
+`slot.json` `colonyRotationSteps` field. Flat views store the value without
+drawing it, so the next `G` transition keeps the same angle. `--rot=<deg>` uses
+the same setter. No save-schema, bake-fingerprint, tile-format, `Sim`, pipeline
+or LOD behaviour changed.
+
+**Why.** The old seven-tile area made cross-region movement hard to read and its
+click-to-recentre behaviour skipped the region inspector entirely. A two-ring
+window gives the requested "one more hex in diameter" of context while still
+loading a bounded number of tiles. Separating LMB (inspect) from RMB (recentre)
+keeps both actions one gesture, preserves RMB-drag panning, and makes the
+navigation order globe → area → region → site consistent. Direct site entry
+removes a redundant second click, while keeping route planning behind an
+automation flag avoids hiding a dev tool as a gameplay affordance.
+
+A single yaw is cheaper to reason about and to persist than per-view state:
+rotating the area diorama at 120° and pressing `G` from a region should show the
+colony from the same side. Reusing `colonyRotationSteps` avoids a slot-format
+bump and keeps `slot.json` a rebuildable UI cache. Visual LOD remains parked
+after D53; this decision does not touch it.
+
+**Evidence.** Local Moon run with `--view=area --region=589971619905011711`
+reported `19 regions · 6517 hexes` at avg `6.67 ms`, p95 `6.67 ms`; the isometric
+run at `--rot=120` reported `area camera: 120°` and p95 `6.94 ms` over 120
+measured frames. `--drill` opened `region view`, `--recenter` rebuilt the window
+on the neighbour tile, and `--click-hex=0` entered `site view` at p95 `6.67 ms`.
+CI adds log assertions for the 19-tile count, both yaw consumers, LMB/RMB hooks
+and direct site entry. Full verification is recorded with D55.
+
+---
+
+## D55 — Dedicated Move screen
+
+**Date:** 2026-11-24 · **Status:** active
+
+**Decision.** Fleet purchase and dispatch are separate screens. `R` remains the
+garage/port and fleet inspector; `V` opens a new `Screen.Move` picker listing the
+current region's ready rovers and barges with terrain mode and availability.
+Choosing a ready unit uses the existing `ShellCommand.SelectRover` path: the
+shell closes, the area view opens if needed, the unit is armed, and the status
+line says that LMB a region issues the order. With a unit armed, AreaView LMB
+calls `DispatchRequested`; with none armed, the same click opens RegionView.
+`Esc` clears the armed unit before returning to the globe, and the Move screen
+closes with `V`/`Esc`. The shell's pause and main menus expose a "Move unit"
+row, and `--move-screen` opens the picker for CI.
+
+**Why.** The fleet screen mixed shopping with an implicit dispatch hint, so the
+actual action was hard to discover and easy to trigger accidentally. A dedicated
+screen makes the two-step intent ("choose mover, then choose destination")
+visible while reusing the existing campaign dispatch API; no state is added to
+`CampaignState`, the save, or the slot. The picker only enables available units,
+so an unavailable rover cannot be armed.
+
+**Evidence.** `--view=area --move-screen` logged
+`move screen: choose unit, then click a destination region` and finished the
+frame gate at p95 `6.67 ms`. Full verification: clean build (0 warnings/errors), 212/212 C#, 22/22
+pipeline and 39/39 headless Godot smokes with the new navigation/yaw log checks
+(worst p95 `7.14 ms` against the 20 ms gate), plus a clean `git diff --check`.
+No files were pushed.
+
+---
+
 ## Open decisions
 
 Tracked in [`roadmap.md`](roadmap.md#open-questions): bake-change save migration,
@@ -1340,4 +1424,6 @@ sites are settled by D47; the seam-free boundary mesh by D48. The LOD fidelity
 verdict remains REVISE under D49–D51, but D52 authorises the opt-in,
 default-off presentation port in `main` after closing the reprojection and
 isolated-timing gaps, and D53 folds that presentation into the globe as a
-high-zoom continuation.
+high-zoom continuation. D54 settles the two-ring area window, mapped LMB/RMB
+navigation, direct site entry and the shared isometric yaw; D55 settles the
+separate Move screen.

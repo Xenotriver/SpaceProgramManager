@@ -34,15 +34,15 @@ public partial class Main : Node2D
     private const string GlobeStatus =
         "Drag to rotate · wheel zoom · right-drag pan · Tab surface/biome · click a region · / search · M map · T tech · Esc pause";
     private const string RegionStatus =
-        "Wheel zoom · right-drag pan · Tab overlay · 1-5 mode · click hex · Enter site · G colony · M map · T tech · Esc back";
+        "Wheel zoom · right-drag pan · Tab overlay · 1-5 mode · LMB buildable hex opens site · Enter site · G colony · M map · T tech · Esc back";
     private const string ManagementStatus =
         "Wheel zoom · right-drag pan · Q/E rotate 60° · 1-5 overlay · Tab cycle · [ ] relief · Enter site · M map · T tech · Esc back";
     private const string SiteStatus =
         "Wheel zoom · right-drag pan · click cell to place · , / . building · Del remove · C clear · M map · T tech · Esc back";
     private const string AreaStatus =
-        "wheel zoom · right-drag pan · G isometric · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
+        "wheel zoom · right-drag pan · G isometric · 1-5 overlay · Tab cycle · LMB region → region · RMB recentre · V move · M map · T tech · Esc globe";
     private const string AreaIsoStatus =
-        "wheel zoom · right-drag pan · G flat · Q/E rotate · [ ] relief · 1-5 overlay · Tab cycle · click region · R fleet · M map · T tech · Esc globe";
+        "wheel zoom · right-drag pan · G flat · Q/E yaw · [ ] relief · 1-5 overlay · Tab cycle · LMB region → region · RMB recentre · V move · M map · T tech · Esc globe";
     private const string LodStatus =
         "LOD · wheel zoom · right-drag pan · click tile to open area · zoom out for globe · decorative detail only";
 
@@ -93,6 +93,7 @@ public partial class Main : Node2D
 
     private Mode _mode = Mode.Globe;
     private RegionViewMode _activeOverlay = RegionViewMode.Biome;
+    private int _yawSteps;
     private string _status = GlobeStatus;
 
     private ulong _hoverRegion;
@@ -193,6 +194,8 @@ public partial class Main : Node2D
         _worldLayer.AddChild(_regionView);
         _regionView.HexHovered += OnHexHovered;
         _regionView.HexSelected += OnHexSelected;
+        _regionView.SiteOpened += OnRegionSiteOpened;
+        _regionView.SiteEntryRejected += OnRegionSiteEntryRejected;
         _regionView.RouteComputed += OnRouteComputed;
         _regionView.RouteCleared += OnRouteCleared;
         _regionView.ViewModeChanged += OnViewModeChanged;
@@ -203,6 +206,7 @@ public partial class Main : Node2D
         _areaView.SetFluid(_fluid);
         _worldLayer.AddChild(_areaView);
         _areaView.RegionOpened += OnAreaRegionOpened;
+        _areaView.RegionRecentred += OnAreaRegionRecentred;
         _areaView.DispatchRequested += OnAreaDispatchRequested;
         _areaView.AreaHovered += OnAreaHovered;
 
@@ -437,7 +441,9 @@ public partial class Main : Node2D
             ShowSite(restoredHex);
         }
 
-        _managementView.SetRotation(view.ColonyRotationSteps);
+        _yawSteps = ((view.ColonyRotationSteps % 6) + 6) % 6;
+        _managementView.SetRotation(_yawSteps);
+        _areaView.SetRotation(_yawSteps);
 
         // With a valid sidecar, true colour is the default for every slot. An
         // explicit --overlay always wins; saved UI state is used only when the
@@ -806,6 +812,8 @@ public partial class Main : Node2D
                     ? _areaView.CenterRegion
                     : _campaign.Meta.ActiveRegionIndex ?? _world.Regions[0].Index);
                 _areaView.SelectRover(payload);
+                _status = $"destination mode · {payload} · LMB a region to move · Esc cancels";
+                QueueRedraw();
                 return;
 
             case ShellCommand.OpenArea:
@@ -1034,6 +1042,33 @@ public partial class Main : Node2D
             }
         }
 
+        // Automation hooks for the mapped mouse actions. They call the same
+        // handlers as the view signals, so CI can cover navigation without a
+        // synthetic pointer.
+        var drill = ArgumentValue("--drill");
+        if (drill is not null && ulong.TryParse(drill, out var drillRegion))
+            OnAreaRegionOpened(drillRegion);
+
+        var recentre = ArgumentValue("--recenter");
+        if (recentre is not null && ulong.TryParse(recentre, out var recentreRegion))
+            OnAreaRegionRecentred(recentreRegion);
+
+        var siteClick = ArgumentValue("--click-hex");
+        if (siteClick is not null && int.TryParse(siteClick, out var clickedHex))
+        {
+            if (_regionView.CanEnterSite(clickedHex))
+                OnRegionSiteOpened(clickedHex, _regionView.BiomeIdAt(clickedHex));
+            else
+                OnRegionSiteEntryRejected($"hex {clickedHex} · not buildable");
+        }
+
+        // Automation hook for the UI-driven move flow: open the mover picker.
+        if (HasArgument("--move-screen"))
+        {
+            _shell.OpenMove();
+            GD.Print("move screen: choose unit, then click a destination region");
+        }
+
         var overlay = ArgumentValue("--overlay");
         if (overlay is not null)
             SetOverlay(ParseOverlay(overlay));
@@ -1059,12 +1094,7 @@ public partial class Main : Node2D
 
         var rot = ArgumentValue("--rot");
         if (rot is not null && int.TryParse(rot, out var rotDegrees))
-        {
-            if (_mode == Mode.Management)
-                _managementView.SetRotation((int)Math.Round(rotDegrees / 60.0));
-            else if (_mode == Mode.Area)
-                _areaView.Rotate((int)Math.Round(rotDegrees / 60.0));
-        }
+            SetIsometricRotation((int)Math.Round(rotDegrees / 60.0));
 
         var active = ArgumentValue("--active");
         if (active is not null)
@@ -1159,7 +1189,7 @@ public partial class Main : Node2D
         GlobeYawDegrees = _globe.YawDegrees,
         GlobePitchDegrees = _globe.PitchDegrees,
         GlobeZoom = _globe.Zoom,
-        ColonyRotationSteps = _managementView.RotationSteps,
+        ColonyRotationSteps = _yawSteps,
         Overlay = _mode switch
         {
             Mode.Management => OverlayName(_managementView.Overlay),
@@ -1449,24 +1479,12 @@ public partial class Main : Node2D
                 _managementView.CycleOverlay();
                 break;
 
-            case Key.Q when _mode == Mode.Management:
-                RotateCamera(-1);
+            case Key.Q when _mode is Mode.Management or Mode.Area:
+                SetIsometricRotation(_yawSteps - 1, updateAreaStatus: _mode == Mode.Area);
                 break;
 
-            case Key.E when _mode == Mode.Management:
-                RotateCamera(1);
-                break;
-
-            case Key.Q when _mode == Mode.Area && _areaView.UsesIsometric:
-                _areaView.Rotate(-1);
-                _status = $"area camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc globe";
-                QueueRedraw();
-                break;
-
-            case Key.E when _mode == Mode.Area && _areaView.UsesIsometric:
-                _areaView.Rotate(1);
-                _status = $"area camera {_areaView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc globe";
-                QueueRedraw();
+            case Key.E when _mode is Mode.Management or Mode.Area:
+                SetIsometricRotation(_yawSteps + 1, updateAreaStatus: _mode == Mode.Area);
                 break;
 
             case Key.Bracketleft when _mode == Mode.Area && _areaView.UsesIsometric:
@@ -1515,6 +1533,10 @@ public partial class Main : Node2D
 
             case Key.R when !_shell.IsOpen:
                 _shell.OpenFleet();
+                break;
+
+            case Key.V when !_shell.IsOpen:
+                _shell.OpenMove();
                 break;
 
             case Key.Comma when _mode == Mode.Site:
@@ -1598,6 +1620,11 @@ public partial class Main : Node2D
 
         ExitLodForView();
 
+        // Building markers come from campaign state, so every tile in the
+        // two-ring window must be installed before the view reads them.
+        foreach (var index in AreaView.RegionIndicesFor(_world, regionIndex))
+            _campaignService.EnsureRegionLoaded(index);
+
         if (!_areaView.IsLoaded || _areaView.CenterRegion != regionIndex)
             _areaView.Load(_world, _campaign, regionIndex);
         else
@@ -1624,6 +1651,7 @@ public partial class Main : Node2D
 
         _mode = Mode.Management;
         _managementView.Load(_world, _regionView.RegionIndex);
+        _managementView.SetRotation(_yawSteps);
         _managementView.SetOverlay(_activeOverlay);
         _managementView.Visible = true;
         _regionView.Visible = false;
@@ -1949,8 +1977,27 @@ public partial class Main : Node2D
 
     private void OnAreaRegionOpened(ulong regionIndex)
     {
-        GD.Print($"area region selected: {regionIndex} → recentre area");
+        GD.Print($"area region left-click: {regionIndex} → region view");
+        ShowRegion(regionIndex);
+    }
+
+    private void OnAreaRegionRecentred(ulong regionIndex)
+    {
+        GD.Print($"area region right-click: {regionIndex} → recentre window");
         ShowArea(regionIndex);
+    }
+
+    private void OnRegionSiteOpened(int ordinal, string biomeId)
+    {
+        GD.Print($"region hex left-click: {ordinal} ({biomeId}) → site");
+        ShowSite(ordinal);
+    }
+
+    private void OnRegionSiteEntryRejected(string reason)
+    {
+        _status = reason;
+        _shell.PushToast(reason, error: true);
+        QueueRedraw();
     }
 
     private void OnAreaHovered(string detail)
@@ -2132,10 +2179,19 @@ public partial class Main : Node2D
         }
     }
 
-    private void RotateCamera(int steps)
+    /// <summary>
+    /// Applies one persistent yaw to the isometric area and colony views. Flat
+    /// views keep the value for their next isometric transition but do not draw it.
+    /// </summary>
+    private void SetIsometricRotation(int steps, bool updateAreaStatus = false)
     {
-        _managementView.Rotate(steps);
-        _status = $"camera {_managementView.CameraDegrees}° · Q/E rotate · [ ] relief · Esc back";
+        _yawSteps = ((steps % 6) + 6) % 6;
+        _managementView.SetRotation(_yawSteps);
+        _areaView.SetRotation(_yawSteps);
+
+        _status = updateAreaStatus
+            ? $"area camera {_yawSteps * 60}° · Q/E rotate · [ ] relief · Esc globe"
+            : $"camera {_yawSteps * 60}° · Q/E rotate · [ ] relief · Esc back";
         QueueRedraw();
     }
 

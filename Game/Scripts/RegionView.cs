@@ -39,7 +39,8 @@ public enum RegionViewMode
 /// The globe is the navigation view; this is the "look at the terrain" view
 /// (design doc §2.6). Hexes are filled with their biome colour, outlined so the
 /// grid reads, and craters are marked with a dot because they are an overlay,
-/// not a biome.
+/// not a biome. A plain left-click on a buildable hex opens its site; route
+/// preview remains available as the <c>--route</c> automation hook.
 /// </summary>
 public partial class RegionView : Node2D
 {
@@ -58,6 +59,14 @@ public partial class RegionView : Node2D
     /// <summary>Route preview cleared (new start picked, or nothing selected).</summary>
     [Signal]
     public delegate void RouteClearedEventHandler();
+
+    /// <summary>A buildable hex was left-clicked and should open as a site.</summary>
+    [Signal]
+    public delegate void SiteOpenedEventHandler(int ordinal, string biomeId);
+
+    /// <summary>A non-buildable hex was left-clicked.</summary>
+    [Signal]
+    public delegate void SiteEntryRejectedEventHandler(string reason);
 
     /// <summary>Overlay mode changed.</summary>
     [Signal]
@@ -96,6 +105,7 @@ public partial class RegionView : Node2D
     private short[] _elevations = Array.Empty<short>();
     private CraterKind[] _craters = Array.Empty<CraterKind>();
     private bool[] _water = Array.Empty<bool>();
+    private bool[] _buildable = Array.Empty<bool>();
     private int[][] _neighbours = Array.Empty<int[]>();
     private readonly Dictionary<ulong, int> _ordinalByIndex = new();
     private float _cellRadius;
@@ -196,6 +206,14 @@ public partial class RegionView : Node2D
     /// <summary>Time spent computing the site-score heatmap for the current region (ms).</summary>
     public double SiteScoreMs => _siteScoreMs;
 
+    /// <summary>True when a fine hex's biome permits construction.</summary>
+    public bool CanEnterSite(int ordinal)
+        => (uint)ordinal < (uint)_buildable.Length && _buildable[ordinal];
+
+    /// <summary>Stable biome id of a fine hex, or an empty string when out of range.</summary>
+    public string BiomeIdAt(int ordinal)
+        => (uint)ordinal < (uint)_biomeIds.Length ? _biomeIds[ordinal] : string.Empty;
+
     /// <summary>Composite site score at a hex ordinal, or null before scores are computed.</summary>
     public double? SiteScoreAt(int ordinal)
         => _siteScores is not null && (uint)ordinal < (uint)_siteScores.Length
@@ -245,6 +263,7 @@ public partial class RegionView : Node2D
         _elevations = new short[count];
         _craters = new CraterKind[count];
         _water = new bool[count];
+        _buildable = new bool[count];
         _radiusKm = world.Manifest.Body.RadiusKm;
         SiteConfig = (_campaign?.SiteConfig ?? SiteConfig) with { BodyRadiusKm = _radiusKm };
 
@@ -265,6 +284,7 @@ public partial class RegionView : Node2D
             _elevations[i] = record.ElevationM;
             _craters[i] = record.Crater;
             _water[i] = biome.IsWater;
+            _buildable[i] = biome.Buildable;
 
             if (!biomesPresent.Contains(biome.Id))
                 biomesPresent.Add(biome.Id);
@@ -690,27 +710,17 @@ public partial class RegionView : Node2D
         EmitSignal(SignalName.HexSelected, _selected, _biomeIds[_selected],
             (int)_elevations[_selected], (int)_craters[_selected]);
 
-        if (_routeFrom < 0 || _route is not null)
-        {
-            // First click, or a new pair: this hex becomes the route start.
-            _routeFrom = _hovered;
-            ClearRoute();
-        }
-        else if (_hovered != _routeFrom)
-        {
-            var plan = RoutePlanner.Plan(
-                _routeFrom, _hovered, _neighbours, BiomeAt, CraterAt, DistanceKm, BaseSpeedKmh);
-
-            if (plan is not null)
-            {
-                _route = plan;
-                EmitSignal(SignalName.RouteComputed, plan.LegCount, plan.TotalDistanceKm, plan.TotalHours);
-            }
-            else
-            {
-                ClearRoute();
-            }
-        }
+        // A plain click drills into the hex; route preview is an automation-only
+        // hook (--route), so clicking no longer arms or advances a two-hex pair.
+        var biomeId = _biomeIds[_selected];
+        var biomeName = _world.Biomes.TryGetById(biomeId, out var biome)
+            ? biome.DisplayName
+            : biomeId;
+        if (_buildable[_selected])
+            EmitSignal(SignalName.SiteOpened, _selected, biomeId);
+        else
+            EmitSignal(SignalName.SiteEntryRejected,
+                $"hex {_selected} · {biomeName} is not buildable");
 
         QueueRedraw();
     }

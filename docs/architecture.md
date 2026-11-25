@@ -92,17 +92,17 @@ in the biome byte, bathymetry uses the elevation field, and craters stay `None`.
 
 | Class | Role |
 |---|---|
-| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, shell commands (tech, missions, maintenance, fleet), CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
+| `Main` | Body selection and system-map travel, mode state machine (`Globe` / `Area` / `Region` / `Management` / `Site`), area-first drill-in, HUD, input dispatch, shell commands (tech, missions, maintenance, fleet, move), shared isometric yaw, CLI parsing and frame gate; owns the body's `BuildingRegistry`, `CampaignState`, `CampaignService` |
 | `MoonGlobe` | Renders all 41,162 H3 region boundaries of the active body as one static `ArrayMesh` rotated by a canvas-item shader; hover/select, yaw/pitch/zoom, pan, per-region imagery/biome colour toggle (class name predates Mars) |
 | `SurfaceImagery` | Optional presentation-only sidecar loader: validates `imagery.json`/`color.bin`, exposes per-hex region colours and per-region means, never touches `Sim` or save state |
 | `FluidOverlay` | Optional presentation-only Earth fluid loader: validates `fluid.json`/`fluid.bin`, builds screen-space river strokes from the low direction/width bits; never touches `Sim`, placement or saves |
-| `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), flat water fills, hover/select, rover/barge route, aggregate site markers (read-only) |
-| `AreaView` | Active region plus present H3 neighbours on one tangent plane; region hover/outlines, rover/barge markers and cross-region tracks, flat/isometric water surfaces and river strokes, optional faceted terrain-slope shading; click-to-dispatch (read-only) |
-| `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief (flattened over water), overlays, river strokes, pan/zoom/pick, 60° orbit, aggregate site markers (read-only) |
+| `RegionView` | One region's 343 hexes in a gnomonic tangent plane; five overlays (including surface imagery), flat water fills, hover/select, LMB entry into a buildable fine hex, `--route` dev hook, aggregate site markers (read-only) |
+| `AreaView` | Centre region plus two rings of present H3 neighbours (normally 19 tiles / 6,517 fine hexes) on one tangent plane or as one isometric diorama; region hover/outlines, rover/barge markers and cross-region tracks, flat/isometric water surfaces and river strokes, optional faceted terrain-slope shading. LMB opens a region (or dispatches an armed mover), RMB recentres, RMB drag pans; shared 60° yaw (read-only) |
+| `ManagementView` | Isometric diorama of the same region: one painter-sorted `ArrayMesh`, relief (flattened over water), overlays, river strokes, pan/zoom/pick, shared 60° orbit, aggregate site markers (read-only) |
 | `SiteView` | One fine hex as a 37-cell isometric local grid; nearest-centre picking, footprint ghost, placement/removal via `CampaignState`; reuses `IsoProjection` |
 | `CampaignService` | Binds the campaign to one save slot: gates on the bake fingerprint, loads shards before a view, saves immediately on change, keeps `slot.json` current, quarantines corrupt shards, reports status |
 | `GameSettings` | `user://settings.json`: save root, last slot, relief default, FPS flag. Never inside a slot |
-| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search, tech tree, missions/events, maintenance/repairs, fleet (garage/rover and port/barge capacity plus purchase rows) and toasts. Views are supplied by `Main` through providers; the shell owns no game state, emits `Command` to `Main` and takes exclusive input while open |
+| `ShellOverlay` | Immediate-mode front end: main menu, slot list, schematic Solar System Map, pause, settings, search, tech tree, missions/events, maintenance/repairs, fleet (garage/rover and port/barge capacity plus purchase rows), Move (choose a ready unit) and toasts. Views are supplied by `Main` through providers; the shell owns no game state, emits `Command` to `Main` and takes exclusive input while open |
 | `IsoProjection` | Pure helpers for the isometric projection, inverse projection, painter depth and plane rotation |
 
 ### Startup and slot flow
@@ -120,9 +120,10 @@ launch
   → any other user arg        → StartCampaign(slot) directly (automation)
 StartCampaign(slotId)
   → CampaignService.Load()              # campaign.json through bodyKey + fingerprint gate
-  → slot.json view snapshot            # restore mode, region, camera, selected site hex
+  → slot.json view snapshot            # restore mode, region, cameras, selected site hex
   → RegionView / ManagementView load the region on demand
-  → AreaView loads the active region plus present neighbours
+  → ColonyRotationSteps restores one shared isometric yaw (0–5)
+  → AreaView loads the active region plus two rings of neighbours
   → SiteView loads the selected fine hex when mode is "site"
 ```
 
@@ -148,9 +149,11 @@ mouse/keyboard
    → <slot>/regions/<h3>.json + <slot>/campaign.json + <slot>/slot.json
 ```
 
-`RegionView`, `AreaView` and `ManagementView` only hit-test for selection, route
-planning and dispatch targets; they never mutate `RegionState` directly. `SiteView`
-calls campaign methods and then refreshes its cached installation list.
+`RegionView` hit-tests for selection and buildable-hex site entry, `AreaView`
+hit-tests for region navigation and dispatch targets, and `ManagementView`
+hit-tests for selection; none mutates `RegionState` directly. Route preview is a
+dev hook (`--route`), not the default left-click. `SiteView` calls campaign
+methods and then refreshes its cached installation list.
 
 ### Disk → state → view
 
@@ -165,7 +168,9 @@ CampaignService.EnsureRegionLoaded(regionIndex)
    → CampaignStore.LoadRegion(regionIndex)
    → CampaignState.InstallRegion(stored, tile)   # rebuild local footprints, drop invalid records
 RegionView.Load(world, regionIndex)              # must run after EnsureRegionLoaded
-AreaView.Load(world, campaign, regionIndex)      # neighbours + rover markers
+AreaView.RegionIndicesFor(world, regionIndex)      # centre + two rings
+  → EnsureRegionLoaded(index) for every tile      # building markers stay complete
+AreaView.Load(world, campaign, regionIndex)      # diorama/flat window + rover markers
 ManagementView.Load(world, regionIndex)
 SiteView.Load(world, tile, hexOrdinal, campaign, registry)  # site mode only
 ```
@@ -234,7 +239,10 @@ Rotate(plane, pivot, cos, sin)   // orbit about a pivot in plane space
 
 A 60° orbit maps the hex lattice onto itself, so prisms keep their shape and only
 the terrain silhouette changes. Rotation is applied to centres and corners before
-projection; the depth sort and wall normals use the rotated plane.
+projection; the depth sort and wall normals use the rotated plane. `Main` owns one
+0–5 yaw step: `Q`/`E` update both `ManagementView` and the isometric `AreaView`,
+and `slot.json`'s existing `colonyRotationSteps` restores it. Flat area and region
+views remember the value without drawing it.
 
 `SiteView` reuses these helpers for its 37 local cells; it does not add a second
 isometric engine. Picking in the region, colony and site views is nearest

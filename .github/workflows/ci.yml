@@ -136,6 +136,27 @@ jobs:
           # Area-first navigation: slope automation hook.
           run_smoke moon moon-area-slope --region=589971619905011711 --slope
 
+          # Persistent two-ring area window and mapped mouse actions.
+          run_smoke moon moon-area-window --view=area --region=589971619905011711
+          grep -q 'area: 19 regions · 6517 hexes' "$RUNNER_TEMP/spm-ci-moon-area-window.log"
+          run_smoke moon moon-area-drill --view=area --region=589971619905011711 --drill=589971619905011711
+          grep -q 'area region left-click: 589971619905011711 → region view' "$RUNNER_TEMP/spm-ci-moon-area-drill.log"
+          grep -q 'frame budget: Moon Region' "$RUNNER_TEMP/spm-ci-moon-area-drill.log"
+          run_smoke moon moon-area-recenter --view=area --region=589971619905011711 --recenter=590241962326491135
+          grep -q 'area region right-click: 590241962326491135 → recentre window' "$RUNNER_TEMP/spm-ci-moon-area-recenter.log"
+          run_smoke moon moon-region-click-site --view=region --region=589971619905011711 --click-hex=0
+          grep -q 'region hex left-click: 0' "$RUNNER_TEMP/spm-ci-moon-region-click-site.log"
+          grep -q 'site view: hex 0' "$RUNNER_TEMP/spm-ci-moon-region-click-site.log"
+          run_smoke moon moon-move-screen --view=area --move-screen
+          grep -q 'move screen: choose unit' "$RUNNER_TEMP/spm-ci-moon-move-screen.log"
+
+          # One persistent isometric yaw is applied to both isometric views.
+          run_smoke moon moon-area-iso-yaw --view=area --region=589971619905011711 --projection=iso --rot=120
+          grep -q '^area camera: 120°' "$RUNNER_TEMP/spm-ci-moon-area-iso-yaw.log"
+          run_smoke moon moon-management-yaw --view=management --region=589971619905011711 --rot=120
+          grep -q '^camera: 120°' "$RUNNER_TEMP/spm-ci-moon-management-yaw.log"
+          grep -q '^area camera: 120°' "$RUNNER_TEMP/spm-ci-moon-management-yaw.log"
+
           # Area-first navigation: isometric diorama overlays.
           run_smoke moon moon-area-iso --view=area --region=589971619905011711 --projection=iso
           run_smoke moon moon-area-iso-terrain --view=area --region=589971619905011711 --projection=iso --overlay=terrain

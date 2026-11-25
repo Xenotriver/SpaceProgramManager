@@ -113,19 +113,23 @@ $siteShot = 'C:\Users\xenot\AppData\Local\Temp\opencode\spm\site.png'
 
 | Flag | Meaning |
 |---|---|
-| `--body=<moon\|mars>` | Select the baked body (default `moon`). |
-| `--region=<h3>` | Open the area around a region by H3 index. Without it the last active region is restored. |
+| `--body=<moon\|mars\|earth>` | Select the baked body (default `earth` when baked, otherwise `moon`). |
+| `--region=<h3>` | Open the two-ring area window around a region by H3 index. Without it the last active region is restored. |
 | `--view=globe\|region\|management\|site\|area` | Select the active view; `--iso` aliases `management`. |
 | `--hex=<ordinal>` | Fine-hex ordinal whose site opens with `--view=site` (default `0`). |
-| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for area/region/colony views; area ramps are normalised area-wide across all 2,401 hexes. `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
+| `--overlay=biome\|terrain\|score\|buildings\|color` | Overlay for area/region/colony views; area ramps are normalised across the whole 19-tile window (up to 6,517 fine hexes). `color`/`colour`/`imagery`/`surface` also drive the globe surface/biome toggle. |
 | `--slope` | Toggle the area terrain overlay (terrain ↔ biome); `Tab` cycles all five area overlays. |
 | `--projection=flat\|iso` | Select the area projection (`iso` or `isometric`); `G` toggles it at runtime. |
-| `--rot=<deg>` | Colony or isometric-area camera angle, quantised to the nearest 60°. |
+| `--rot=<deg>` | Persistent isometric yaw shared by colony and area views, quantised to the nearest 60°. Flat views store it without drawing it. |
 | `--relief=<scale>` | Colony or isometric-area relief exaggeration (default `1.0`). |
 | `--active=<defId>` | Building definition to place. Requires `--view=site`. |
 | `--place=<q>,<r>` | Place at a local grid cell. Repeat the flag for more installations; requires `--view=site`. |
-| `--route=<from>,<to>` | Plan a rover route between two fine-hex ordinals in the region view. |
+| `--route=<from>,<to>` | Dev hook: plan a rover route between two fine-hex ordinals in the region view. Left-click no longer previews routes. |
 | `--dispatch=<rover-id>,<region>,<hex>` | Send a rover along a planned cross-region route. |
+| `--drill=<region>` | Dev hook: call the AreaView left-click handler for a region (opens the true region view). |
+| `--recenter=<region>` | Dev hook: call the AreaView right-click handler for a region (recentres the 19-tile window). |
+| `--click-hex=<ordinal>` | Dev hook: call the RegionView left-click handler for a fine hex (opens buildable sites). |
+| `--move-screen` | Open the dedicated move picker after startup. |
 | `--speed=<km/h>` | Rover base speed (default `8`). |
 | `--yaw=<deg>` `--pitch=<deg>` `--zoom=<factor>` | Initial globe camera. |
 | `--slot=<id>` | Open a slot under the save root directly (default: last played, then `slot1`). |
@@ -159,17 +163,22 @@ Notes:
   colony views are inspectors; placement there is refused with a warning.
 - `--place` takes a local axial cell (`q,r`), not a fine-hex ordinal. Repeating
   `--place` places several installations in the same site in command order.
-- `--rot` applies **after** `Load`, so the log prints `camera 0°` first and the
-  effective `camera: <n>°` afterwards. That is expected.
-- `M` toggles the Solar System Map from any view; `C` and `X` open the missions
-  and maintenance screens, `A` opens the area view and `R` the fleet screen from
-  any gameplay view. Globe clicks and `--region` open the area view by default;
-  clicking a region there drills into the region view. `G` toggles the area
-  between its flat tangent-plane map and a seven-region isometric diorama;
-  colony view is entered from region view.
+- `--rot` applies **after** `Load`, so the log can print `camera: 0°` first and
+  the effective `camera: <n>°` / `area camera: <n>°` afterwards. That is expected.
+- `M` toggles the Solar System Map from any view; `C`, `X`, `R` and `V` open the
+  missions, maintenance, fleet and move screens, and `A` opens the area view
+  from any gameplay view. Globe clicks and `--region` open the area view by
+  default. In area view, LMB opens the true region view unless a mover is armed,
+  RMB recentres the 19-tile window on the clicked region, and RMB drag still
+  pans. `G` toggles the area between its flat tangent-plane map and the same
+  two-ring window drawn as an isometric diorama; colony view is entered from
+  region view. In region view, LMB enters a buildable fine hex directly;
+  non-buildable biome clicks show a status message instead.
 - `Tab` toggles surface imagery/biome on the globe and cycles overlays in area,
   region and colony views; `1`–`5` select an overlay directly in those views.
-  In isometric area view `Q`/`E` rotate the slab and `[`/`]` adjust relief.
+  `Q`/`E` rotate the shared isometric yaw in 60° steps in both isometric area
+  and colony view (flat views keep the value for their next isometric
+  transition); `[`/`]` adjust isometric relief.
   With a valid sidecar, true colour is the default for every slot unless
   `--overlay` is passed.
 - Screenshot and save scratch space for this repo:
@@ -190,12 +199,14 @@ Notes:
 `--frame-budget=<ms>` forces redraws, measures p95 frame time and exits 0 on PASS
 or 1 on FAIL. The current **20.00 ms** limit came from three Moon globe runs with
 p95 `16.82 / 16.67 / 16.67 ms` (about 19% headroom). CI uses `--frames=30` across
-32 smokes: colour and biome for globe/region on Moon and Mars, colour for colony
+39 smokes: colour and biome for globe/region on Moon and Mars, colour for colony
 on Moon and Mars, the unchanged Moon site view, the tech tree, the missions and
 maintenance screens on both legacy bodies, the area view on Moon and Mars, the
 fleet screen, the area terrain-slope toggle, five isometric area-overlay runs,
-and seven Earth runs covering globe colour, region colour/biome, colony colour,
-flat/isometric area and the fleet screen.
+the 19-tile window (flat and isometric), shared-yaw checks for both isometric
+views, the mapped LMB/RMB navigation hooks, direct fine-hex site entry, the move
+screen, and seven Earth runs covering globe colour, region colour/biome, colony
+colour, flat/isometric area and the fleet screen.
 
 ### Full verification
 
@@ -214,10 +225,12 @@ Use the Python 3.13 environment with `pipeline/requirements.txt` installed (the
 
 Expected: clean build (0 warnings, 0 errors), 212/212 C# tests, 22/22 pipeline
 tests and no whitespace errors (Git may warn about LF → CRLF on checkout, which
-is not a diff error). Then run all 32 headless smokes with `--frame-budget=20
+is not a diff error). Then run all 39 headless smokes with `--frame-budget=20
 --frames=30` and `--save` pointed at a scratch directory, using the same
 argument sets as the CI step. Each must exit 0 and print `PASS`; any `FAIL`
-means the milestone is not done.
+means the milestone is not done. The CI step also greps each new log for its
+navigation or yaw marker, so a smoke that renders but silently drops the action
+fails the gate.
 
 ## 5. Data pipeline
 

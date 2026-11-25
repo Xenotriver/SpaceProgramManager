@@ -12,7 +12,7 @@ water placement rules, an offshore launch pad and barge/port logistics.
 
 ## Status at a glance
 
-Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), Earth playable with real pinned geography, **212 C# tests + 22 pipeline tests + 32 headless Godot smokes passing**.
+Snapshot: **2026-11-24**, M4.5 true-colour overlay, faceted colony terrain, M5 complete (save v4, tech tree, rover logistics, missions, failures/repairs and docs/CI closure), Earth playable with real pinned geography, the 19-tile area window with mapped LMB/RMB navigation, a dedicated Move screen and shared isometric yaw, **212 C# tests + 22 pipeline tests + 39 headless Godot smokes passing**.
 
 | Area | State |
 |---|---|
@@ -24,17 +24,17 @@ Snapshot: **2026-11-22**, M4.5 true-colour overlay, faceted colony terrain, M5 c
 | Campaign shell | **Done (M2, extended in M4)** — new/continue/load, manual save, toasts, pause, region search, settings, per-body last slots |
 | M5 save contract | **Done (M5 C0)** — schema v4 for contracts, events, rover fleet and typed failure/repair; v1–v3 migrate in memory |
 | Tech tree | **Done (M5 C1)** — science-point purchases, prerequisites, `T` screen and `--tech` automation |
-| Rover logistics | **Done (M5 C2, extended for Earth)** — garage/rover and port/barge purchases, terrain-aware cross-region routing, fleet screen, `A`/`R` keys, area view; D39 |
+| Rover logistics | **Done (M5 C2, extended for Earth)** — garage/rover and port/barge purchases, terrain-aware cross-region routing, fleet and Move screens, `A`/`R`/`V` keys, area view; D39/D55 |
 | Missions and events | **Done (M5 C3)** — contract offers, partial-delivery payouts, deadlines, seeded events, `C`/`--missions` screen; D41 |
 | Failures and repairs | **Done (M5 C4)** — static failure causes, severity-scaled repair bills, timed repairs, hazard and event-linked damage, `X`/`--maintenance` screen; D42 |
 | M5 verification | **Done (M5 C5)** — synced docs, 25 CI smokes, clean build/tests/diff; D43. Earth adds 7 smokes (32 total). |
-| Area-first navigation | **Done** — globe click/`--region` opens area view; region click recentres the area; `Enter` drills into the centred region; `G` toggles a seven-region isometric diorama with all five overlays; D40 |
+| Area-first navigation | **Done** — globe click/`--region` opens the 19-tile area window; LMB opens the true region view, RMB recentres, RMB drag pans, `Enter` also drills in; `G` toggles a two-ring isometric diorama with all five overlays; D40/D54 |
 | Simulation loop | **Done (M1)** — deterministic clock, construction, economy, power/life support, tech enforcement |
 | Site view (per-hex grid) | **Done (M3)** — 37-cell radius-3 local grid; multiple installations per fine hex |
 | Multi-body | **Done (M4, extended for Earth)** — Moon + Mars + Earth, body-keyed saves, cross-body refusal, system-map travel; Earth is the launch default |
 | Surface imagery | **Done (M4.5, extended for Earth/D46)** — real Moon/Mars/Earth colour sidecars in globe, region and colony views; Earth CI uses a synthetic fixture; biome fallback |
 | Water presentation | **Done (Earth)** — presentation-only fluid sidecar with flat water fills and river strokes; biome byte remains authoritative |
-| CI and performance gate | **Done (M4, extended M4.5/M5/Earth)** — synthetic tile + imagery + fluid bakes, 32 headless Godot smokes, 20 ms p95 frame budget |
+| CI and performance gate | **Done (M4, extended M4.5/M5/Earth/Navigation)** — synthetic tile + imagery + fluid bakes, 39 headless Godot smokes, 20 ms p95 frame budget |
 
 The full milestone plan lives in [`docs/roadmap.md`](docs/roadmap.md) and is
 mirrored in the working plan at `~/.opencode/plan/game_development_plan.md`.
@@ -94,7 +94,7 @@ mouse for the same actions.
 | New campaign | Create an auto-named slot and start immediately |
 | Load campaign | Pick a slot; `×` deletes after confirmation |
 | Settings | Save root, keybind reference, open save folder |
-| Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), tech, missions, maintenance, fleet, load, settings, main menu, quit |
+| Pause (`Esc` in game) | Resume, time speed (Pause / `1` / `2` / `4`), save now (`F5`), tech, missions, maintenance, fleet, move, load, settings, main menu, quit |
 | `/` on the globe | Search a region or fine-hex H3 index |
 | `M` | Open/close the schematic Solar System Map (Moon, Mars and Earth are ready) |
 | `T` | Open/close the tech tree |
@@ -102,6 +102,7 @@ mouse for the same actions.
 | `X` | Open/close maintenance (failures and repairs) |
 | `A` | Open the area view (the default drill-in from the globe) |
 | `R` | Open the fleet screen (garage/rover and port/barge) |
+| `V` | Open the Move screen (choose a ready unit, then click a destination region) |
 
 **Globe**
 
@@ -151,7 +152,7 @@ ones are skipped.
 | Input | Action |
 |---|---|
 | Wheel / right drag | Zoom / pan |
-| Left click | Select hex; a second click plans a rover route |
+| Left click | Select the hex and open a buildable one as a site directly |
 | `1`–`5` / Tab | Biome / terrain / site score / sites / surface imagery overlay |
 | `Enter` | Open the selected fine hex as a site (hex 0 when none is selected) |
 | `G` | Enter the colony view |
@@ -165,26 +166,29 @@ ones are skipped.
 | Wheel / right drag | Zoom / pan |
 | Hover | Shade a region outline and describe the rover or region under the cursor |
 | Left click a rover | Select it as the source of the next dispatch |
-| Left click a region | Centre the area on that region, or dispatch the selected rover to its centre |
+| Left click a region | Open the true region view, or dispatch the selected rover to its centre |
+| Right click a region | Recentre the 19-tile window on that region (right-drag still pans) |
 | `Enter` | Open the centred region's region view |
-| `G` | Toggle flat tangent-plane map ↔ isometric seven-region diorama |
+| `G` | Toggle flat tangent-plane map ↔ isometric 19-tile diorama |
 | `1`–`5` / `Tab` | Biome / terrain / site score / buildings / colour overlay (area-wide ramps) |
-| `Q` / `E` | Rotate the isometric diorama in 60° steps |
+| `Q` / `E` | Rotate the shared isometric yaw in 60° steps (also used by colony view) |
 | `[` / `]` | Decrease / increase isometric relief |
 | `R` | Open the fleet screen to buy rovers or choose a rover |
+| `V` | Open the Move screen to choose a rover/barge before clicking a region |
 | Esc | Clear the selected rover, then back to the globe |
 
 The navigation order is **globe → area → region → site**: clicking a region on
-the globe or starting with `--region` lands in the area view; clicking a region
-there centres a fresh area on it, and `Enter` opens the centred region's region
-view. `G` toggles the area projection; colony view is reached from the region
-view (or with `--view=management`). The isometric presentation renders all seven
-tiles as one faceted slab with the same five overlays as region and colony,
-normalised across the whole area. `--view=region`, `--view=management`,
+the globe or starting with `--region` lands in the two-ring area window (centre
+plus 6 plus 12 neighbours, up to 6,517 fine hexes). In that window LMB opens the
+clicked region's true region view, RMB recentres on it, `Enter` opens the
+centred region, and `G` toggles the flat map and the isometric diorama. Colony
+view is reached from the region view (or with `--view=management`). Both
+isometric presentations use the same persistent `Q`/`E` yaw, so rotating the
+diorama carries into colony view and back. `--view=region`, `--view=management`,
 `--view=site` and `--view=globe` still open those views directly.
 
-Visual review confirmed the seven-region diorama, so D40 is no longer
-experimental.
+Visual review confirmed the multi-region diorama, so D40 is no longer
+experimental; D54 widened it to two rings and mapped the mouse actions.
 
 **Colony view (isometric)**
 
@@ -216,11 +220,12 @@ occupied fine hex with a count and the most urgent status. All placement and
 removal happens in the site view through `CampaignState`.
 
 Rovers are not granted at campaign start. Build and finish a **Rover Garage**,
-then buy Rover Mk I units from the `R` fleet screen. Select an available rover and
-click a region in the area view to dispatch it; travel completes on the simulation
-clock. The cross-region route is derived from H3 neighbours and movement costs and
-is never stored in the save. Cargo is persisted and shown in the fleet screen;
-transfer rules belong to a later content step.
+then buy Rover Mk I units from the `R` fleet screen. Open the `V` Move screen,
+choose an available rover or barge, then click a destination region in the area
+view to dispatch it; travel completes on the simulation clock. The cross-region
+route is derived from H3 neighbours and movement costs and is never stored in the
+save. Cargo is persisted and shown in the fleet screen; transfer rules belong to
+a later content step.
 
 A session starts at 1×. `Space` pauses/resumes the clock in every view; the pause
 menu also has direct Pause / 1× / 2× / 4× buttons. At 1× one real second is one

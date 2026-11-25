@@ -55,6 +55,7 @@ public partial class ShellOverlay : Node2D
         SystemMap,
         TechTree,
         Fleet,
+        Move,
         Missions,
         Maintenance,
     }
@@ -346,6 +347,21 @@ public partial class ShellOverlay : Node2D
 
         _returnScreen = Screen.Closed;
         _screen = Screen.Fleet;
+        _selected = 0;
+        QueueRedraw();
+    }
+
+    /// <summary>Opens the dedicated move picker from gameplay or <c>--move-screen</c>.</summary>
+    public void OpenMove()
+    {
+        if (_screen == Screen.Move)
+        {
+            Close();
+            return;
+        }
+
+        _returnScreen = Screen.Closed;
+        _screen = Screen.Move;
         _selected = 0;
         QueueRedraw();
     }
@@ -705,6 +721,10 @@ public partial class ShellOverlay : Node2D
                 Back();
                 return;
 
+            case Key.V when _screen == Screen.Move:
+                Close();
+                return;
+
             case Key.C when _screen == Screen.Missions:
                 Back();
                 return;
@@ -867,6 +887,13 @@ public partial class ShellOverlay : Node2D
                 QueueRedraw();
                 break;
 
+            case "screen:move":
+                _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
+                _screen = Screen.Move;
+                _selected = 0;
+                QueueRedraw();
+                break;
+
             case "screen:missions":
                 _returnScreen = _screen == Screen.Pause ? Screen.Pause : Screen.Closed;
                 _screen = Screen.Missions;
@@ -918,6 +945,7 @@ public partial class ShellOverlay : Node2D
 
             case Screen.TechTree:
             case Screen.Fleet:
+            case Screen.Move:
             case Screen.Missions:
             case Screen.Maintenance:
                 _screen = _returnScreen;
@@ -1034,7 +1062,7 @@ public partial class ShellOverlay : Node2D
                     VisualLodEnabled ? "ON" : "OFF",
                     true, ShellCommand.ToggleVisualLod, null));
                 specs.Add(new RowSpec("Keybinds",
-                    "F5 save · Esc pause/back · / search · M system map · T tech · C missions · X maintenance · A area · R fleet · G colony · Home active region", null,
+                    "F5 save · Esc pause/back · / search · M system map · T tech · C missions · X maintenance · A area · R fleet · V move · G colony/iso · Q/E iso yaw · Home active region", null,
                     false, ShellCommand.None, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "screen:main"));
                 break;
@@ -1048,8 +1076,10 @@ public partial class ShellOverlay : Node2D
                     true, ShellCommand.SaveNow, null));
                 specs.Add(new RowSpec("Tech tree", "Spend science points on new technology", "T",
                     true, ShellCommand.None, "screen:tech"));
-                specs.Add(new RowSpec("Rover fleet", "Buy rovers and plan cross-region trips", "R",
+                specs.Add(new RowSpec("Rover fleet", "Buy rovers and inspect cross-region trips", "R",
                     true, ShellCommand.None, "screen:fleet"));
+                specs.Add(new RowSpec("Move unit", "Choose a rover/barge, then click its destination", "V",
+                    true, ShellCommand.None, "screen:move"));
                 specs.Add(new RowSpec("Missions", "Accept contracts, deliver cargo and answer events", "C",
                     true, ShellCommand.None, "screen:missions"));
                 specs.Add(new RowSpec("Maintenance", "Repair damaged installations", "X",
@@ -1152,10 +1182,13 @@ public partial class ShellOverlay : Node2D
                     : "no port";
                 title = "FLEET";
                 subtitle = $"Region {fleet.RegionIndex} · {garage} · {port} · {fleet.Rovers.Count} unit(s)";
-                hint = "Click a unit, then a region in the area view to dispatch · R/Esc close";
+                hint = "R/Esc close · use Move unit (V) to dispatch";
                 specs.Add(new RowSpec("Open area operations",
-                    "Show tracks and dispatch targets", "A",
+                    "Show tracks and inspect destinations", "A",
                     true, ShellCommand.OpenArea, null));
+                specs.Add(new RowSpec("Move unit",
+                    "Choose a rover/barge, then click a destination region", "V",
+                    true, ShellCommand.None, "screen:move"));
 
                 foreach (var model in RoverCatalogue.All)
                 {
@@ -1204,6 +1237,46 @@ public partial class ShellOverlay : Node2D
                         null));
                 }
 
+                specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));
+                break;
+
+            case Screen.Move:
+                var movable = CurrentFleetView();
+                title = "MOVE UNIT";
+                subtitle = $"Region {movable.RegionIndex} · {movable.Rovers.Count} unit(s) · " +
+                           $"{movable.Rovers.Count(rover => rover.Available)} ready";
+                hint = "Click a ready unit, then LMB a region in area view · V/Esc close";
+
+                if (movable.Rovers.Count == 0)
+                {
+                    specs.Add(new RowSpec("No units yet", "Buy a rover or barge in the fleet screen", null,
+                        false, ShellCommand.None, null));
+                }
+
+                foreach (var rover in movable.Rovers.Take(12))
+                {
+                    specs.Add(new RowSpec(
+                        rover.Name,
+                        $"{rover.Detail} · {rover.Terrain.ToLowerInvariant()}",
+                        rover.Right,
+                        rover.Available,
+                        ShellCommand.SelectRover,
+                        rover.Id,
+                        false,
+                        $"{rover.Name} is unavailable ({rover.Status})"));
+                }
+
+                if (movable.Rovers.Count > 12)
+                {
+                    specs.Add(new RowSpec(
+                        $"+ {movable.Rovers.Count - 12} more unit(s)",
+                        "Fleets above twelve need a wider display",
+                        null, false, ShellCommand.None, null));
+                }
+
+                specs.Add(new RowSpec("Open area operations",
+                    "Inspect tracks and destination regions without arming a unit", "A",
+                    true, ShellCommand.OpenArea, null));
                 specs.Add(new RowSpec("Back", null, null, true, ShellCommand.None, "close"));
                 break;
 

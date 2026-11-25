@@ -224,7 +224,7 @@ from `campaign.json` and `regions/*.json`.
 | `lastPlayedUtc` | Drives last-played ordering and Continue |
 | `buildingCount`, `visitedRegionCount` | Counts used by the slot list |
 | `bodyKey`, `credits` | List details |
-| `view` | Camera/mode snapshot restored by Continue; `selectedHexOrdinal` is the fine hex whose site was open, or null outside site view; `overlay` may be `color` after M4.5 but is UI-only |
+| `view` | Camera/mode snapshot restored by Continue; `colonyRotationSteps` is the shared 0–5 isometric yaw used by colony and area views; `selectedHexOrdinal` is the fine hex whose site was open, or null outside site view; `overlay` may be `color` after M4.5 but is UI-only |
 
 **Trust rule.** `slot.json` is used as-is only while its `updatedUtc` equals the
 one in `campaign.json`. Otherwise the store recounts the region shards and
@@ -394,8 +394,10 @@ Metadata and the summary are saved on: campaign creation, active-region change,
 every region mutation, pausing the clock, the 5-second autosave, manual save
 (`F5`), and `Flush()` on exit. Region shards are saved immediately on mutation.
 `slot.json` also records the view snapshot taken when the scene closes or the
-player returns to the menu. Only regions installed in memory are ticked, so a
-long pause in one region does not silently advance distant colonies.
+player returns to the menu, including the shared isometric yaw in the existing
+`colonyRotationSteps` field (no schema change). Only regions installed in memory
+are ticked, so a long pause in one region does not silently advance distant
+colonies.
 
 ## Compatibility policy
 
